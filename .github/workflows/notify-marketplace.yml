@@ -22,7 +22,7 @@ on:
 
 env:
   MARKETPLACE_OWNER: 'Emasoft'
-  MARKETPLACE_REPO: 'my-plugins-marketplace'
+  MARKETPLACE_REPO: 'emasoft-plugins'
 
 # Least-privilege: the cross-repo dispatch uses the MARKETPLACE_PAT secret,
 # not the workflow GITHUB_TOKEN, so this workflow needs no write scopes
