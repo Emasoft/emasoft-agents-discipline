@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agents Discipline"
+  short_description: "Delegate the work, then finish every unit against runnable gates"
+  default_prompt: "Use $agents-discipline to split this substantial task into owned units and complete each one against explicit, verifiable gates."
+policy:
+  allow_implicit_invocation: true

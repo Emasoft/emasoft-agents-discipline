@@ -1,0 +1,13 @@
+{
+  "name": "agents-discipline",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Regression tests for the agents-discipline skill's zero-dependency enforcement tools",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/run-tests.mjs && node tests/dispatch-tests.mjs && node tests/hardening-tests.mjs && node tests/stress-tests.mjs && node tests/lint-tests.mjs && node tests/contract-tests.mjs && node tests/self-check.mjs && node tests/ledger-tests.mjs"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
