@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]
+
+[project]
+name = "emasoft-agents-discipline"
+version = "1.0.0"
+description = "Delegation and completion discipline for substantial autonomous agent work: a unit-count gate with a DELEGATION.md ledger and one fresh subagent per unit, plus acceptance gates with an approval-bound checker, Depth Tree decomposition, and an optional Stop hook so no leaf lands half-done."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.19.1",
+    "pyyaml>=6.0",
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    # REQUIRED by ci.yml's sharded test matrix: it runs
+    # `pytest --splits N --group K`, and those flags exist only when
+    # pytest-split is installed (without it every shard dies with
+    # "pytest: error: unrecognized arguments: --splits --group").
+    # Emitted from generate_plugin_repo.PYTEST_SPLIT_REQUIREMENT, the same
+    # constant that drives the matrix — do not drop one without the other.
+    "pytest-split>=0.9",
+    "ruff>=0.14.14",
+]
+
+[tool.ruff]
+line-length = 120
+# Test fixtures are deliberately-malformed sample data that exercise this
+# plugin's validators/tests — ruff must never lint or format them locally
+# (e.g. `ruff check scripts/ tests/`) or it would "correct" the defects the
+# tests depend on. Mirrors the Mega-Linter FILTER_REGEX_EXCLUDE used in CI.
+extend-exclude = ["**/fixtures", "**/testdata", "**/__fixtures__"]
+# The git hooks are Python but git requires those exact EXTENSIONLESS filenames, so
+# ruff's default discovery skips them and `ruff check git-hooks/` prints "No Python
+# files found" followed by "All checks passed" — a VACUOUS green over the script that
+# gates every push. CPV shipped a NameError in its own pre-push exactly this way. CPV's
+# lint engine now reads shebangs, but a plugin's OWN ruff run (its CI, its hooks) does
+# not go through CPV, so it needs this line too.
+# Only `pre-push` is listed: this scaffold has no pre-commit generator, so naming
+# `git-hooks/pre-commit` here pointed ruff at a file the scaffold cannot produce
+# (audit row 24). Add it back the same day a pre-commit hook is actually emitted.
+extend-include = ["git-hooks/pre-push"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pyright]
+pythonVersion = "3.12"
+extraPaths = ["scripts", "tests"]
+reportMissingImports = "warning"
+typeCheckingMode = "basic"

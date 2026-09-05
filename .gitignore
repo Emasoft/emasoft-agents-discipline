@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+.coverage
+.venv/
+venv/
+.pytest_cache/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Linting
+.ruff_cache/
+
+# Publish gate G4b (Linux fork-parity probe) writes a temporary sitecustomize
+# here and removes it in a `finally`. Ignored so a SIGKILLed run cannot leave an
+# untracked dir that trips the NEXT publish's clean-tree gate.
+.cpv-forkparity/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Dev folders (NEVER PUBLISH - development artifacts only)
+# Wildcard pattern catches all: docs_dev, scripts_dev, tests_dev, samples_dev,
+# examples_dev, downloads_dev, libs_dev, builds_dev, etc.
+*_dev/
+
+# Agent/script reports — ALWAYS gitignored since they often contain private data
+# (full paths, source snippets, API output, validation results, env metadata).
+# Canonical rule: every agent/skill/script that saves a report MUST write
+# under the main-repo `./reports/<component>/<YYYYMMDD_HHMMSS±HHMM>-<slug>.md`.
+# Neither folder may ever be tracked. `reports_dev/` is also covered by the
+# `*_dev/` rule above, listed explicitly because both entries must be present.
+reports/
+reports_dev/
+
+# Node
+node_modules/
+
+# Claude Code
+.claude/
+llm_externalizer_output/
+.tldr/
+.janitor/
+
+# Mega-Linter
+megalinter-reports/
+mega-linter.log
+
+# Rust (remove Cargo.lock line for binary plugins)
+target/
+Cargo.lock
+
+# agents-discipline runtime state
+.agents-discipline/
+.agents-discipline-hook-state.json
+*.agents-discipline.bak
+*.tmp
+*.log
