@@ -932,27 +932,33 @@ def _secret_scan(root: Path) -> int:
     blocks — and it must block, because "we never looked" and "we looked and
     found nothing" are not the same answer.
     """
-    if not shutil.which("trufflehog"):
+    _trufflehog = shutil.which("trufflehog")
+    if not _trufflehog:
         cprint(f"  {YELLOW}trufflehog missing — installing it as a pipeline dependency...{NC}")
         # A stalled installer must land on the styled BLOCKED path below, not
         # die with a raw TimeoutExpired traceback (audit row 16).
         try:
             if shutil.which("brew"):
                 subprocess.run(["brew", "install", "trufflehog"], timeout=900)
-            if not shutil.which("trufflehog") and shutil.which("go"):
+            _trufflehog = shutil.which("trufflehog")
+            if not _trufflehog and shutil.which("go"):
                 subprocess.run(
                     ["go", "install", "github.com/trufflesecurity/trufflehog/v3@latest"],
                     timeout=900)
                 # `go install` drops the binary in GOBIN/GOPATH/bin, which is
-                # often not yet on PATH in this process.
+                # often not yet on PATH in this process. Resolve it there and
+                # invoke it by absolute path: the canon template prepended the
+                # directory to PATH, which the same CPV build flags as an
+                # environment injection, so this is the one intentional
+                # divergence from the generated pipeline.
                 _gobin = os.environ.get("GOBIN") or str(
                     Path(os.environ.get("GOPATH") or (Path.home() / "go")) / "bin")
-                os.environ["PATH"] = _gobin + os.pathsep + os.environ.get("PATH", "")
+                _trufflehog = shutil.which("trufflehog", path=_gobin)
         except subprocess.TimeoutExpired:
             cprint(f"  {YELLOW}The trufflehog installer timed out (>900s).{NC}")
         except (OSError, subprocess.SubprocessError) as _exc:
             cprint(f"  {YELLOW}The trufflehog installer failed to run: {_exc}{NC}")
-    if not shutil.which("trufflehog"):
+    if not _trufflehog:
         cprint(f"  {RED}BLOCKED: trufflehog is not installed and could not be installed.{NC}")
         cprint(f"  {RED}The release was NOT secret-scanned — UNKNOWN is not clean.{NC}")
         cprint(f"  {RED}Install it and re-run:  brew install trufflehog{NC}")
@@ -977,7 +983,7 @@ def _secret_scan(root: Path) -> int:
             _excl_fh.write("^" + re.escape(_sec_root + "/" + _rel.rstrip("/")) + "\n")
         _excl_fh.close()
         _th = subprocess.run(
-            ["trufflehog", "filesystem", _sec_root, "--json", "--no-update", "--fail",
+            [_trufflehog, "filesystem", _sec_root, "--json", "--no-update", "--fail",
              # Without the widened set trufflehog OMITS `filtered_unverified`,
              # the bucket an expired / revoked / unreachable credential lands
              # in — a committed secret is a leak whether or not a runner can

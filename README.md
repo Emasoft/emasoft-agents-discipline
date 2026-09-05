@@ -22,7 +22,7 @@ The lone-agent failure is not a *time* problem, it is an *attention* problem. A 
 
 This is the same mechanism the completion half identifies for its orchestrated mode ("attention, not time, was always the scarce resource"), applied at the task level rather than the leaf level. The two halves are orthogonal: the completion half makes each leaf finish; the delegation half makes the leaves exist, owned by workers, coordinated through a ledger.
 
-## Install
+## Installation
 
 ```text
 claude plugin marketplace add Emasoft/emasoft-plugins
@@ -32,25 +32,25 @@ claude plugin install emasoft-agents-discipline@emasoft-plugins
 
 Restart Claude Code after installing. Invoke it as `/agents-discipline` (or `/emasoft-agents-discipline:agents-discipline`), or let it trigger on the work itself. The core is `skills/agents-discipline/SKILL.md`; the checkers and the optional Stop hook require Node 16 or newer and use no third-party runtime packages.
 
-## Use it
+## Usage
 
 Invoke it in plain language, or let it trigger on the work itself:
 
-```
+```text
 /agents-discipline implement the 12 modules
 ```
 
-```
+```text
 split the migration into workers, one per shard
 ```
 
-```
+```text
 delegate this to subagents, one per feature
 ```
 
 When the gate is open (3+ independent units, 5+ files, or 30+ minutes), the agent writes `DELEGATION.md` before any artifact work, spawns one subagent per unit, verifies each unit itself, and refuses to report done against a partial ledger.
 
-```
+```text
 /agents-discipline tree 5 refactor the payment module and verify every migration path
 ```
 
@@ -134,7 +134,7 @@ The checker can prove only the command oracle you declare. It cannot infer that 
 - measure supplied figures instead of copying them into `EXPECT:`
 - review consequential manual outcomes with evidence proportional to risk
 
-Use the advisory, non-executing `scripts/gate-lint.mjs` to catch mechanically weak ledger patterns; add `--strict` when warnings should fail. Full specification: [references/gates.md](skills/agents-discipline/references/gates.md).
+Use the advisory, non-executing [gate-lint.mjs](skills/agents-discipline/scripts/gate-lint.mjs) to catch mechanically weak ledger patterns; add `--strict` when warnings should fail. Full specification: [references/gates.md](skills/agents-discipline/references/gates.md).
 
 ## Shell and PATH
 
@@ -219,7 +219,7 @@ skills/agents-discipline/
   agents/openai.yaml             skill UI metadata
   package.json                   Node package manifest
   references/                    gates, method, orchestration, dispatch, parallel, token-economy,
-                                  delegation-method, delegation-orchestration, delegation-token-economy, eval
+                                  delegation-method, delegation-orchestration, delegation-token-economy, ledger-discipline, eval
   templates/                     PLAN, gate leaf/node, DELEGATION ledger, worker-brief
   scripts/                       checker, linter, dispatch recorder, installer, Stop hook, ledger checker
   research/                      historical limitations and rerun protocol

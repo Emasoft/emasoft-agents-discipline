@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "consents": [
+    {
+      "file": "skills/agents-discipline/evidence/eval-t4-ledger-gate.md",
+      "ruleId": "SHELL_EXEC",
+      "lineSha256": "425fd8372c27ff4564b2f7cc792792cb9d125383cd424977ead367cc43e8d28d",
+      "reason": "Vendored eval RECORD cited by references/eval.md: a results log the scanner flags whole-file at line 1. It is not an instruction file or a script; kept byte-identical so the eval stays reproducible."
+    }
+  ]
+}

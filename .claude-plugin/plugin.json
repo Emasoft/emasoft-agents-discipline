@@ -6,5 +6,6 @@
   "homepage": "https://github.com/Emasoft/emasoft-agents-discipline",
   "repository": "https://github.com/Emasoft/emasoft-agents-discipline",
   "license": "MIT",
-  "keywords": ["delegation", "completion", "gates", "ledger", "subagents", "orchestration", "verification", "discipline", "claude-code", "skills"]
+  "keywords": ["delegation", "completion", "gates", "ledger", "subagents", "orchestration", "verification", "discipline", "claude-code", "skills"],
+  "cpv": { "pipeline": { "intentional_divergence": ["scripts/publish.py"] } }
 }
