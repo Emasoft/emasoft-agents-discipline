@@ -5,9 +5,9 @@ description: 'Delegation and completion discipline for substantial autonomous wo
 
 # Agents discipline
 
-Long-horizon agent work fails in two ways: the agent never splits the job into workers, and split work never lands complete. This skill closes both. The delegation half makes the leaves exist, owned by fresh subagents and coordinated through a delegation ledger. The completion half makes every leaf finish against runnable gates, or the turn does not end. Run the fan-out with the delegation half, run the tree with the completion half, keep the ledger either way.
+Long-horizon agent work fails in two ways: the agent never splits the job into workers, and split work never lands complete. This skill closes both: the delegation half makes the leaves exist, owned by fresh subagents and coordinated through a delegation ledger; the completion half makes every leaf finish against runnable gates. Run the fan-out with the delegation half, the tree with the completion half, and keep the ledger either way.
 
-Two ledgers are named below: the delegation ledger is `DELEGATION.md` (one row per unit); the gate ledgers are `GATES.md` and `gates/*.md` (one gate per outcome). Throughout this file, `<skill-dir>` is the directory containing this `SKILL.md`; in a plugin install it is `${CLAUDE_PLUGIN_ROOT}/skills/agents-discipline`.
+Two ledgers appear below: the delegation ledger `DELEGATION.md` (one row per unit) and the gate ledgers `GATES.md` / `gates/*.md` (one gate per outcome). `<skill-dir>` is the directory containing this `SKILL.md`; in a plugin install it is `${CLAUDE_PLUGIN_ROOT}/skills/agents-discipline`.
 
 ## Delegation half: make the leaves exist
 
@@ -31,30 +31,20 @@ Below the threshold, do the work yourself and say so. Force-splitting a small ta
 
 ### Step 1: Write DELEGATION.md before any artifact work
 
-If the gate is open, the FIRST artifact you create is `DELEGATION.md`, before any code, before any edit, before any file that is part of the deliverable. Use [templates/DELEGATION.md](templates/DELEGATION.md). Required shape:
-
-```markdown
-# Delegation plan
-Units: N
-
-| # | Unit | Files (mine) | Worker | Acceptance | Status |
-|---|------|--------------|--------|------------|--------|
-| 1 | <one line> | <paths> | worker-1 | <checkable> | pending |
-```
+If the gate is open, the FIRST artifact you create is `DELEGATION.md`, before any code, before any edit, before any file that is part of the deliverable. Use [templates/DELEGATION.md](templates/DELEGATION.md); it carries the required shape (one table, one row per unit).
 
 - Every unit gets a row. Every row gets its own files, non-overlapping. No two workers touch the same file. File ownership is stated in the ledger before anyone starts.
-- Every row gets a checkable acceptance line: a command, a test, a measurable criterion. Not a vibe.
-- **One criterion per row — never a disjunction.** "Either the code is moved and the tests pass, OR the card explains why not" is two acceptances wearing one row, and it is unfalsifiable: whichever branch the worker takes, the row can claim satisfaction. It also breaks the re-run, which takes the first command it finds and demands it pass — so a row that took the *other* branch fails a check it was never meant to face. If the work genuinely has two possible shapes, that is two rows, or one row whose acceptance is the decision itself ("the card records a verdict with file:line evidence").
+- Every row gets a checkable acceptance line: a command, a test, a measurable criterion. Not a vibe. One criterion per row, never a disjunction.
 - This file is your ledger. It lives on disk, not in your context. A ledger you wrote at minute 2 is still exactly as sharp at minute 90, when the pull toward wrapping up is strongest.
+- At creation, every row is `pending` and `## Evidence` is empty. Those are the only legal values at minute 2.
 
-**At creation, every row is `pending` and `## Evidence` is empty. Those are the only legal values at minute 2.** You are writing this file *before* spawning anyone, so there is nothing that could be `done`, nothing that could be `verified`, and no check you could have run. A ledger born with filled-in statuses is not a fast start, it is a fabricated one — and it fabricates in the one artifact whose entire job is to make completion honest, which means nothing downstream can catch it.
-
-The pull is real and it does not feel like lying. The table has a Status column and an Evidence heading sitting there empty; filling them in is what the template *looks* like it is asking for, and you can already picture what each worker will find. That picture is a prediction. Write `pending`, spawn, and let the workers turn it into a fact — they routinely come back with the opposite of the prediction, which is the entire reason they exist.
+Read [references/ledger-discipline.md](references/ledger-discipline.md) before writing the first row.
 
 ### Step 2: Spawn one subagent per unit
 
 - Use the subagent / Task tool. One subagent per unit row, spawned in parallel where units are independent, never serially.
-- Each worker brief is a written contract containing (see [templates/worker-brief.md](templates/worker-brief.md)):
+- Each worker brief is a written contract containing (see
+  [templates/worker-brief.md](templates/worker-brief.md)):
   - **Goal.** One sentence. What done looks like.
   - **Scope.** Exact files the worker owns. Exact files it must not touch.
   - **Context.** Pointers to specs and upstream reports, pasted in full where they matter. Workers cannot see your thread.
@@ -71,19 +61,7 @@ A worker report is a self-report. It is a claim, not proof. After each worker re
 2. Update the ledger row to `verified`, or fix the unit yourself (or spawn a follow-up worker) and then mark it verified. Never silently accept a claim.
 3. Write what you ran and saw under `## Evidence` in `DELEGATION.md`. The ledger checker requires it; a ledger with all rows `verified` but no evidence in the file fails `node <skill-dir>/scripts/ledger-check.mjs`.
 
-**Cite the artifact, by path, in a code span.** `node <skill-dir>/scripts/ledger-check.mjs` now resolves every path your Evidence cites and fails the ledger if the file is missing, empty, or *older than the ledger itself* — a report from a previous session is not evidence for this run. That check does not read your prose; it reads the filesystem. Cite real report paths and it passes; cite a path you imagined and it fails by name.
-
-**Write acceptance as a runnable command, because the checker RUNS IT.** For every `verified` row whose Acceptance cell contains a command in a code span, `ledger-check.mjs` executes it under `set -o pipefail` and reads the exit code itself. A row is then not verified because someone typed the word — it is verified because the machine reproduced the check. To fake such a row you have to make the real command really pass, which is doing the work. `pipefail` is not hygiene here: a shell pipeline reports its LAST command's status, so `pytest | tail -1` exits 0 while pytest is failing, and that one pipe would otherwise defeat the whole re-run.
-
-**A no-op acceptance fails; it does not merely fail to help.** `true`, `:`, `echo ok`, `ls` exit 0 by construction, so writing one is not a weak check — it is an attempt to satisfy the re-run without testing anything, and it is the obvious next move once execution is enforced. The checker rejects those outright. The distinction it draws is between a row that *admits* it has no runnable check and a row that *asserts* a pass it never earned; only the first is tolerated.
-
-A verified row whose acceptance genuinely cannot be a command ("the card carries a first-hand argument with file:line") is reported as **unreproducible**, not failed — no exit code expresses that, and failing it would redden honest ledgers until someone deletes the gate. But it is counted and named, so a ledger resting entirely on the coordinator's word says so on its own output.
-
-**Every verified row must be backed by something outside your own prose.** A row is accepted on one of exactly two grounds: its acceptance command re-ran and passed, or its own Evidence block cites a file that exists on disk and is newer than the ledger. A row with neither is reported as **UNBACKED** and fails. Evidence is attributed *per row*, not pooled — one real artifact used to cover a whole ledger let a single genuinely-checked unit carry the invented ones beside it.
-
-**The checker signs the ledger, so "I never ran it" stops looking like "I verified it."** Each run appends `<!-- agents-discipline-check: <iso> sha256:<digest> -->`, and the digest covers the ledger's content with any prior receipt stripped. **The receipt states no verdict, deliberately** — it records *which bytes were checked*, never whether they passed. That is what removes the last forgery rather than merely detecting it: a stamp reading `PASS` can be produced honestly and then shown attached to a tampered file, and a reader who trusts the word is deceived by a true statement about a document that no longer exists. With no verdict written down, there is nothing to misread; the only way to learn whether a ledger passed is to run the checker, which re-derives every verdict from scratch and can never inherit a stale one. Two things follow. A ledger with **no receipt** was never checked, and that is now a visible property of the artifact — readable by anyone, without access to your transcript. A ledger edited **after** its check reports `receipt: STALE` on the next run, which closes check-then-edit: you cannot pass a clean ledger and then quietly flip a row. A run that skipped the re-run does not sign at all, because it verified nothing.
-
-**What the checker still cannot do is tell truth from shape.** It cannot distinguish a command you ran from a command you typed, so a ledger whose Evidence cites no files at all is checked for form and not at all for content — it says so on its own output line, `evidence is uncorroborated prose`. Read the pressure the right way round: because the gate wants Evidence beside every `verified`, the cheapest route to green is to *invent* it, and invented evidence is indistinguishable downstream from the real thing. The gate exists to stop you marking rows `verified` in silence — not to be satisfied. If a row has no evidence you can paste, it is not `verified`; leave it `done` and say why.
+The checker resolves every cited path, re-runs each acceptance command under `pipefail`, rejects no-op acceptances, fails any `verified` row backed by nothing outside your prose, and signs the ledger with a verdict-free receipt. Read [references/ledger-discipline.md](references/ledger-discipline.md) before marking any row `verified`.
 
 The integration pass is yours too: interfaces match, tests pass together, nothing outside the declared scope changed.
 
@@ -141,8 +119,11 @@ Do not silently remove an impossible gate. Add `ABANDON: <id> <non-empty reason>
 ### Pick the smallest fitting mode
 
 - **Solo:** Use one `GATES.md` for a focused task that fits one working session. For several independently required outcomes, reread the current request before completion and give each outcome or acceptance-changing constraint a gate or explicit handoff; a PLAN table is not required.
-- **Orchestrated:** For a build or deep review, read the local [references/method.md](references/method.md), [references/orchestration.md](references/orchestration.md), and [references/dispatch.md](references/dispatch.md). Write the contract and tree before fan-out. Give every leaf and branch its own gates file.
-- **Parallel:** Before dispatching concurrent leaves or pipelines, also read the local [references/parallel.md](references/parallel.md). Reconcile normalized set equality between each PLAN `Owns` planning mirror and the leaf ledger's command-time `OWNS:` authority before marking it `READY` and again before claiming it, then use a dispatch launch wave. Release the exact leaf lease after parent verification. Release the whole scope only after every leaf is settled and final scope verification has run. Treat scopes, leases, and wave state as coordination, never as filesystem isolation or a security boundary.
+- **Orchestrated:** For a build or deep review, read the local
+  [references/method.md](references/method.md), [references/orchestration.md](references/orchestration.md), and
+  [references/dispatch.md](references/dispatch.md). Write the contract and tree before fan-out. Give every leaf and branch its own gates file.
+- **Parallel:** Before dispatching concurrent leaves or pipelines, also read the local
+  [references/parallel.md](references/parallel.md). Reconcile normalized set equality between each PLAN `Owns` planning mirror and the leaf ledger's command-time `OWNS:` authority before marking it `READY` and again before claiming it, then use a dispatch launch wave. Release the exact leaf lease after parent verification. Release the whole scope only after every leaf is settled and final scope verification has run. Treat scopes, leases, and wave state as coordination, never as filesystem isolation or a security boundary.
 
 Keep check execution sequential by default. Use `--jobs <N>` only for independent runnable gates when deterministic parallel verification saves wall-clock time. Continue printing and recording results in gate order. `--jobs` never creates agent sessions; native agent concurrency follows the dispatch contract.
 
@@ -204,10 +185,10 @@ Keep `.claude/settings.local.json`, `.agents-discipline/`, and `.agents-discipli
 
 ### Spend attention where it compounds
 
-Keep leaf briefs to the contract and one ledger. Append status instead of rewriting history. Mark each execution leaf's reasoning `Tier` in the PLAN dispatch table: `judgment` when its own artifact needs design or review, and `mechanical` only when its pattern and gates are fixed. Tier is planner metadata, not a routing guarantee. Map it through documented host-specific model or reasoning controls only when those controls are available; otherwise do not claim a model was selected. Driver planning and dispatch, parent re-verification, branch integration, and the final claim audit remain judgment duties outside the leaf tiers. Read the local [references/token-economy.md](references/token-economy.md) for the detailed rules.
+Keep leaf briefs to the contract and one ledger. Append status instead of rewriting history. Mark each execution leaf's reasoning `Tier` in the PLAN dispatch table: `judgment` when its own artifact needs design or review, and `mechanical` only when its pattern and gates are fixed. Read the local [references/token-economy.md](references/token-economy.md) for the detailed rules, including what a tier does and does not claim about the host.
 
 Do not create gates for a trivial edit or factual reply. Use this discipline when the cost of quiet incompleteness justifies the ledger.
 
 ## Run both
 
-When the delegation gate is open, write `DELEGATION.md` from [templates/DELEGATION.md](templates/DELEGATION.md) before any artifact. Give every worker brief its own gate ledger from [templates/gates-leaf.md](templates/gates-leaf.md); the row's acceptance command is the leaf's decisive `CHECK:`. When a worker returns, run `node <skill-dir>/scripts/gate-check.mjs --reverify` on its leaf ledger before marking the row `verified`, then run `node <skill-dir>/scripts/ledger-check.mjs DELEGATION.md` on the delegation ledger. Report only when both ledgers are green: every row `verified` with evidence, every gate met with current automatic evidence. The delegation method is in [references/delegation-method.md](references/delegation-method.md); the Depth Tree method is in [references/method.md](references/method.md).
+When the delegation gate is open, write `DELEGATION.md` from [templates/DELEGATION.md](templates/DELEGATION.md) before any artifact and give every worker brief its own gate ledger from [templates/gates-leaf.md](templates/gates-leaf.md); the row's acceptance command is the leaf's decisive `CHECK:`. When a worker returns, run `gate-check.mjs --reverify` on its leaf ledger before marking the row `verified`, then `ledger-check.mjs` on the delegation ledger. Report only when both are green: every row `verified` with evidence, every gate met with current automatic evidence. Methods: [references/delegation-method.md](references/delegation-method.md) and [references/method.md](references/method.md).
