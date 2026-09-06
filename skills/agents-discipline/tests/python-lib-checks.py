@@ -111,6 +111,7 @@ regex_case("an ASCII-only \\d against Arabic-Indic digits", r"^\d+$", "١٢٣")
 if WIN32:
     report(True, "check_supervisor: skipped (the cases drive /bin/bash)")
 else:
+    seen = {}
     for name, script in (
         ("propagates exit code and pumps stdout", "echo hi; exit 3"),
         ("a signalled CHECK", "kill -9 $$"),
@@ -119,14 +120,16 @@ else:
                       ["check_supervisor.py", "/bin/bash", script])
         report(js == py, f"check_supervisor: {name} — port matches oracle",
                "" if js == py else f"js={js} py={py}")
+        seen[script] = (js, py)
     # Vacuity control: a supervisor that ignored its CHECK entirely would give identical
-    # (0, "", "") on both scripts. These two must differ from each other.
-    a, _ = both(["check-supervisor.mjs", "/bin/bash", "echo hi; exit 3"],
-                ["check_supervisor.py", "/bin/bash", "echo hi; exit 3"])
-    b, _ = both(["check-supervisor.mjs", "/bin/bash", "kill -9 $$"],
-                ["check_supervisor.py", "/bin/bash", "kill -9 $$"])
-    report(a != b, "check_supervisor: the two CHECKs give different results (vacuity control)",
-           f"{a} vs {b}")
+    # (0, "", "") on both scripts. These two must differ from each other, in BOTH runtimes —
+    # the results are reused from the loop rather than re-run, which also stops the two
+    # adjacent controls in this file from checking opposite sides (this one used to sample the
+    # oracle while the regex one sampled the port).
+    (ja, pa), (jb, pb) = seen["echo hi; exit 3"], seen["kill -9 $$"]
+    report(ja != jb and pa != pb,
+           "check_supervisor: the two CHECKs differ, in BOTH runtimes (vacuity control)",
+           f"{pa} vs {pb}")
 
 # --- windows_taskkill_path: pure string logic, so it is testable on POSIX ------------------
 # It is the fail-closed decision that keeps an ARBITRARY executable from being selected, which
@@ -141,7 +144,12 @@ ENVS = [
 ]
 js_out = subprocess.run(
     ["node", "--input-type=module", "-e",
-     f'import {{ windowsTaskkillPath }} from "{os.path.join(LIB, "process-tree.mjs")}";'
+     # json.dumps, not an f-string in quotes: this path lands inside a JS string literal, and
+     # a Windows path is full of backslash escapes. Measured — node reads
+     # "C:\Users\test\scripts\lib\process-tree.mjs" as "C:Users<TAB>estscriptslibprocess-tree.mjs"
+     # (\U, \l, \p dropped, \t a tab), so the ONE case written to cover the Windows branch
+     # would be the one that breaks on Windows, failing with a path nobody typed.
+     f'import {{ windowsTaskkillPath }} from {json.dumps(os.path.join(LIB, "process-tree.mjs"))};'
      f'console.log(JSON.stringify({json.dumps(ENVS)}.map((e) => windowsTaskkillPath(e) ?? null)));'],
     capture_output=True, text=True, timeout=30,
 )

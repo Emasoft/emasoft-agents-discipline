@@ -15,6 +15,10 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Reads ALL of stdin; the port reads ONE line. Identical while a caller sends one message
+// (JSON.stringify escapes newlines), and the first divergence the moment anyone sends two.
+// Never call process.exit() here: stdout is a pipe, the reply write is async, and a pending
+// write is what keeps this process alive long enough to flush it.
 const message = JSON.parse(readFileSync(0, "utf8"));
 const worker = new Worker(
   resolve(dirname(fileURLToPath(import.meta.url)), "../scripts/lib/regex-worker.mjs"),
