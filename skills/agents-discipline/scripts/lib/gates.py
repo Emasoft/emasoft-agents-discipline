@@ -62,6 +62,14 @@ def _path_is_inside(parent, child):
 
 
 def sha256(value):
+    # DOCUMENTED DIVERGENCE, left as-is deliberately. Node's createHash().update(string)
+    # substitutes U+FFFD for a lone surrogate; this strict encode raises. A Python str carries
+    # lone surrogates only from a surrogateescape decode -- on Linux, a repository path whose
+    # bytes are not valid UTF-8. There the oracle proceeds and hashes a LOSSY key, so two
+    # different paths can share one lock; this refuses instead. That is the safer answer, and no
+    # spelling of errors= reproduces Node's one-U+FFFD-per-surrogate anyway ("replace" gives
+    # "?", and a surrogatepass round trip gives three). Fixing it would trade a fail-closed
+    # difference for a wrong one.
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
 
@@ -437,7 +445,11 @@ def scope_root(root, scope):
 def status_log_path(root, scope):
     if scope:
         return os.path.join(scope_root(root, scope), "status.log")
-    return os.path.join(root, "agents-discipline-status.log")
+    # normpath here too. The scoped branch inherits it from scope_root, and this one was left
+    # with a bare join -- so it reproduced exactly the divergence the comment in scope_root
+    # describes: "a//" gave "a//agents-discipline-status.log" against the oracle's
+    # "a/agents-discipline-status.log". gate-check uses this bare form.
+    return os.path.normpath(os.path.join(root, "agents-discipline-status.log"))
 
 
 def _mkdirs(path, mode=None):
@@ -464,7 +476,14 @@ def _mkdirs(path, mode=None):
         try:
             os.mkdir(directory, mode)
         except FileExistsError:
-            pass
+            # Concurrent creation by a peer is fine; a FILE at this name is not, and os.mkdir
+            # raises the same FileExistsError for both. Swallowing it unconditionally made the
+            # function return silently where the oracle's mkdirSync raises EEXIST, and left
+            # failing-closed to whatever each caller happened to do next -- true of all three
+            # call sites today, and a trap for a fourth. Re-raising the ORIGINAL error keeps the
+            # oracle's error class as well as its outcome.
+            if not os.path.isdir(directory):
+                raise
 
 
 def _assert_real_directory(path, message):
@@ -659,7 +678,19 @@ def with_file_lock(root, target, fn, timeout_ms=30000):
                 try:
                     with open(lock, "r", encoding="utf-8") as handle:
                         current = json.load(handle)
-                    if current.get("token") == token:
+                    # isinstance, because this runs inside a `finally`. The oracle reads
+                    # `current.token` off whatever JSON.parse returned, and JS property access on
+                    # an array or a number is `undefined` -- unequal to the token, so it declines
+                    # to unlink and breaks. `.get` exists only on a dict, so well-formed but
+                    # non-object JSON raised AttributeError from the finally and REPLACED the
+                    # exception fn() was propagating. Measured on the same script both sides:
+                    # the oracle surfaced "invalid dispatch state: boom" and the port surfaced
+                    # "'list' object has no attribute 'get'" -- and dispatch's readState decides
+                    # whether to re-wrap by testing for exactly that "invalid dispatch state:"
+                    # prefix, so the port would have destroyed the diagnostic it branches on.
+                    # (Both runtimes leave the lock file behind here, by design: neither unlinks
+                    # a lock it cannot prove it owns.)
+                    if isinstance(current, dict) and current.get("token") == token:
                         os.unlink(lock)
                     break
                 except OSError as error:
@@ -704,9 +735,15 @@ def append_status(root, scope, line):
                      | getattr(os, "O_NONBLOCK", 0) | no_follow, 0o600)
         opened = os.fstat(fd)
         named = os.lstat(path)
-        if (not statmod.S_ISREG(named.st_mode) or statmod.S_ISLNK(named.st_mode)
-                or named.st_nlink != 1):
-            raise OSError("refusing non-file or replaced status log " + path)
+        # The NAMED entry's own type/link failure carries assertRegularSingleLink's message, not
+        # "refusing non-file or replaced". In the oracle that check lives inside
+        # statCurrentNamedFile and throws before line 179 is reached, so the two conditions
+        # produce two different strings; folding them into one lost that. Verified by calling the
+        # oracle's helper with appendStatus's own label on a hard-linked file: it says "status log
+        # must be one unchanged regular single-link file: <path>". Only reachable when the name
+        # changes BETWEEN the first lstat and here -- the race these checks exist for -- which is
+        # why no driver row covers it and why the evidence is the helper's output, not a run.
+        _assert_regular_single_link(named, path, "status log", float("inf"))
         if (not statmod.S_ISREG(opened.st_mode) or opened.st_nlink != 1
                 or (opened.st_ino, opened.st_dev) != (named.st_ino, named.st_dev)):
             raise OSError("refusing non-file or replaced status log " + path)

@@ -162,6 +162,40 @@ record("lock dir after throw", sorted(os.listdir(locks)))
 attempt("withFileLock missing root", lambda: with_file_lock(
     os.path.join(root, "no-such-root"), os.path.join(root, "target"), lambda: "value"))
 
+# Regressions for the four findings of the b263dad review -- see the oracle driver.
+for r in ["a//", "./a", "a/b/..", "a"]:
+    record("statusLogPath bare " + r, redact(status_log_path(r, None)))
+
+
+def _corrupt_locks(text):
+    lock_dir = os.path.join(root, ".agents-discipline", "locks")
+    for name in os.listdir(lock_dir):
+        if name.endswith(".filelock"):
+            with open(os.path.join(lock_dir, name), "w", encoding="utf-8") as handle:
+                handle.write(text)
+
+
+def _non_object():
+    _corrupt_locks("[]")
+    raise RuntimeError("invalid dispatch state: boom")
+
+
+attempt("withFileLock non-object lock file",
+        lambda: with_file_lock(root, os.path.join(root, "corrupt"), _non_object))
+attempt("withFileLock unparseable lock file", lambda: with_file_lock(
+    root, os.path.join(root, "corrupt2"),
+    lambda: (_corrupt_locks("{not json"), "returned anyway")[1]))
+with open(os.path.join(root, "blocker"), "w", encoding="utf-8") as handle:
+    pass
+attempt("writeAtomic through a file",
+        lambda: (write_atomic(os.path.join(root, "blocker", "child.txt"), "x"), "wrote")[1])
+# ROOTED too -- see the oracle driver; the unrooted row above does not reach the mkdir loop.
+with open(os.path.join(scope_root(root, "api"), "blocked"), "w", encoding="utf-8") as handle:
+    pass
+attempt("writeAtomic rooted through a file",
+        lambda: (write_atomic(os.path.join(scope_root(root, "api"), "blocked", "child.json"),
+                              "x", root=root), "wrote")[1])
+
 record("final tree", sorted(os.listdir(root)))
 record("state tree", sorted(os.listdir(os.path.join(root, ".agents-discipline"))))
 record("existsSync temp leak", len([n for n in os.listdir(root) if n.endswith(".tmp")]))

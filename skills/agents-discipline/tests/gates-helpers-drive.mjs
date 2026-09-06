@@ -161,6 +161,42 @@ record("lock dir after throw", readdirSync(join(root, ".agents-discipline", "loc
 await attempt("withFileLock missing root", () =>
   withFileLock(join(root, "no-such-root"), join(root, "target"), () => "value"));
 
+// Regressions for the four findings of the b263dad review. Each row is a case that PASSED the
+// 55-row driver before the fix, which is the point: they were all in branches nothing drove.
+// statusLogPath bare, over the un-normalized spellings the scoped branch already covered. The
+// original row passed an absolute mkdtemp path -- the one shape that cannot expose it.
+for (const r of ["a//", "./a", "a/b/..", "a"]) record("statusLogPath bare " + r, redact(statusLogPath(r, null)));
+// A well-formed but NON-OBJECT lock file. The port raised AttributeError out of the finally and
+// replaced the caller's error; both runtimes leave the lock file itself behind, by design.
+await attempt("withFileLock non-object lock file", () =>
+  withFileLock(root, join(root, "corrupt"), () => {
+    const dir = join(root, ".agents-discipline", "locks");
+    for (const n of readdirSync(dir)) if (n.endsWith(".filelock")) writeFileSync(join(dir, n), "[]");
+    throw new Error("invalid dispatch state: boom");
+  }));
+await attempt("withFileLock unparseable lock file", () =>
+  withFileLock(root, join(root, "corrupt2"), () => {
+    const dir = join(root, ".agents-discipline", "locks");
+    for (const n of readdirSync(dir)) if (n.endsWith(".filelock")) writeFileSync(join(dir, n), "{not json");
+    return "returned anyway";
+  }));
+// A FILE where a directory must be created: the oracle's mkdirSync raises EEXIST rather than
+// returning, and the port swallowed it and leaned on each caller's follow-up assert.
+writeFileSync(join(root, "blocker"), "");
+await attempt("writeAtomic through a file", () => {
+  writeAtomic(join(root, "blocker", "child.txt"), "x");
+  return "wrote";
+});
+// ROOTED too, and this is the case that matters: the non-root branch above passes no mode, so
+// the port routes it through os.makedirs and never reaches the mkdir loop the fix is in. A
+// mutation control caught that — the row above was unchanged with the fix reverted, i.e. it was
+// testing a different code path than the one it was written for.
+writeFileSync(join(scopeRoot(root, "api"), "blocked"), "");
+await attempt("writeAtomic rooted through a file", () => {
+  writeAtomic(join(scopeRoot(root, "api"), "blocked", "child.json"), "x", { root });
+  return "wrote";
+});
+
 record("final tree", readdirSync(root).sort());
 record("state tree", readdirSync(join(root, ".agents-discipline")).sort());
 record("existsSync temp leak", readdirSync(root).filter((n) => n.endsWith(".tmp")).length);
