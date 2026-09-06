@@ -10,6 +10,14 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+// A .pyc is validated by (source mtime, source size) ALONE, so a SAME-SIZE rewrite inside one
+// mtime second -- exactly what a mutation probe does -- leaves STALE bytecode running while
+// the .py on disk reads correct. Measured: that produced a false "no divergence", and
+// inspect.getsource() cannot reveal it because it reads the .py. Set HERE rather than in
+// scripts/*.py: the guard protects MEASUREMENT, and those are shipped artifacts a user runs.
+// Children inherit process.env, so one line covers every spawn site in this file.
+process.env.PYTHONDONTWRITEBYTECODE = "1";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 // `AD_RUNTIME=python node tests/dispatch-tests.mjs` selects the port. The suite is held FIXED
 // as the oracle and only the implementation varies, so a divergence is a porting defect and

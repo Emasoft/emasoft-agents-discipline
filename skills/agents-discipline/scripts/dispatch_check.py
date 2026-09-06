@@ -7,14 +7,6 @@ defaults (1024 vs 500 bytes). The port could not share one anyway -- gate_lint.p
 __main__ guard, so importing it runs the CLI and exits.
 """
 
-import sys
-# BEFORE the local imports. A .pyc is validated by (source mtime, source size) ALONE, so a
-# SAME-SIZE rewrite inside one mtime second -- exactly what a mutation probe does, e.g.
-# range(1, 26) -> range(1, 18) -- leaves STALE bytecode executing while the .py reads
-# correct. Measured: it produced a false "no divergence", and inspect.getsource() cannot
-# reveal it because it reads the .py. This script is spawned by the Node suites, which do
-# not carry PYTHONDONTWRITEBYTECODE, so the guard belongs at the entry point itself.
-sys.dont_write_bytecode = True
 import os
 import sys
 
