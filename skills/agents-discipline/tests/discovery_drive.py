@@ -22,11 +22,15 @@ def target(**options):
     result = resolve_target({"root": root, **options})
     # Fixed key order, and absent keys DROPPED -- JSON.stringify omits undefined, so a key the
     # oracle never set must not appear here as null.
-    out = {}
-    for key in ("mode", "scope", "files", "discoveryErrors", "error", "ambiguous"):
-        if key in result:
-            out[key] = result[key]
-    return out
+    expected = ("mode", "scope", "files", "discoveryErrors", "error", "ambiguous")
+    # Both drivers PROJECT onto this fixed list, so a MISSING key is caught (the mjs emits it,
+    # this omits it) but an EXTRA or MISNAMED one is invisible -- a port returning "ambigous"
+    # would diff as nothing at all. The projection is still right (JSON.stringify drops
+    # undefined, so absent must mean absent), so the check belongs here rather than in the
+    # shape: assert the port returns nothing OUTSIDE the set the oracle can produce.
+    unexpected = set(result) - set(expected)
+    assert not unexpected, "resolve_target returned unexpected key(s): " + repr(sorted(unexpected))
+    return {key: result[key] for key in expected if key in result}
 
 
 def with_env(value, run):
@@ -50,13 +54,22 @@ json.dump({
         "scopeInvalid": target(scope="-bad"),
         "scopeDotDot": target(scope=".."),
         "scopeEmptyString": target(scope=""),
+        # Non-canonical roots -- see discovery-drive.mjs for the measured divergence.
+        "rootDoubleSep": target(root=root + "//"),
+        "rootDotSegment": target(root=root + "/./"),
+        "rootTrailingSep": target(root=root + "/"),
     },
+    "legacyFilesNonCanonical": [legacy_files(r) for r in [root + "//", root + "/./", root + "/"]],
+    "scopeFilesNonCanonical": [scope_files(r, "api") for r in [root + "//", root + "/./"]],
     "envScope": with_env("api", lambda: target()),
     "envScopeOverriddenByExplicit": with_env("api", lambda: target(scope="web")),
+    "envScopeWithEmptyExplicit": with_env("api", lambda: target(scope="")),
     "sameFileIdentity": [
         same_file_identity({"dev": 7, "ino": 11}, {"dev": 7, "ino": 11}),
         same_file_identity({"dev": 7, "ino": 11}, {"dev": 7, "ino": 12}),
         same_file_identity({"dev": 8, "ino": 11}, {"dev": 7, "ino": 11}),
+        same_file_identity(os.lstat(root), os.lstat(root)),
+        same_file_identity(os.lstat(root), os.lstat(os.path.dirname(root))),
     ],
 }, sys.stdout, indent=2, ensure_ascii=False)
 sys.stdout.write("\n")

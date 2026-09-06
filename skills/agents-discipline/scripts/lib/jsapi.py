@@ -440,8 +440,17 @@ def js_sort_key(value):
     Big-endian is load-bearing, not stylistic: comparing UTF-16-BE BYTES is equivalent to
     comparing the 16-bit units themselves, because the high byte of each unit is compared
     first. The little-endian encoding of the same string does NOT have that property.
-    `surrogatepass` because a filename read from the filesystem can carry a lone surrogate,
-    which strict UTF-16 refuses to encode -- and a crash while merely SORTING would be a worse
-    divergence than the one this fixes.
+    `js_string`, not `str()`: JS's sort begins with ToString on each element, so `None` sorts as
+    "null" where `str()` would key it on "None" and order `[None, "a"]` the other way. No caller
+    reaches this with a non-string today -- only `entry.name` and joined paths -- but a docstring
+    claiming equivalence to Array.prototype.sort() has to be true for the conversion step too,
+    and the model of it already exists one call away.
+
+    `surrogatepass` because a filename read from the filesystem CAN carry a lone surrogate: on a
+    non-UTF-8 name Python's surrogateescape produces U+DC80-U+DCFF, which strict UTF-16 refuses
+    to encode, and a crash while merely SORTING would be a worse divergence than the one this
+    fixes. Note this does NOT make the two runtimes agree on such a name -- node decodes the same
+    bytes to U+FFFD, so the two sides hold different strings before any sort key is consulted.
+    That divergence is upstream of this function and cannot be repaired here.
     """
-    return str(value).encode("utf-16-be", "surrogatepass")
+    return js_string(value).encode("utf-16-be", "surrogatepass")

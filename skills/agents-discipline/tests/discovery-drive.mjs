@@ -11,6 +11,8 @@
  *
  * Usage: node discovery-drive.mjs <root>
  */
+import { lstatSync } from "node:fs";
+import { dirname } from "node:path";
 import { legacyFiles, listScopes, resolveTarget, sameFileIdentity, scopeFiles }
   from "../scripts/lib/gates.mjs";
 
@@ -51,15 +53,36 @@ process.stdout.write(JSON.stringify({
     scopeInvalid: target({ scope: "-bad" }),
     scopeDotDot: target({ scope: ".." }),
     scopeEmptyString: target({ scope: "" }),
+    // NON-CANONICAL ROOTS. node's path.join NORMALIZES and os.path.join does not, so a root
+    // that is not already canonical produced different path STRINGS -- measured, root+"//"
+    // gave "<R>//GATES.md" against the oracle's "<R>/GATES.md". Every other row feeds the
+    // already-absolute root the builder prints, so the corpus could not express this at all.
+    rootDoubleSep: target({ root: root + "//" }),
+    rootDotSegment: target({ root: root + "/./" }),
+    rootTrailingSep: target({ root: root + "/" }),
   },
+  // Same three roots through the PUBLIC exports, which take a raw root and are where the
+  // normalization gap is actually reachable -- resolveTarget resolves its root first.
+  legacyFilesNonCanonical: [root + "//", root + "/./", root + "/"].map(legacyFiles),
+  scopeFilesNonCanonical: [root + "//", root + "/./"].map((r) => scopeFiles(r, "api")),
   // The env fallback fires ONLY when no explicit scope is passed, and an explicit scope must
   // WIN over it. Two rows, because a port that read the env first would pass the first alone.
   envScope: withEnv("api", () => target({})),
   envScopeOverriddenByExplicit: withEnv("api", () => target({ scope: "web" })),
+  // The row that makes scopeEmptyString mean something. "" is FALSY, so the oracle's
+  // `options.scope || env` falls through to the env and resolves "api"; a port reading the
+  // key by PRESENCE would stop at "" and take the no-scope path. That mutation survived all
+  // eight variants before this row existed.
+  envScopeWithEmptyExplicit: withEnv("api", () => target({ scope: "" })),
   // sameFileIdentity takes plain objects here exactly as hardening-tests.mjs:108 does.
   sameFileIdentity: [
     sameFileIdentity({ dev: 7, ino: 11 }, { dev: 7, ino: 11 }),
     sameFileIdentity({ dev: 7, ino: 11 }, { dev: 7, ino: 12 }),
     sameFileIdentity({ dev: 8, ino: 11 }, { dev: 7, ino: 11 }),
+    // REAL stat results, not just plain objects. The three rows above all take the port's
+    // dict branch, so its getattr branch -- the one every production caller uses -- had zero
+    // coverage. Same file twice must be true; two different files must be false.
+    sameFileIdentity(lstatSync(root), lstatSync(root)),
+    sameFileIdentity(lstatSync(root), lstatSync(dirname(root))),
   ],
 }, null, 2) + "\n");

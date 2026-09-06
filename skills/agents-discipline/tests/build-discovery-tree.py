@@ -74,7 +74,6 @@ def build(variant, root):
         touch(os.path.join(state, "afile"))                 # not a directory
         mk(os.path.join(state, "-bad-id"))                  # fails validate_scope_id
         mk(os.path.join(state, "x" * 65))                   # 65 chars: one over the bound
-        mk(os.path.join(state, "."))                        # already exists; a no-op
         outside = mk(os.path.join(root, "outside-target"))
         link(outside, os.path.join(state, "linkdir"))        # symlink to a real directory
         link(os.path.join(state, "keep"), os.path.join(state, "linkscope"))
@@ -92,6 +91,14 @@ def build(variant, root):
         elsewhere = mk(os.path.join(root, "elsewhere"))
         mk(os.path.join(elsewhere, "api"))
         link(elsewhere, os.path.join(root, AD))
+    elif variant == "unreadable-gates-dir":
+        # The ONLY shape that drives _markdown_discovery's except branch, where the oracle
+        # interpolates error.message. Nothing built this before, which is exactly why the
+        # message truncation shipped green. chmod 000 AFTER writing, or there is nothing to
+        # fail on; the runner restores the mode in a trap so an aborted run cannot leave an
+        # unreadable directory behind.
+        base = scope(root, "api", gates=["a.md"])
+        os.chmod(os.path.join(base, "gates"), 0)
     elif variant == "dangling-state-link":
         # .agents-discipline is a symlink to NOTHING. This is the only shape that separates
         # existsSync (FOLLOWS the link => false) from an lstat-based presence test (=> true),

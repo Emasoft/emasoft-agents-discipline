@@ -1,5 +1,5 @@
 #!/bin/bash
-# Compare the two implementations of filesystem discovery across seven tree shapes.
+# Compare the two implementations of filesystem discovery across nine tree shapes.
 #
 # Usage: bash tests/discovery-diff.sh   (run from skills/agents-discipline)
 set -u
@@ -12,9 +12,12 @@ export PYTHONDONTWRITEBYTECODE=1
 unset AGENTS_DISCIPLINE_SCOPE
 fail=0
 parent=$(mktemp -d)
+# unreadable-gates-dir chmods a directory to 000. Restore it on ANY exit -- an aborted run
+# would otherwise leave a directory that no recursive delete can descend into.
+trap 'chmod -R u+rwX "$parent" 2>/dev/null || true' EXIT INT TERM
 
 for variant in one-scope two-scopes no-scopes hostile-entries scope-is-a-file \
-               state-is-a-symlink dangling-state-link empty; do
+               state-is-a-symlink dangling-state-link unreadable-gates-dir empty; do
   root=$(python3 tests/build-discovery-tree.py "$variant" "$parent" 2>/tmp/build.err)
   # THE VACUITY GUARD, and it is not hypothetical: an exception in the builder killed it before
   # it printed the root, so `root` was EMPTY and both drivers ran against "" -- and AGREED,
@@ -42,6 +45,10 @@ done
 #   * realpath(..., strict=True) -> strict=False   (lstat already failed for a missing path)
 #   * os.path.exists -> os.path.lexists            (both answer the same for a dangling link,
 #                                                   because the S_ISLNK check runs next)
+#   * _js_join -> os.path.join in _markdown_discovery ONLY (both its callers hand it an
+#                                                   already-normalized directory, so no
+#                                                   non-canonical path can reach it; the two
+#                                                   sites in _legacy_discovery DO redden)
 # The oracle carries exactly the same redundancy, so this is faithful, not a porting defect --
 # but it means those three spellings are DEFENCE IN DEPTH, not verified behaviour. Do not read
 # a green run here as covering them. dangling-state-link is kept for a different reason it DOES

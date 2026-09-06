@@ -775,6 +775,48 @@ def same_file_identity(left, right):
     return field(left, "dev") == field(right, "dev") and field(left, "ino") == field(right, "ino")
 
 
+def _js_join(*parts):
+    """`path.join` — which NORMALIZES, where `os.path.join` does not.
+
+    Measured: node's join("a//", "b") is "a/b" and Python's is "a//b"; ("a/.", "b") gives
+    "a/b" against "a/./b". The port already carried this fix at scope_root and
+    status_log_path and then reintroduced the bug at every site added with the discovery
+    helpers -- so the lesson is that a rule applied per-site does not hold. One helper, used
+    everywhere the oracle says path.join, is the form that cannot drift.
+
+    normpath is the right primitive here and not merely close: node's join normalizes `.`,
+    duplicate separators and interior `..` lexically, without touching the filesystem, which
+    is exactly normpath's contract. A trailing separator survives BOTH (node keeps "a/b/"),
+    which normpath would strip -- hence the re-append.
+    """
+    joined = os.path.join(*parts)
+    normalized = os.path.normpath(joined)
+    if joined.endswith(("/", os.sep)) and not normalized.endswith(os.sep):
+        normalized += os.sep
+    return normalized
+
+
+def _node_fs_message(error, syscall):
+    """Node's `error.message` for a failed fs call, which is NOT Python's `str(error)`.
+
+    The oracle interpolates `error.message` at this one site (it reads `error.code`
+    everywhere else, which is what _err_code is for). Node's shape is
+    `CODE: lowercase prose, syscall 'path'`; Python's str() is `[Errno N] Prose: 'path'`.
+
+    MEASURED against node for all three errnos a directory scan can raise -- EACCES, ENOENT,
+    ENOTDIR -- where `os.strerror(n).lower()` reproduces libuv's prose exactly. That
+    equivalence is verified for those three, NOT proven in general: libuv carries its own
+    message table, so a rarer errno may not match. Falling back to the errno name alone would
+    be a silent, smaller divergence, so an unmatched code still produces this shape.
+    """
+    code = _err_code(error)
+    number = getattr(error, "errno", None)
+    prose = os.strerror(number).lower() if number is not None else code
+    path = getattr(error, "filename", None)
+    suffix = ", " + syscall + " '" + str(path) + "'" if path is not None else ", " + syscall
+    return code + ": " + prose + suffix
+
+
 def _named_entry(file):
     """The oracle's namedEntry: any lstat outcome EXCEPT ENOENT counts as present.
 
@@ -786,8 +828,15 @@ def _named_entry(file):
     try:
         os.lstat(file)
         return True
-    except OSError as error:
-        return error.errno != errno.ENOENT
+    except Exception as error:
+        # `except Exception`, matching the oracle's BARE `catch`, not `except OSError`. Measured:
+        # namedEntry(null) throws ERR_INVALID_ARG_TYPE in node, whose code is not "ENOENT", so
+        # the oracle answers TRUE; a narrow OSError clause lets Python's TypeError propagate
+        # instead. Same for an embedded NUL (ValueError vs ERR_INVALID_ARG_VALUE). Unreachable
+        # from resolve_target today -- the scope charset excludes NUL -- but this function's
+        # whole contract is "any failure except ENOENT means present", and a clause that lets
+        # some failures escape does not implement it.
+        return getattr(error, "errno", None) != errno.ENOENT
 
 
 def _real_directory_inside(root, directory):
@@ -801,12 +850,13 @@ def _real_directory_inside(root, directory):
         # which would then be compared and could answer True for a path that is not there.
         return _path_is_inside(os.path.realpath(os.path.abspath(root), strict=True),
                                os.path.realpath(directory, strict=True))
-    except OSError:
+    except Exception:
+        # Bare `catch` in the oracle; see _named_entry for why the narrow clause is wrong.
         return False
 
 
 def list_scopes(root):
-    directory = os.path.join(root, AGENTS_DISCIPLINE_DIR)
+    directory = _js_join(root, AGENTS_DISCIPLINE_DIR)
     if not os.path.exists(directory):
         return []
     try:
@@ -823,9 +873,9 @@ def list_scopes(root):
         return sorted((entry.name for entry in os.scandir(directory)
                        if entry.is_dir(follow_symlinks=False) and entry.name != "locks"
                        and not validate_scope_id(entry.name)
-                       and _real_directory_inside(root, os.path.join(directory, entry.name))),
+                       and _real_directory_inside(root, _js_join(directory, entry.name))),
                       key=js_sort_key)
-    except OSError:
+    except Exception:
         return []
 
 
@@ -842,12 +892,13 @@ def _markdown_discovery(root, directory):
         # "simplified" to sorting the names. The two agree only because the prefix is
         # identical for every entry here, and reasoning that out again at each edit is exactly
         # how a port drifts; matching the oracle costs nothing and needs no such argument.
-        files = sorted((os.path.join(directory, entry.name) for entry in os.scandir(directory)
+        files = sorted((_js_join(directory, entry.name) for entry in os.scandir(directory)
                         if entry.name.endswith(".md")), key=js_sort_key)
         return {"files": files, "errors": []}
-    except OSError as error:
+    except Exception as error:
         return {"files": [], "errors": [
-            "cannot inspect gate directory " + directory + ": " + _err_code(error)]}
+            "cannot inspect gate directory " + directory + ": " + _node_fs_message(error,
+                                                                                   "scandir")]}
 
 
 def _scope_discovery(root, scope):
@@ -856,20 +907,20 @@ def _scope_discovery(root, scope):
         return {"files": [], "errors": [
             "scope directory must be a real directory inside the repository: " + base]}
     files = []
-    top = os.path.join(base, "GATES.md")
+    top = _js_join(base, "GATES.md")
     if _named_entry(top):
         files.append(top)
-    nested = _markdown_discovery(root, os.path.join(base, "gates"))
+    nested = _markdown_discovery(root, _js_join(base, "gates"))
     files.extend(nested["files"])
     return {"files": files, "errors": nested["errors"]}
 
 
 def _legacy_discovery(root):
     files = []
-    top = os.path.join(root, "GATES.md")
+    top = _js_join(root, "GATES.md")
     if _named_entry(top):
         files.append(top)
-    nested = _markdown_discovery(root, os.path.join(root, "gates"))
+    nested = _markdown_discovery(root, _js_join(root, "gates"))
     files.extend(nested["files"])
     return {"files": files, "errors": nested["errors"]}
 
@@ -903,7 +954,7 @@ def resolve_target(options=None):
             return {"mode": "none", "scope": wanted, "files": [], "error": invalid}
         if wanted not in scopes:
             scope_path = scope_root(root, wanted)
-            state_path = os.path.join(root, AGENTS_DISCIPLINE_DIR)
+            state_path = _js_join(root, AGENTS_DISCIPLINE_DIR)
             # A scope that is physically ABSENT is stale configuration and answers harmlessly.
             # One that EXISTS but list_scopes excluded (link, file, FIFO, outside-root, or an
             # unreadable state container) must stay visible as invalid input instead of
