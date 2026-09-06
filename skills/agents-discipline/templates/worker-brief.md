@@ -40,9 +40,12 @@ cannot read their approval store.
 | G1 | `<command, wrapped in a timeout — see below>` | `<the exact string success prints>` |
 | G2 | `<command>` | `<string>` |
 
-**Wrap every CHECK in an explicit timeout**, e.g. `timeout 120 <command>`. The 120s bound, the
-output cap and the process-group kill all live inside `gate-check.mjs`; a command you run
-yourself in a shell inherits none of them, so an unbounded check hangs you instead of failing.
+**Bound every CHECK yourself.** The 120s limit, the output cap and the process-group kill all
+live inside `gate-check.mjs`; a command you run by hand in a shell inherits none of them, so an
+unbounded check hangs you instead of failing. Prefer a runner's own flag (`pytest --timeout=120`,
+`go test -timeout 120s`). `timeout 120 <command>` works where GNU coreutils is installed — it is
+NOT present on a stock macOS, where it is `gtimeout` from `brew install coreutils`, so do not
+put a bare `timeout` in a CHECK that has to run on someone else's machine.
 
 You MAY validate the ledger's shape without running anything:
 

@@ -386,20 +386,36 @@ check("worker brief carries the completion half", () => {
 
 check("the no-delegation guard is in Rule zero, not only the template", () => {
   const skill = read("SKILL.md");
-  // A line in a template the coordinator must remember to fill loses to Rule zero, which is
-  // longer, more specific, and says "you must split". Both ends have to agree.
-  return /leaf/i.test(skill) && /AGENTS_DISCIPLINE_ROLE/.test(skill)
+  // Scoped to Rule zero, and matching the GUARD rather than the word "leaf". My first version
+  // tested `/leaf/i.test(skill)`, which is trivially true -- SKILL.md says "leaf ledger",
+  // "leaf self-check", "leaf-1.md" -- so it would have passed with the guard deleted outright.
+  // That is the self-confirming-predicate failure this suite exists to catch.
+  const ruleZero = (skill.split(/^### Rule zero[^\n]*$/m)[1] ?? "").split(/^### /m)[0];
+  return /\bleaf\b/i.test(ruleZero) && /\bCLOSED\b/.test(ruleZero)
     ? null
     : "SKILL.md's Rule zero does not close the gate for a worker whose brief says it is a leaf";
 });
 
 check("approval is named where --reverify is prescribed", () => {
   const skill = read("SKILL.md");
-  const runBoth = skill.split(/^## Run both$/m)[1] ?? "";
+  // Bounded to the section. Splitting on the heading alone takes everything to END OF FILE,
+  // so an `--approve` anywhere later in the document would have satisfied this while
+  // `## Run both` itself lacked one.
+  const runBoth = (skill.split(/^## Run both$/m)[1] ?? "").split(/^## /m)[0];
   // Without --approve, gate-check takes the unapproved branch, runs ZERO commands and reports
   // the gate unmet. A coordinator following this section verbatim would see a false failure.
   return /--reverify/.test(runBoth) && !/--approve/.test(runBoth)
     ? "`## Run both` prescribes --reverify without the --approve step, so it would run nothing"
+    : null;
+});
+
+check("the brief prescribes no non-portable command", () => {
+  const brief = read("templates/worker-brief.md");
+  // `timeout` is GNU coreutils and is NOT on a stock macOS (it is `gtimeout` from brew), so a
+  // bare `timeout 120 <cmd>` in a CHECK fails with 127 on a machine that never installed it.
+  // Shipped exactly that instruction once; the brief must name the caveat wherever it appears.
+  return /timeout /.test(brief) && !/gtimeout/.test(brief)
+    ? "the brief prescribes `timeout` without naming that stock macOS has only `gtimeout`"
     : null;
 });
 

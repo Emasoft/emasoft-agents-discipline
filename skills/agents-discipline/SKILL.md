@@ -25,7 +25,7 @@ Before touching an artifact, count the work units in the request. A unit is an i
 
 then the gate is open: you must split. Write it down: "gate open: N units" or "single-agent: N units, below threshold", in your report.
 
-**Unless your brief says you are a leaf** (or `AGENTS_DISCIPLINE_ROLE=leaf` is set) — then the gate is CLOSED whatever the count. Report that the unit is too large and let the coordinator resize it. A worker that splits becomes a second coordinator: same `DELEGATION.md` filename, same file leases, deadlock.
+**Unless your brief says you are a leaf** — then the gate is CLOSED whatever the count. Report that the unit is too large and let the coordinator resize it. A worker that splits becomes a second coordinator: same `DELEGATION.md` filename, same file leases, deadlock.
 
 Below the threshold, do the work yourself and say so: force-splitting a small task costs more ceremony than work. The gate has a floor and a ceiling; the numbers come from [references/delegation-token-economy.md](references/delegation-token-economy.md).
 
