@@ -102,10 +102,25 @@ raw "astral under budget, intact"  "$(python3 -c 'print("z"*400 + chr(0x1F600)*4
 # one where total+size == max_bytes == 500. `>` appends it and returns the whole message; `>=`
 # truncates. Found by mutation -- `>` -> `>=` was caught by NOTHING in this file, because every
 # other row lands strictly inside or strictly outside the budget and an off-by-one is invisible
-# from either side. 483 and 485 bracket it, so a future off-by-one in the other direction has a
-# witness too.
+# from either side.
+#
+# Each of these two is the SOLE catcher of its own mutation, measured:
+#   484 alone reddens for `> max_bytes` -> `>= max_bytes` and for `> max_bytes - 1`
+#   485 alone reddens for `> max_bytes` -> `> max_bytes + 1`
+#
+# A review argued 485 is dominated by the 900-byte row, since both are over budget. MEASURED,
+# and it is not: under `> max_bytes + 1` the 900-byte row emits BYTE-IDENTICAL output (529 both
+# ways), because it truncates under mutant and oracle alike and the marker backoff -- which
+# still compares against max_bytes -- lands on the same character. 485 is the only length where
+# the mutant stops truncating AT ALL (501 is not > 501), so it returns the whole message where
+# the oracle cuts it: 530 vs 529. A row one byte over the budget asks "is an over-budget message
+# cut at all", which no comfortably-over row can ask.
+# The 483 row that sat between them is GONE. It was added as a bracket and caught nothing in any
+# of five mutations -- it never truncates, which makes it behaviourally identical to every short
+# row already in this file. Deleted on the same standard that deleted the ascii-run row above,
+# rather than kept because "a boundary wants a row on each side": the row below the boundary is
+# already covered, and a row that catches nothing still has to be read by whoever comes next.
 raw "exactly at the budget (484)" "$(python3 -c 'print("z"*484)')"
-raw "one byte under (483)"        "$(python3 -c 'print("z"*483)')"
 raw "one byte over (485)"         "$(python3 -c 'print("z"*485)')"
 raw "over-budget truncates" "$(python3 -c 'print("z"*900)')"
 # MEASURED: the old spelling of this row ("z"*495 + 4 RLO) never reached an RLO at all. The
@@ -116,6 +131,19 @@ raw "over-budget truncates" "$(python3 -c 'print("z"*900)')"
 # work either: two escapes DO enter `pieces`, and the marker backoff then pops both, so the
 # output again carries none. The escapes have to sit early enough that the backoff eats the
 # FILLER instead -- 400 z, then the escapes, then enough z to overrun the budget.
+# It is also the SOLE catcher of a mutation the plain escape rows cannot see: measuring the
+# piece size on the ORIGINAL character (`len(character.encode())`) instead of on the ESCAPED
+# text (`len(piece.encode())`). An escaped RLO is the 6 ASCII bytes of its backslash-u form,
+# where the character itself is 3 -- and NO, the literal is not written here: the first draft of
+# this comment embedded a real U+202E, an invisible bidi control, in a shell script, which is
+# precisely the hazard the rows below exist to catch.
+#
+# DO NOT RETUNE THIS ROW WITHOUT REPLACING THE COVERAGE. It is the only check anywhere that
+# terminal_safe's byte cap is measured on what it actually EMITS. Under that mutation the
+# function emits 512 message bytes against a 500-byte cap -- measured -- so the bound it exists
+# to enforce is silently overrun, and every other row in this file stays green through it,
+# so that mutation shifts the cut -- but only for a message long enough to BE cut, and every
+# plain escape row is short. Measured: this row reddens alone.
 raw "escaped pieces survive truncation" "$(python3 -c 'print("z"*400 + chr(0x202e)*4 + "z"*200)')"
 raw "unknown option echoes value" open --scope api --wave w1 --leaf a "$(printf -- '--o\001pt')"
 echo "--- $( [ $fail = 0 ] && echo 'all identical' || echo 'DIVERGENCES ABOVE' ) ---"
