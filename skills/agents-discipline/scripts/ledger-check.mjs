@@ -357,8 +357,34 @@ const CHAIN_OPERATORS = /\|\||;/;
 // Unbalanced quotes simply do not match, leaving the text as-is, which errs toward treating a
 // character as an operator -- the conservative direction for a refusal that a human can read
 // and rewrite, rather than a silent pass.
+// A single left-to-right scan, because two independent regex passes cannot track quote state.
+// The two-pass version (`replace(/'[^']*'/g).replace(/"[^"]*"/g)`) matched an apostrophe
+// INSIDE double quotes against a later single quote, and spliced away everything between:
+//   echo "it's fine" && grep -q 'x' f   ->   echo "it''x' f
+// which DELETES the `&&`, so the remains matched the `echo` branch and an honest command was
+// flagged a no-op. Masking must never invent or destroy an operator.
+//
+// Length-preserving on purpose: each quoted character becomes `x`, so every operator outside
+// quotes keeps its position and nothing shifts. An unterminated quote masks to end-of-string,
+// which errs toward refusal -- readable, and a human can rewrite it.
+//
+// KNOWN CEILING: a backslash-escaped quote (`echo "a\"b; c"`) is read as closing the string,
+// so the `;` after it looks like a chain and the row is refused. Rare, and it fails toward a
+// message rather than a silent pass.
 function maskQuoted(s) {
-  return s.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
+  let out = "";
+  let quote = null;
+  for (const c of s) {
+    if (quote) {
+      out += c === quote ? ((quote = null), c) : "x";
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      out += c;
+    } else {
+      out += c;
+    }
+  }
+  return out;
 }
 
 // A no-op acceptance exits 0 no matter what. With `||` and `;` refused upstream, the only
