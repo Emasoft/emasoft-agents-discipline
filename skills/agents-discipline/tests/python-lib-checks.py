@@ -428,14 +428,23 @@ for _fixture in _fixtures:
     if _probe.returncode == 0:
         _oracle_docs[_fixture.name] = json.loads(_probe.stdout)
 _all = list(_oracle_docs.values())
+# Each predicate must be satisfiable ONLY by a fixture that exercises the class in its name.
+# Three of these were not, and they had the exact defect they were written to catch:
+#   - "no final newline" was `finalNewline is False`, which a ZERO-BYTE file satisfies — so it
+#     was the one assertion that survived the empty-corpus vacuity control, and it survived for
+#     the degenerate reason the control exists to reject. Now it must also carry a gate.
+#   - "a checked box" was `any(d["gates"])`, i.e. any gate at all. An all-`- [ ]` corpus passed.
+#   - "a regex-reading EXPECT warning" was `any(d["warnings"])`, i.e. any warning of any kind —
+#     in the very class where a fixture had already lied to me once.
 _classes = {
-    "a CRLF ledger": any(d["eol"] == "\r\n" for d in _all),
-    "a ledger with no final newline": any(d["finalNewline"] is False for d in _all),
+    "a CRLF ledger": any(d["eol"] == "\r\n" and d["gates"] for d in _all),
+    "a ledger with no final newline": any(d["finalNewline"] is False and d["gates"] for d in _all),
     "a non-ASCII gate id": any(not g["id"].isascii() for d in _all for g in d["gates"]),
-    "an ABANDON reason": any(d["abandoned"] for d in _all),
-    "a regex-reading EXPECT warning": any(d["warnings"] for d in _all),
+    "an ABANDON reason": any(any(reason for _id, reason in d["abandoned"]) for d in _all),
+    "a regex-reading EXPECT warning":
+        any("read as a regular expression" in w for d in _all for w in d["warnings"]),
     "accumulated parse errors": any(len(d["errors"]) > 1 for d in _all),
-    "a checked box": any(d["gates"] for d in _all),
+    "a checked box": any(g.get("checked") for d in _all for g in d["gates"]),
 }
 for _name, _present in sorted(_classes.items()):
     report(_present, f"parse_gates: the corpus still contains {_name}")
