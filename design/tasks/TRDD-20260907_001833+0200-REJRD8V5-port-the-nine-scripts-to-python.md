@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T01:35:41+0200
+updated: 2026-09-07T01:40:41+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -68,11 +68,26 @@ UNSTARTED throughout — not stalled, never begun.
 That is worth knowing before deciding how much more of this to run: the reviews kept finding
 real defects, but in infrastructure built to review the port rather than in the port.
 **Recommendation to the USER, not yet approved: narrow the review gate to commits touching
-`scripts/lib/`.** The durable evidence is the per-fork cost, which rose monotonically across
-the nine forks — roughly 315k, 326k, 327k, 390k, 419k, 459k, 516k, 532k, 552k subagent tokens,
-each fork inheriting the full context. (A "12.3x spike over the session median" figure cited
-here before was a 5-minute burstiness statistic from one heartbeat, session-local and not
-re-derivable by any future reader.)
+`scripts/lib/`.**
+
+**The honest evidence, after two attempts at it.** Per-fork cost across ELEVEN forks: 315k,
+326k, 327k, 390k, 420k, 459k, 516k, 533k, 552k, 571k, 572k subagent tokens — monotonic, each
+fork inheriting the whole conversation. Two earlier framings of this were wrong and are worth
+keeping as a warning:
+1. a "12.3x spike over the session median" — a 5-minute BURSTINESS statistic from one
+   heartbeat, session-local and not re-derivable by any future reader;
+2. the same series above, given as "nine forks" and asserted to make "the stronger case" for
+   narrowing the gate. It does not. Each fork inherits the FULL conversation, which grows every
+   turn regardless of what the fork reviews, so a fork on a one-line docs commit costs about
+   what one on a 200-line port costs. **The series proves forks get steadily more expensive; it
+   does NOT prove that reviewing docs commits is what made them expensive** — which is the
+   claim the recommendation needs. It also dropped the two LARGEST values, both known when it
+   was written, and both cutting against the argument.
+
+The measurement that would actually carry the recommendation: **how many forks were spawned on
+commits touching no port code, times the current per-fork cost** — roughly half of them at
+~500k+ each in this session. That is a different claim from the one the series makes, and it
+has not been taken.
 
 **Bullet convention, because these labels have been used both ways:** R5/R6 name the round
 whose REVIEW found the defect; R7/R8 describe what that round's commit DID.
@@ -92,13 +107,21 @@ whose REVIEW found the defect; R7/R8 describe what that round's commit DID.
   with the exit-status check. `PROBE FAILED` keeps exit 1.
 - **R8** (`3d85eaa`) — Ctrl-C made the probe print a verdict about UNMUTATED source: the EXIT
   trap restored the file, then execution fell through to the verdict block. INT/TERM now exit
-  130. Two lessons beyond the fix. First, my initial "it works" reading was wrong — a
-  background job from a non-interactive shell has SIGINT ignored, so the absent verdict proved
-  nothing; SIGTERM is the valid test. Second, verifying it exposed a defect introduced in the
-  SAME edit: EXIT still runs after the signal handler, so `restore()` ran twice and the backup
-  cleanup added beside it made the second call fail and falsely report "may still be MUTATED".
-  `restore()` is now idempotent. **A fix and its own verification landing together is how a
-  two-part edit hides its second half.**
+  **128+signal — 130 for INT, 143 for TERM** (both were hardcoded to 130; see below).
+  Three lessons beyond the fix.
+  1. My initial "it works" reading was wrong: a backgrounded script from a non-interactive
+     shell has SIGINT set to SIG_IGN, and **a signal ignored on entry cannot be re-trapped**,
+     so the handler was inert rather than merely unfired. SIGTERM is the ONLY AVAILABLE test,
+     not "the valid" one — a real Ctrl-C signals the whole foreground process GROUP, so
+     **the INT path remains argued, not measured.**
+  2. Verifying it exposed a defect introduced in the SAME edit: EXIT still runs after the
+     signal handler, so `restore()` ran twice, and the backup cleanup added beside it made the
+     second call fail and falsely report "may still be MUTATED". **A fix and its own
+     verification landing together is how a two-part edit hides its second half.**
+  3. **The verification printed its own contradiction and I read it as success**:
+     `TERM exit=130 (143 = handled SIGTERM)` — the label states the expectation, the output
+     disagrees. Fixed to `exit $((128 + sig))`, and the re-test now ASSERTS the expected value
+     instead of printing it in a label. A label is not an assertion.
 
 **Standing limit, stated rather than papered over:** a baseline that merely exits 0 is not
 proof the runner can OBSERVE anything. A true positive control needs a canary mutation known
@@ -110,6 +133,22 @@ which is the sentence a reader would have trusted). Both halves measured: a degr
 leaves the oracle-derived counts untouched, so the gate passes and the DIFF fires; a degraded
 SEQUENCE makes both sides agree, so the diff passes and the GATE fires (`VACUOUS: ok=3
 conflicted=8 released=1`).
+
+### KNOWN, CONFIRMED, AND DELIBERATELY NOT FIXED — organizational, not factual
+Two findings below were CONFIRMED by review and left in place. Recording the decision, because
+a defect skipped in silence is indistinguishable from one overlooked, and the next reviewer
+will re-raise it at the cost of another full-context fork:
+1. **`### ROUND 2` is wholly subsumed by `### ROUNDS 2-4`**, sits below it (summary before
+   detail), and both open with the SAME sentence, one bolded. ~15 lines recoverable by merging.
+2. **This STATE block is retrospective-heavy** — roughly 90 lines of round history before
+   `### NEXT ACTION`, in a block whose stated purpose is resumption and whose budget is shared
+   with the compaction handoff.
+
+Both are real. Neither changes what a resuming session would DO, and this document has already
+been rewritten three times in one turn — each rewrite carrying its own risk of introducing the
+factual errors the rewrites exist to remove (two were introduced exactly that way). **The merge
+is the right move for whoever next edits this file for a substantive reason; it is not worth a
+dedicated pass.**
 
 ### ROUNDS 2-4 — every review of a fix found the fix defective
 **The base rate is the finding.** Rounds 2, 3 and 4 each found the PREVIOUS round's fix wrong.

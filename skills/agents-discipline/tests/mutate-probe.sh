@@ -49,18 +49,39 @@ echo "$label -> backup: $backup" >&2   # stderr: stdout carries the VERDICT
 # the target in /tmp forever, and dozens accumulated in one session. It is kept, and its path
 # reported, ONLY when the restore failed, which is the one case where it is the recovery path
 # the startup line advertises.
+restored=0
 restore() {
-  # IDEMPOTENT. The EXIT trap still runs after the INT/TERM handler, so restore() is called
-  # TWICE on a signal -- and the first call removes the backup. Without this guard the second
-  # cp failed with "cannot stat" and printed "may still be MUTATED" about a file it had just
-  # correctly restored: a false alarm introduced by the cleanup and the signal handler landing
-  # in the same edit. A missing backup means the restore already happened.
-  [ -f "$backup" ] || return 0
-  if cp "$backup" "$target"; then rm -f "$backup"
-  else echo "RESTORE FAILED -- $target may still be MUTATED; original at $backup" >&2; fi
+  # IDEMPOTENT VIA A FLAG, not via "does the backup still exist". The EXIT trap still runs
+  # after the INT/TERM handler, so restore() is called TWICE on a signal, and the first call
+  # removes the backup -- the second then failed with "cannot stat" and reported "may still be
+  # MUTATED" about a file it had just correctly restored.
+  #
+  # The obvious guard, `[ -f "$backup" ] || return 0`, INFERS state from a file's existence and
+  # conflates two cases: "already restored" and "the backup vanished" (a /tmp reaper, an
+  # external rm). In the second the target is STILL MUTATED and the function returns success
+  # silently -- the exact false negative this harness exists to prevent, reintroduced by the
+  # guard meant to fix a false alarm. A flag records what actually happened.
+  [ "$restored" = 1 ] && return 0
+  if cp "$backup" "$target"; then restored=1; rm -f "$backup"; return 0
+  else echo "RESTORE FAILED -- $target may still be MUTATED; original at $backup" >&2; return 1; fi
+}
+interrupted() {   # interrupted <signal-number>
+  # 128+signal, per convention: SIGINT 2 -> 130, SIGTERM 15 -> 143. Both were hardcoded to 130,
+  # and the test that "verified" it printed `TERM exit=130 (143 = handled SIGTERM)` -- the label
+  # stating the expected value, the output contradicting it, and the run reported as a success.
+  # Nothing consumes these codes today; the defect was reading a disagreement as agreement.
+  #
+  # The message is CONDITIONAL on the restore, because asserting "file restored" one line after
+  # restore() printed "may still be MUTATED" gives a skimmer two contradictory claims with the
+  # wrong one last. It cannot branch on restore()'s old return value -- its failure arm ended in
+  # a successful echo, so it returned 0 either way; that is what the explicit `return 1` fixes.
+  if restore; then echo "$label -> INTERRUPTED (no verdict; file restored)" >&2
+  else echo "$label -> INTERRUPTED (no verdict; RESTORE FAILED -- see above)" >&2; fi
+  exit $((128 + $1))
 }
 trap restore EXIT
-trap 'restore; echo "$label -> INTERRUPTED (no verdict; file restored)" >&2; exit 130' INT TERM
+trap 'interrupted 2' INT
+trap 'interrupted 15' TERM
 
 # Guard 0. A pre-existing divergence makes every subsequent probe a false positive, so the
 # harness must establish its own baseline rather than assume one.
