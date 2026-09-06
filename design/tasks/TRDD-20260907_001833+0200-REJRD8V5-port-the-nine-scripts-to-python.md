@@ -52,8 +52,8 @@ revert. If no mutation isolates a row, that row does not earn its place.
   `python3 -c "...import gates..."` is not.
 - **Mutation probes need a UNIQUE anchor.** A first-match `replace(old, new, 1)` reverted into a
   DIFFERENT function once, silently editing code the probe never targeted.
-- **Escapes typed into a tool call materialise into literal characters.** Writing ` ` put a
-  real bidi control into source twice, and `` became U+2026 in a fixture, making the row
+- **Escapes typed into a tool call materialise into literal characters.** Writing `U+2028` put a
+  real bidi control into source twice, and the escape for U+0085 became U+2026 in a fixture, making the row
   inert. Build hostile characters with `chr()` / `String.fromCodePoint()`; never type them.
 - **`str.splitlines()` splits on U+2028/U+2029/U+0085/VT/FF** — an invisible-character scanner
   built on it consumes the very characters it searches for and reports files clean that are not.
