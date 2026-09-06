@@ -37,18 +37,25 @@ cannot read their approval store.
 
 | Gate | CHECK | EXPECT | Who runs it |
 |------|-------|--------|-------------|
-| G1 | `<command, bounded — see below>` | `<the exact string success prints>` | you, then the coordinator |
+| G1 | `<command — plain, no timeout wrapper; see below>` | `<the exact string success prints>` | you, then the coordinator |
 | G2 | `<command>` | `<string>` | coordinator only |
 
 `coordinator only` marks a gate you should NOT run — an expensive suite whose double execution
 is not worth it. Every other gate runs twice by design: once by you, once by the coordinator.
 
-**Bound every CHECK yourself.** The 120s limit, the output cap and the process-group kill all
-live inside `gate-check.mjs`; a command you run by hand in a shell inherits none of them, so an
-unbounded check hangs you instead of failing. Prefer a runner's own flag (`pytest --timeout=120`,
-`go test -timeout 120s`). `timeout 120 <command>` works where GNU coreutils is installed — it is
-NOT present on a stock macOS, where it is `gtimeout` from `brew install coreutils`, so do not
-put a bare `timeout` in a CHECK that has to run on someone else's machine.
+**Bound each CHECK when YOU run it — not in the CHECK text itself.** The recorded CHECK is what
+the coordinator re-runs through `gate-check.mjs`, which already applies a 120s limit, an output
+cap and a process-group kill. Baking a bound into the ledger buys nothing there and hard-codes a
+tool that may not exist on their machine.
+
+Your own shell run inherits none of those bounds, so an unbounded check hangs your turn and you
+return no report at all. Bound it at the point of invocation:
+
+- A runner's own flag, when it has one that is built in — `go test -timeout 120s` is core Go.
+  `pytest --timeout=120` is NOT core pytest; it needs the `pytest-timeout` plugin and otherwise
+  fails with `unrecognized arguments`.
+- Otherwise `timeout 120 <command>` — GNU coreutils, so present on Linux; a stock macOS has no
+  `timeout` at all and needs `brew install coreutils`, which installs it as `gtimeout`.
 
 You MAY validate the ledger's shape without running anything:
 

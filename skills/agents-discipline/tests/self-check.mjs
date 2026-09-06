@@ -390,8 +390,15 @@ check("the no-delegation guard is in Rule zero, not only the template", () => {
   // tested `/leaf/i.test(skill)`, which is trivially true -- SKILL.md says "leaf ledger",
   // "leaf self-check", "leaf-1.md" -- so it would have passed with the guard deleted outright.
   // That is the self-confirming-predicate failure this suite exists to catch.
-  const ruleZero = (skill.split(/^### Rule zero[^\n]*$/m)[1] ?? "").split(/^### /m)[0];
-  return /\bleaf\b/i.test(ruleZero) && /\bCLOSED\b/.test(ruleZero)
+  const parts = skill.split(/^### Rule zero[^\n]*$/m);
+  // Distinguish "section renamed" from "guard deleted". Reporting the latter for the former
+  // sends someone hunting for a guard that is still there -- the same lie as `40bd2c4`'s
+  // "no unit rows" on a file that visibly had rows.
+  if (parts.length < 2) return "SKILL.md has no `### Rule zero` heading — this check needs rescoping, the guard may be fine";
+  const ruleZero = parts[1].split(/^### /m)[0];
+  // Matches the GUARD's subject, not an incidental word. An earlier version required the
+  // literal "CLOSED", which punishes a correct rewording ("the gate does not open").
+  return /brief[^\n]*\bleaf\b/i.test(ruleZero)
     ? null
     : "SKILL.md's Rule zero does not close the gate for a worker whose brief says it is a leaf";
 });
@@ -411,12 +418,19 @@ check("approval is named where --reverify is prescribed", () => {
 
 check("the brief prescribes no non-portable command", () => {
   const brief = read("templates/worker-brief.md");
-  // `timeout` is GNU coreutils and is NOT on a stock macOS (it is `gtimeout` from brew), so a
-  // bare `timeout 120 <cmd>` in a CHECK fails with 127 on a machine that never installed it.
-  // Shipped exactly that instruction once; the brief must name the caveat wherever it appears.
-  return /timeout /.test(brief) && !/gtimeout/.test(brief)
-    ? "the brief prescribes `timeout` without naming that stock macOS has only `gtimeout`"
-    : null;
+  // Every bounding tool the brief can name is non-portable somewhere, and I shipped TWO of
+  // them uncaveated in successive commits: `timeout` (GNU coreutils, absent on stock macOS)
+  // and `pytest --timeout=` (needs the pytest-timeout plugin; measured `error: unrecognized
+  // arguments` on a stock install). So each must appear only alongside its caveat.
+  //
+  // The backtick anchors matter. An earlier version tested `/timeout /`, which also matches
+  // `go test -timeout 120s` -- core Go, needing no caveat -- so it would have demanded one;
+  // and it paired that with a DOCUMENT-level `!/gtimeout/`, satisfied by any mention anywhere,
+  // so a new uncaveated instruction elsewhere would still have passed.
+  const problems = [];
+  if (/`timeout /.test(brief) && !/coreutils/.test(brief)) problems.push("`timeout` without the coreutils/macOS caveat");
+  if (/--timeout=/.test(brief) && !/pytest-timeout/.test(brief)) problems.push("`--timeout=` without naming the pytest-timeout plugin");
+  return problems.length ? "the brief prescribes " + problems.join("; ") : null;
 });
 
 let passed = 0;
