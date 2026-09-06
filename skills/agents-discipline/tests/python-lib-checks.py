@@ -443,7 +443,18 @@ _classes = {
     "an ABANDON reason": any(any(reason for _id, reason in d["abandoned"]) for d in _all),
     "a regex-reading EXPECT warning":
         any("read as a regular expression" in w for d in _all for w in d["warnings"]),
-    "accumulated parse errors": any(len(d["errors"]) > 1 for d in _all),
+    # ACCUMULATED, so the unconditional "zero live gates" error must not count toward it:
+    # parse_gates appends that whenever a ledger has no live gates, so ONE real error in a
+    # gateless fixture already made len(errors) == 2 and satisfied `> 1` without demonstrating
+    # accumulation at all. errors.md produces four, so this passed honestly -- but the
+    # predicate did not require it to, which is the property the other six were tightened for.
+    "accumulated parse errors":
+        any(len([e for e in d["errors"] if "zero live gates" not in e]) > 1 for d in _all),
+    # The non-ASCII TITLE, asserted separately from the id. 8424c59's fixture comment claims
+    # "non-ASCII ids and titles" and only the id was ever checked -- and the title is where a
+    # real divergence lived: the ensure_ascii=False serializer bug was found on
+    # "тесты пройдены ✓", not on an id. Editing that heading to ASCII went unnoticed.
+    "a non-ASCII line of prose": any(not line.isascii() for d in _all for line in d["lines"]),
     "a checked box": any(g.get("checked") for d in _all for g in d["gates"]),
 }
 for _name, _present in sorted(_classes.items()):

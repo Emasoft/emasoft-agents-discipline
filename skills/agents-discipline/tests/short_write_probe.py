@@ -13,19 +13,18 @@ did not short-write here, nothing below is evidence of anything.
 
   control  -- a bare os.write on a regular file under RLIMIT_FSIZE returns SHORT
   error    -- _write_all on that same shape surfaces the failure instead of truncating
-  success  -- _write_all delivers EVERY byte when the writes short but do not fail
+  success  -- _write_all delivers EVERY byte, across MORE THAN ONE write, when writes short
+              but do not fail
 
 The third case is the one the fix exists for, and the first version of this probe did not have
-it: demonstrating "does not truncate SILENTLY" is not the same as demonstrating "does not
-truncate". A stream socket is used for it because, unlike a pipe, a blocking SOCK_STREAM send
-may return fewer bytes than asked once its send buffer fills.
+it at all: "does not truncate SILENTLY" is not "does not truncate". Its second version had it
+in name only -- see _success_case for the three real descriptors that each turned out to
+short-write never, and for why the loop is driven by a stubbed os.write instead.
 """
 
 import os
-import socket
 import sys
 import tempfile
-import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts", "lib"))
@@ -67,75 +66,67 @@ def _size_capped_cases(tmp):
 
 
 def _success_case():
-    """_write_all across MULTIPLE successful short writes -- the path the fix exists for.
+    """_write_all across MULTIPLE short writes that SUCCEED -- the path the fix exists for.
 
-    The SETUP is guarded separately from the measurement. A platform that cannot provide the
-    mechanism (no socketpair, no settable SO_SNDBUF, no os.write on a socket fd) must report
-    SKIPPED; a _write_all that fails to deliver must report TRUNCATED. Wrapping both in one
-    try would let a real regression print the same word as an unavailable primitive -- and the
-    previous version of this file guarded win32 by branching around the rlimit cases while
-    still calling THIS one, so if socketpair or SO_SNDBUF behaves differently there, the guard
-    I added to fix a Windows failure would itself have failed on Windows. I have no Windows
-    machine to test on, so the honest fix is to make the outcome legible rather than to assume.
+    Driven by a STUBBED os.write, and that is the whole point rather than a shortcut. Measured
+    on three real file descriptors, in this order, each attempt discarded when it turned out to
+    prove nothing:
+
+      - a blocking PIPE never short-writes: POSIX requires write() to transfer all nbyte.
+      - a blocking SOCKET does not either, even with SO_SNDBUF forced to 4096. Instrumented on
+        macOS: ONE os.write call returned all 262144 bytes. The socket version of this case sat
+        in the suite printing "ALL BYTES" while the loop body ran exactly once -- a row named
+        "across multiple short writes" that had never executed a second iteration.
+      - a NON-blocking fd shorts, then raises EAGAIN, which _write_all does not handle and
+        should not: every fd it is given in production is a blocking regular file.
+
+    So no real descriptor can deliver a short-write-then-succeed sequence, and the loop's
+    reassembly was untestable through one. The unit under test is the LOOP; os.write is its
+    collaborator, and stubbing a collaborator to return the counts the kernel will not produce
+    on demand is the same technique this suite already uses to reach process_tree's group-kill
+    failure branch. What is asserted is what the loop must guarantee: every byte delivered, in
+    order, and MORE THAN ONE call made -- because "all bytes" alone is satisfied by the
+    single-write path that was silently being measured before.
     """
-    try:
-        left, right = socket.socketpair()
-    except (AttributeError, OSError) as error:
-        print(f"success: SKIPPED (socketpair unavailable: {type(error).__name__})")
-        return
-    try:
-        # A small send buffer makes the writes short; a reader that keeps draining makes each
-        # subsequent one succeed, so the loop must run more than once to finish.
-        try:
-            left.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
-        except OSError as error:
-            print(f"success: SKIPPED (SO_SNDBUF not settable: {type(error).__name__})")
-            return
-        received = bytearray()
+    chunks = []
+    real_write = os.write
 
-        def drain():
-            while len(received) < len(PAYLOAD):
-                chunk = right.recv(4096)
-                if not chunk:
-                    break
-                received.extend(chunk)
+    def short_write(fd, data):
+        # 4 KiB at a time regardless of what is offered, which is what a kernel does when its
+        # buffer is partly full. Records what it accepted so the caller can prove reassembly.
+        view = bytes(data[:4096])
+        chunks.append(view)
+        return len(view)
 
-        reader = threading.Thread(target=drain, daemon=True)
-        reader.start()
-        try:
-            _write_all(left.fileno(), PAYLOAD)
-        except OSError as error:
-            # os.write on a SOCKET fd is a POSIX affordance; on Windows a socket is a handle,
-            # not a CRT file descriptor. Reported as SKIPPED rather than TRUNCATED so an
-            # unavailable primitive never reads as the loop losing bytes.
-            print(f"success: SKIPPED (os.write on a socket fd: {type(error).__name__} "
-                  f"{getattr(error, 'errno', None)})")
-            return
-        # daemon=True above so a reader still blocked in recv cannot keep the interpreter alive
-        # past this join -- the suite runs this probe as a subprocess and waits on it.
-        reader.join(timeout=30)
-        ok = bytes(received) == PAYLOAD
-        print(f"success: _write_all delivered {len(received)} of {len(PAYLOAD)} bytes "
-              f"-> {'ALL BYTES' if ok else 'TRUNCATED'}")
+    gates_module = sys.modules[_write_all.__module__]
+    gates_module.os.write = short_write
+    try:
+        _write_all(-1, PAYLOAD)          # fd is never touched: short_write ignores it
     finally:
-        left.close()
-        right.close()
+        gates_module.os.write = real_write
+
+    delivered = b"".join(chunks)
+    ok = delivered == PAYLOAD and len(chunks) > 1
+    print(f"success: _write_all made {len(chunks)} write(s) delivering {len(delivered)} of "
+          f"{len(PAYLOAD)} bytes -> {'ALL BYTES' if ok else 'TRUNCATED'}")
 
 
 def main():
     if sys.platform == "win32":
         # Reported, not silently skipped: a probe that prints nothing on one platform is
-        # indistinguishable from one that was never wired up. The suite's other Windows-aware
-        # section (windows_taskkill_path) is the precedent; this one lacked the guard entirely
-        # and would have failed three rows on every Windows run from the commit that added it.
+        # indistinguishable from one that was never wired up. Only the rlimit cases are Unix
+        # bound; the success case is pure Python over a stub now, so it runs everywhere -- which
+        # also retires the question of whether os.write works on a Winsock handle, since the
+        # probe no longer asks.
         print("control: SKIPPED on win32 (no resource module, no SIGXFSZ)")
         print("error: SKIPPED on win32")
         _success_case()
         return
     tmp = tempfile.mkdtemp()
     try:
-        # The success case runs FIRST: the rlimit below lowers the HARD limit too, which cannot
-        # be undone, and it would otherwise cap the socket case as well.
+        # The success case runs FIRST. It no longer needs to (it is pure Python over a stub),
+        # but the rlimit below lowers the HARD limit irreversibly, so keeping the unconstrained
+        # case ahead of it stays correct if either ever touches a real descriptor again.
         _success_case()
         _size_capped_cases(tmp)
     finally:

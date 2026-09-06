@@ -451,6 +451,14 @@ def validate_scope_id(value, label="scope"):
     """Return an error STRING, or None when the id is acceptable. The oracle returns null."""
     # `String(value || "")`: JS coerces every falsy value -- including 0 -- to "" before the
     # test, so a caller passing 0 gets the id error rather than "0".
+    #
+    # KNOWN, BOUNDED divergence for a non-string TRUTHY value: `String([0])` is "0", a VALID
+    # id, where `str([0])` is "[0]", invalid. Not emulated, because it is unreachable rather
+    # than merely unused -- `dispatch.mjs`'s validId rejects `typeof value !== "string"` BEFORE
+    # calling this, and every other caller passes a parsed string. Reproducing Array.prototype
+    # .join and "[object Object]" to serve a caller the type check forbids would be building
+    # for a scenario the codebase prevents. If a future caller does pass one, it must type-check
+    # first, as the oracle's own callers do.
     scope_id = str(value) if value else ""
     if not _SCOPE_RE.match(scope_id) or scope_id in (".", ".."):
         return label + " must match " + _SCOPE_RE_JS_SOURCE + " and cannot be . or .."
