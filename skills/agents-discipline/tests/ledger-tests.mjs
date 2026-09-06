@@ -154,11 +154,23 @@ const cases = [
     // evidence in every language with generics vanished -- header and all, since the drop
     // takes the whole line. The row then reported UNBACKED with nothing explaining why.
     // `evidence: present` is the discriminator: pre-fix both blocks were gone entirely.
+    // SKIP_RERUN is required, not incidental: the acceptances name `cargo`, which most
+    // machines lack. What is under test is the EVIDENCE scan, not execution.
     name: "generics in evidence are not mistaken for placeholders",
     file: "tests/fixtures/evidence-generics.md",
     want: 0,
     expect: ["evidence:    present", "verified:    2"],
-    reject: ["MISSING"],
+    reject: ["evidence:    MISSING"],
+  },
+  {
+    // The other direction, and the one the first version of the fix got wrong. These lines
+    // are ENTIRELY placeholders, separated by an em-dash -- the character this skill's own
+    // evidence format uses (`**Unit N —**`). A punctuation class listing only the ASCII
+    // hyphen kept them, so a copied-but-unfilled Evidence section scored as real evidence.
+    name: "a line of pure placeholders is not evidence, em-dash included",
+    file: "tests/fixtures/evidence-placeholders.md",
+    want: 1,
+    expect: ["evidence:    MISSING"],
   },
   {
     // A trailing `|` is OPTIONAL in GitHub-flavoured markdown. Dropping the last field
