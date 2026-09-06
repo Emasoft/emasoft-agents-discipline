@@ -265,7 +265,7 @@ function parseRegex(expect) {
   };
 }
 
-// The checker and Stop hook both consume this exact result. Diagnostics are
+// The checker consumes this exact result. Diagnostics are
 // returned together so callers can report all malformed input in one pass.
 export function parseGates(text, options = {}) {
   const source = String(text);
@@ -621,7 +621,6 @@ function targetFromDiscovery(mode, scope, discovery) {
 export function resolveTarget(options = {}) {
   const root = resolve(options.root || process.cwd());
   const files = options.files || [];
-  const sessionId = options.sessionId || null;
   if (files.length) return { mode: "explicit", scope: null, files: files.map((file) => resolve(root, file)) };
 
   const scopes = listScopes(root);
@@ -651,16 +650,9 @@ export function resolveTarget(options = {}) {
 
   if (scopes.length === 1) return targetFromDiscovery("scope", scopes[0], scopeDiscovery(root, scopes[0]));
   if (scopes.length > 1) {
-    if (sessionId) {
-      const owned = scopes.filter((scope) => {
-        try {
-          return readStableRegularFile(join(scopeRoot(root, scope), "session"), {
-            root, maxBytes: 4096, label: "session binding",
-          }).trim() === String(sessionId).trim();
-        } catch { return false; }
-      });
-      if (owned.length === 1) return targetFromDiscovery("scope", owned[0], scopeDiscovery(root, owned[0]));
-    }
+    // The session-binding branch that used to sit here existed only for the Stop hook, which
+    // had no way to pass --scope. With the hook gone every caller is a human or a script that
+    // can name its scope, so ambiguity is refused rather than guessed at.
     return {
       mode: "none", scope: null, files: [], ambiguous: scopes,
       error: scopes.length + " pipelines present (" + scopes.join(", ") +
@@ -675,10 +667,6 @@ export function resolveTarget(options = {}) {
 
 export function statusLogPath(root, scope) {
   return scope ? join(scopeRoot(root, scope), "status.log") : join(root, "agents-discipline-status.log");
-}
-
-export function hookStatePath(root, scope) {
-  return scope ? join(scopeRoot(root, scope), "hook-state.json") : join(root, ".agents-discipline-hook-state.json");
 }
 
 function assertSafeStatePath(root, target) {

@@ -48,7 +48,7 @@ function assertDataSafe(value) {
 
 // ------------------------------------------------------------- fixtures
 
-// Every defect below passes gate-check and the Stop hook today.
+// Every defect below passes gate-check today.
 const WEAK = write("weak.md", `# Gates: weak ledger
 
 Scope: a ledger that satisfies every enforcement layer and proves nothing

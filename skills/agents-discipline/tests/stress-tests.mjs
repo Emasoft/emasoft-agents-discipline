@@ -2,7 +2,7 @@
 // Concurrency and mutation stress tests. Zero dependencies. Node 16+.
 
 import {
-  existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
+  linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
   symlinkSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { execFile, spawnSync } from "node:child_process";
@@ -15,8 +15,6 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GATE_CHECK = join(HERE, "..", "scripts", "gate-check.mjs");
-const STOP_HOOK = join(HERE, "..", "scripts", "stop-hook.mjs");
-const INSTALL = join(HERE, "..", "scripts", "install-hooks.mjs");
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 
@@ -292,124 +290,24 @@ test("leases: an explicit release cleans orphaned leases after a scope directory
   } finally { s.cleanup(); }
 });
 
-test("hook: repeated 64-writer bursts are serialized without lost increments", async () => {
-  const s = sandbox();
-  try {
-    s.write("GATES.md", "- [ ] G1: pending\n  EVIDENCE: pending\n");
-    const payload = JSON.stringify({ cwd: s.dir, session_id: "one-session" });
-    for (let round = 1; round <= 3; round++) {
-      rmSync(s.path(".agents-discipline-hook-state.json"), { force: true });
-      const results = await Promise.all(Array.from({ length: 64 }, () =>
-        run(STOP_HOOK, [], { cwd: s.dir, stdin: payload })));
-      const crashed = results.filter((result) => result.code !== 0);
-      assert(crashed.length === 0,
-        "round " + round + ": " + crashed.length + " hook process(es) failed\n" +
-        [...new Set(crashed.map((result) => "exit=" + result.code + "\n" + result.out.trim()))]
-          .slice(0, 4).join("\n---\n"));
-      const failedUpdates = results
-        .filter((result) => result.out.includes("could not update the serialized hook state"))
-        .map((result) => result.out.trim());
-      assert(failedUpdates.length === 0,
-        "round " + round + ": " + failedUpdates.length + " hook(s) failed open on the state update\n" +
-        [...new Set(failedUpdates)].slice(0, 4).join("\n---\n"));
-      const state = JSON.parse(s.read(".agents-discipline-hook-state.json"));
-      const sessions = Object.values(state.sessions);
-      assert(sessions.length === 1, "round " + round + ": expected one session, got " + sessions.length);
-      assert(sessions[0].blocks === 64, "round " + round + ": expected 64 blocks, got " + sessions[0].blocks);
-    }
-  } finally { s.cleanup(); }
-});
-
-test("hook: sessions remain isolated and completion/no-gates clears stale state", async () => {
-  const s = sandbox();
-  try {
-    s.write("GATES.md", "- [ ] G1: pending\n  EVIDENCE: pending\n");
-    for (const id of ["alpha", "beta"]) {
-      const payload = JSON.stringify({ cwd: s.dir, session_id: id });
-      await Promise.all(Array.from({ length: 3 }, () => run(STOP_HOOK, [], { cwd: s.dir, stdin: payload })));
-    }
-    let state = JSON.parse(s.read(".agents-discipline-hook-state.json"));
-    assert(Object.keys(state.sessions).length === 2, "sessions were mixed: " + JSON.stringify(state));
-    assert(Object.values(state.sessions).every((value) => value.blocks === 3), "session counters were not isolated");
-
-    s.write("GATES.md", "- [x] G1: done\n  EVIDENCE: measured\n");
-    await run(STOP_HOOK, [], { cwd: s.dir, stdin: JSON.stringify({ cwd: s.dir, session_id: "alpha" }) });
-    state = JSON.parse(s.read(".agents-discipline-hook-state.json"));
-    assert(Object.keys(state.sessions).length === 1, "completed alpha state was not cleared");
-
-    rmSync(s.path("GATES.md"));
-    await run(STOP_HOOK, [], { cwd: s.dir, stdin: JSON.stringify({ cwd: s.dir, session_id: "beta" }) });
-    assert(!existsSync(s.path(".agents-discipline-hook-state.json")), "no-gates path did not clear final state");
-  } finally { s.cleanup(); }
-});
-
-test("hook: a FIFO session binding is ignored promptly while a regular sibling binding resolves", async () => {
-  if (process.platform === "win32") return;
-  const s = sandbox();
-  try {
-    for (const scope of ["a", "b"]) {
-      s.write(".agents-discipline/" + scope + "/gates/leaf.md",
-        "# Gates\n- [ ] G1: pending\n  EVIDENCE: pending\n");
-    }
-    const fifo = s.path(".agents-discipline/a/session");
-    const made = spawnSync("mkfifo", [fifo], { encoding: "utf8" });
-    assert(made.status === 0, "could not create session FIFO: " + made.stderr);
-    s.write(".agents-discipline/b/session", "wanted\n");
-
-    const started = Date.now();
-    const result = await run(STOP_HOOK, [], {
-      cwd: s.dir,
-      stdin: JSON.stringify({ cwd: s.dir, session_id: "wanted" }),
-      timeoutMs: 2000,
-    });
-    assert(result.code === 0, "FIFO session routing failed\n" + result.out);
-    assert(Date.now() - started < 1800, "session routing waited for the FIFO outer timeout");
-    has(result.out, "[scope b]");
-
-    rmSync(fifo);
-    s.write(".agents-discipline/a/session", "other\n");
-    const control = await run(STOP_HOOK, [], {
-      cwd: s.dir,
-      stdin: JSON.stringify({ cwd: s.dir, session_id: "wanted" }),
-      timeoutMs: 2000,
-    });
-    assert(control.code === 0, "regular session control failed\n" + control.out);
-    has(control.out, "[scope b]");
-  } finally { s.cleanup(); }
-});
-
-test("hook: absent pinned scopes allow while existing unsafe pinned scopes block", async () => {
+test("checker: a symlinked pinned scope directory fails closed without reading outside data", async () => {
   if (process.platform === "win32") return;
   const s = sandbox();
   const outside = sandbox();
   try {
-    const stdin = JSON.stringify({ cwd: s.dir, session_id: "pinned-scope" });
-    const absent = await run(STOP_HOOK, ["--scope", "missing"], { cwd: s.dir, stdin });
-    assert(absent.code === 0, "absent pinned scope process failed\n" + absent.out);
-    assert(!absent.out.includes('"decision":"block"'), "absent scope blocked Stop\n" + absent.out);
-    has(absent.out, "no such scope");
-
     mkdirSync(s.path(".agents-discipline"), { recursive: true });
     const canary = "OUTSIDE_SCOPE_CANARY_9417";
     outside.write("GATES.md", "# Gates\n- [ ] X1: " + canary + "\n  EVIDENCE: pending\n");
     outside.write("dispatch.json", JSON.stringify({ canary }) + "\n");
-    outside.write("hook-state.json", JSON.stringify({ canary }) + "\n");
-    const before = ["GATES.md", "dispatch.json", "hook-state.json"].map((file) => outside.read(file));
+    const before = ["GATES.md", "dispatch.json"].map((file) => outside.read(file));
     symlinkSync(outside.dir, s.path(".agents-discipline/api"));
 
     const checker = await run(GATE_CHECK, ["--status", "--scope", "api"], { cwd: s.dir });
     assert(checker.code === 2, "symlinked pinned scope gate-check returned " + checker.code + "\n" + checker.out);
     has(checker.out, "scope directory must be a real directory inside the repository");
     assert(!checker.out.includes(canary), "gate-check read outside scope data\n" + checker.out);
-
-    const hook = await run(STOP_HOOK, ["--scope", "api"], { cwd: s.dir, stdin });
-    assert(hook.code === 0, "symlinked pinned scope hook process failed\n" + hook.out);
-    has(hook.out, '"decision":"block"');
-    has(hook.out, "scope directory must be a real directory inside the repository");
-    assert(!hook.out.includes(canary), "hook read outside scope data\n" + hook.out);
-    assert(existsSync(s.path(".agents-discipline-hook-state.json")), "invalid scope did not use safe root hook state");
-    for (const [index, file] of ["GATES.md", "dispatch.json", "hook-state.json"].entries()) {
-      assert(outside.read(file) === before[index], "hook or checker changed outside " + file);
+    for (const [index, file] of ["GATES.md", "dispatch.json"].entries()) {
+      assert(outside.read(file) === before[index], "checker changed outside " + file);
     }
   } finally {
     // Node 16's recursive rm rejects a directory symlink with EISDIR on some
@@ -418,85 +316,6 @@ test("hook: absent pinned scopes allow while existing unsafe pinned scopes block
     s.cleanup();
     outside.cleanup();
   }
-});
-
-test("hook: named special ledgers fail closed promptly instead of becoming no gates", async () => {
-  if (process.platform === "win32") return;
-  const s = sandbox();
-  const outside = sandbox();
-  try {
-    const payload = JSON.stringify({ cwd: s.dir, session_id: "special-ledger" });
-    const assertBlocked = async (label) => {
-      const started = Date.now();
-      const result = await run(STOP_HOOK, [], { cwd: s.dir, stdin: payload, timeoutMs: 1500 });
-      assert(result.code === 0, label + " hook process failed\n" + result.out);
-      assert(Date.now() - started < 1500, label + " reached the process timeout");
-      has(result.out, '"decision":"block"');
-      has(result.out, "gate/ledger/dispatch item(s) need work");
-      return result;
-    };
-
-    const fifo = s.path("GATES.md");
-    let made = spawnSync("mkfifo", [fifo], { encoding: "utf8" });
-    assert(made.status === 0, "could not create hook ledger FIFO: " + made.stderr);
-    await assertBlocked("FIFO ledger");
-    rmSync(fifo);
-
-    const victim = outside.write("outside.md",
-      "# Gates\n- [ ] X1: OUTSIDE_HOOK_CANARY_5097\n  EVIDENCE: pending\n");
-    symlinkSync(victim, fifo);
-    const linked = await assertBlocked("symlinked ledger");
-    assert(!linked.out.includes("OUTSIDE_HOOK_CANARY_5097"), "hook read the symlink victim\n" + linked.out);
-    rmSync(fifo);
-
-    const outsideGates = outside.path("gates");
-    mkdirSync(outsideGates);
-    outside.write("gates/leaf.md",
-      "# Gates\n- [ ] X2: OUTSIDE_HOOK_CANARY_5097\n  EVIDENCE: pending\n");
-    symlinkSync(outsideGates, s.path("gates"));
-    const directory = await assertBlocked("symlinked gates directory");
-    assert(!directory.out.includes("OUTSIDE_HOOK_CANARY_5097"),
-      "hook traversed the symlinked gates directory\n" + directory.out);
-  } finally {
-    s.cleanup();
-    outside.cleanup();
-  }
-});
-
-test("hook: linked and FIFO progress state never blocks or changes a victim", async () => {
-  const s = sandbox();
-  try {
-    s.write("GATES.md", "# Gates\n- [ ] G1: pending\n  EVIDENCE: pending\n");
-    const payload = JSON.stringify({ cwd: s.dir, session_id: "special-state" });
-    const statePath = s.path(".agents-discipline-hook-state.json");
-    const victim = s.write("state-victim.json", '{"schema":1,"sessions":{}}\n');
-    const original = s.read("state-victim.json");
-
-    linkSync(victim, statePath);
-    let result = await run(STOP_HOOK, [], { cwd: s.dir, stdin: payload, timeoutMs: 1500 });
-    assert(result.code === 0, "hard-linked hook state process failed\n" + result.out);
-    has(result.out, "could not update the serialized hook state");
-    assert(s.read("state-victim.json") === original, "hook changed the hard-link victim");
-    rmSync(statePath);
-
-    if (process.platform !== "win32") {
-      symlinkSync(victim, statePath);
-      result = await run(STOP_HOOK, [], { cwd: s.dir, stdin: payload, timeoutMs: 1500 });
-      assert(result.code === 0, "symlinked hook state process failed\n" + result.out);
-      has(result.out, "could not update the serialized hook state");
-      assert(s.read("state-victim.json") === original, "hook changed the symlink victim");
-      rmSync(statePath);
-
-      const made = spawnSync("mkfifo", [statePath], { encoding: "utf8" });
-      assert(made.status === 0, "could not create hook-state FIFO: " + made.stderr);
-      const started = Date.now();
-      result = await run(STOP_HOOK, [], { cwd: s.dir, stdin: payload, timeoutMs: 1500 });
-      assert(result.code === 0 && Date.now() - started < 1500,
-        "FIFO hook state did not fail promptly\n" + result.out);
-      has(result.out, "could not update the serialized hook state");
-      assert(lstatSync(statePath).isFIFO(), "hook replaced the FIFO state path");
-    }
-  } finally { s.cleanup(); }
 });
 
 test("atomic writer: predictable pre-created temp links are never followed", async () => {
@@ -555,144 +374,6 @@ test("status log: a FIFO is rejected without blocking the logger", async () => {
     assert(result.code === 2, "FIFO logger did not fail closed\n" + result.out);
     assert(Date.now() - started < 1800, "FIFO validation waited for the outer timeout");
     has(result.out, "cannot append status");
-  } finally { s.cleanup(); }
-});
-
-test("installer: malformed settings shapes are refused without mutation", async () => {
-  const fixtures = [
-    "[]\n",
-    JSON.stringify({ hooks: [] }, null, 2) + "\n",
-    JSON.stringify({ hooks: { Stop: {} } }, null, 2) + "\n",
-    JSON.stringify({ hooks: { Stop: [{ hooks: {} }] } }, null, 2) + "\n",
-    JSON.stringify({ hooks: { Stop: [{ hooks: [null] }] } }, null, 2) + "\n",
-  ];
-  for (const fixture of fixtures) {
-    const s = sandbox();
-    try {
-      s.write(".claude/settings.local.json", fixture);
-      const result = await run(INSTALL, [], { cwd: s.dir });
-      assert(result.code === 1, "invalid shape should fail\n" + result.out);
-      assert(s.read(".claude/settings.local.json") === fixture, "invalid settings were mutated");
-    } finally { s.cleanup(); }
-  }
-});
-
-test("installer: a FIFO settings target is rejected without blocking", async () => {
-  if (process.platform === "win32") return;
-  const s = sandbox();
-  try {
-    mkdirSync(s.path(".claude"), { recursive: true });
-    const target = s.path(".claude/settings.local.json");
-    const made = spawnSync("mkfifo", [target], { encoding: "utf8" });
-    assert(made.status === 0, "could not create FIFO fixture: " + made.stderr);
-    const started = Date.now();
-    const result = await run(INSTALL, [], { cwd: s.dir, timeoutMs: 2000 });
-    assert(result.code === 1, "FIFO installer target did not fail closed\n" + result.out);
-    assert(Date.now() - started < 1800, "FIFO installer validation blocked");
-    has(result.out, "Refusing to touch");
-  } finally { s.cleanup(); }
-});
-
-test("installer: a hard-linked settings target is rejected without backup or victim mutation", async () => {
-  const s = sandbox();
-  try {
-    const original = JSON.stringify({ editor: "keep" }, null, 2) + "\n";
-    const victim = s.write("settings-victim.json", original);
-    mkdirSync(s.path(".claude"), { recursive: true });
-    const target = s.path(".claude/settings.local.json");
-    linkSync(victim, target);
-
-    const result = await run(INSTALL, [], { cwd: s.dir });
-    assert(result.code === 1, "hard-linked installer target did not fail closed\n" + result.out);
-    has(result.out, "Refusing to touch");
-    assert(s.read("settings-victim.json") === original, "installer changed hard-link victim bytes");
-    assert(s.read(".claude/settings.local.json") === original, "installer changed hard-linked target bytes");
-    assert(!existsSync(target + ".agents-discipline.bak"), "installer backed up an unsafe linked target");
-  } finally { s.cleanup(); }
-});
-
-test("installer: uninstall preserves a sibling in the same matcher group and writes a backup", async () => {
-  const s = sandbox();
-  try {
-    const original = JSON.stringify({
-      hooks: {
-        Stop: [{
-          matcher: "",
-          hooks: [
-            { type: "command", command: "node other-tool.mjs" },
-            { type: "command", command: "node " + JSON.stringify(STOP_HOOK) + " --agents-discipline-hook-v2" },
-          ],
-        }],
-      },
-    }, null, 2) + "\n";
-    s.write(".claude/settings.local.json", original);
-    const result = await run(INSTALL, ["--uninstall"], { cwd: s.dir });
-    assert(result.code === 0, result.out);
-    const after = JSON.parse(s.read(".claude/settings.local.json"));
-    assert(after.hooks.Stop.length === 1, "matcher group was removed");
-    assert(after.hooks.Stop[0].matcher === "", "matcher metadata was lost");
-    assert(after.hooks.Stop[0].hooks.length === 1, "wrong handler count");
-    has(after.hooks.Stop[0].hooks[0].command, "other-tool.mjs");
-    assert(s.read(".claude/settings.local.json.agents-discipline.bak") === original, "backup did not preserve original bytes");
-  } finally { s.cleanup(); }
-});
-
-test("installer: marker substrings do not claim an unrelated stop hook", async () => {
-  const s = sandbox();
-  try {
-    const unrelated = [
-      "node /opt/other/stop-hook.mjs --agents-discipline-helper",
-      "node /opt/agents-discipline/scripts/stop-hook.mjs --agents-discipline-helper",
-      "node " + JSON.stringify(STOP_HOOK) + " --agents-discipline-helper",
-      "node " + JSON.stringify(STOP_HOOK) + " \"--agents-discipline-helper\"",
-    ];
-    s.write(".claude/settings.local.json", JSON.stringify({
-      hooks: { Stop: [{ hooks: unrelated.map((command) => ({ type: "command", command, timeout: 20 })) }] },
-    }, null, 2) + "\n");
-    const result = await run(INSTALL, ["--uninstall"], { cwd: s.dir });
-    assert(result.code === 0, result.out);
-    has(result.out, "Nothing to remove");
-    const after = JSON.parse(s.read(".claude/settings.local.json"));
-    assert(after.hooks.Stop[0].hooks.map((hook) => hook.command).join("\n") === unrelated.join("\n"),
-      "unrelated hook was removed");
-  } finally { s.cleanup(); }
-});
-
-test("installer: a matching command with broken managed fields is repaired", async () => {
-  const s = sandbox();
-  try {
-    const installed = await run(INSTALL, [], { cwd: s.dir });
-    assert(installed.code === 0, installed.out);
-    const settings = JSON.parse(s.read(".claude/settings.local.json"));
-    const handler = settings.hooks.Stop[0].hooks[0];
-    handler.type = "prompt";
-    handler.timeout = 1;
-    s.write(".claude/settings.local.json", JSON.stringify(settings, null, 2) + "\n");
-    const repaired = await run(INSTALL, [], { cwd: s.dir });
-    assert(repaired.code === 0, repaired.out);
-    assert(!repaired.out.includes("Already installed"), "broken handler was treated as current");
-    const after = JSON.parse(s.read(".claude/settings.local.json"));
-    const managed = after.hooks.Stop.flatMap((group) => group.hooks)
-      .filter((item) => typeof item.command === "string" && item.command.includes("--agents-discipline"));
-    assert(managed.length === 1, "repair did not leave exactly one managed handler");
-    assert(managed[0].type === "command", "repair did not restore command type");
-    assert(managed[0].timeout === 20, "repair did not restore timeout");
-  } finally { s.cleanup(); }
-});
-
-test("installer: scope input is validated and local state warning is explicit", async () => {
-  const s = sandbox();
-  try {
-    const invalid = await run(INSTALL, ["--scope", "bad;echo"], { cwd: s.dir });
-    assert(invalid.code === 2, invalid.out);
-    assert(!existsSync(s.path(".claude/settings.local.json")), "invalid scope wrote settings");
-    const good = await run(INSTALL, ["--scope", "api"], { cwd: s.dir });
-    assert(good.code === 0, good.out);
-    has(good.out, ".agents-discipline/");
-    has(good.out, ".agents-discipline-hook-state.json");
-    const settings = JSON.parse(s.read(".claude/settings.local.json"));
-    const command = settings.hooks.Stop[0].hooks[0].command;
-    has(command, "--scope api");
   } finally { s.cleanup(); }
 });
 

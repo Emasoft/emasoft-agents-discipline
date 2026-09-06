@@ -1,6 +1,6 @@
 # Gate file format
 
-A gate ledger is a machine-checked completion contract. The checker and Stop hook use the same strict parser. Invalid structure fails closed instead of producing a completion certificate.
+A gate ledger is a machine-checked completion contract. The checker uses a strict parser. Invalid structure fails closed instead of producing a completion certificate.
 
 ## Minimal format
 
@@ -58,7 +58,7 @@ Automatic evidence begins with `automatic-evidence=v1` and a full lowercase SHA-
 
 A checked runnable gate is met only when that exact v1 definition binding and canonical success/output header are present. Missing, blank, `pending`, ordinary prose, pre-v1, malformed, future-version, or mismatched runnable evidence is `stale-unmet`; a normal run schedules it for the usual approval lookup and a successful run migrates it. The digest is unkeyed structural drift detection, not authenticity or tamper proof: a ledger editor can forge a syntactically canonical matching header. A failed stale rerun clears the box and restores `EVIDENCE: pending`. Manual gates keep ordinary historical human evidence, but reserved v1 evidence and the legacy `exit=0; shell=` transcript stay machine evidence if a runnable gate becomes manual. Conversely, adding a runnable definition to a human-attested manual gate makes that old evidence stale.
 
-`--status` parses and reports ledger state without executing a command or changing a file. It validates the pure definition binding without resolving a shell, reading approval storage, or depending on `PATH`, timeout, or other runtime options. The Stop hook uses the same non-executing state model. Neither mode inspects current artifacts or transitive inputs. Use `--reverify` for parent verification: it executes every runnable gate, including gates already checked, and returns a gate to unmet when the oracle no longer passes. Its summary reports both all commands rerun and the subset that had previously been met.
+`--status` parses and reports ledger state without executing a command or changing a file. It validates the pure definition binding without resolving a shell, reading approval storage, or depending on `PATH`, timeout, or other runtime options. It does not inspect current artifacts or transitive inputs. Use `--reverify` for parent verification: it executes every runnable gate, including gates already checked, and returns a gate to unmet when the oracle no longer passes. Its summary reports both all commands rerun and the subset that had previously been met.
 
 ## Approval boundary
 
@@ -127,7 +127,7 @@ Make a ledger require its own quality by linting as a gate:
 
 ## Abandonment
 
-Use abandonment only when a required outcome is genuinely impossible within the authorized task. Keep the original gate, add one non-empty reason, and name the abandonment in the final report. An abandonment is a terminal visible handoff, not a passing check: `gate-check` prints `HANDOFF REQUIRED` and exits `1` even when every non-abandoned gate is met. The Stop hook allows the session to end but emits a bounded handoff message containing qualified ids, not free-form reasons. Never promote an abandoned child through a parent `ALL MET` oracle or describe the task as fully complete.
+Use abandonment only when a required outcome is genuinely impossible within the authorized task. Keep the original gate, add one non-empty reason, and name the abandonment in the final report. An abandonment is a terminal visible handoff, not a passing check: `gate-check` prints `HANDOFF REQUIRED` and exits `1` even when every non-abandoned gate is met. Never promote an abandoned child through a parent `ALL MET` oracle or describe the task as fully complete.
 
 ## Leaf gates versus branch gates
 

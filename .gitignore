@@ -73,7 +73,6 @@ Cargo.lock
 
 # agents-discipline runtime state
 .agents-discipline/
-.agents-discipline-hook-state.json
 *.agents-discipline.bak
 *.tmp
 *.log

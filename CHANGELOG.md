@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+
+### Breaking Changes
+
+- The optional Claude Code Stop hook is removed: `scripts/stop-hook.mjs`, `scripts/install-hooks.mjs`, and the `--bind` scope-binding action are gone. If you previously ran the installer, Claude Code settings (`.claude/settings.local.json`, `.claude/settings.json`, or your user settings) still hold a hook entry pointing at the deleted script. Open that settings file and remove the `agents-discipline`-managed Stop hook entry by hand; also delete any leftover `.agents-discipline-hook-state.json` file.
+
 ## [1.0.1] — 2026-09-06
 
 ### Bug Fixes

@@ -4,7 +4,7 @@ Thanks for improving agents-discipline. Keep changes focused, testable, portable
 
 ## Welcome changes
 
-- parser, checker, hook, installer, concurrency, and portability fixes
+- parser, checker, concurrency, and portability fixes
 - sharper gate-authoring or orchestration guidance
 - regression tests for reported behavior
 - recent research that directly supports a narrowly worded claim
@@ -13,18 +13,17 @@ Thanks for improving agents-discipline. Keep changes focused, testable, portable
 ## Ground rules
 
 1. **Keep enforcement structural.** Completion is decided by valid ledgers, current evidence, parent re-verification, and integration checks.
-2. **Treat the format as one contract.** A ledger-format change must update the shared parser, checker, hook, templates, references, and tests together.
-3. **Fail closed on malformed completion state.** Invalid input must not become `ALL MET` or a silent Stop-hook allow unless the documented security boundary requires a diagnostic allow.
+2. **Treat the format as one contract.** A ledger-format change must update the shared parser, checker, templates, references, and tests together.
+3. **Fail closed on malformed completion state.** Invalid input must not become `ALL MET` unless the documented security boundary requires a diagnostic allow.
 4. **Treat `CHECK:` as code.** Preserve explicit approval, approval invalidation, and non-executing status behavior. Do not weaken the trust boundary for convenience.
-5. **Keep Node 16 compatibility and zero runtime dependencies.** Use Node standard-library APIs available on the supported floor. Test Windows, macOS, and Linux behavior when changing shell, path, newline, file-lock, or installer code.
+5. **Keep Node 16 compatibility and zero runtime dependencies.** Use Node standard-library APIs available on the supported floor. Test Windows, macOS, and Linux behavior when changing shell, path, newline, or file-lock code.
 6. **Make claims exact.** Use primary research or official platform documentation when available. Distinguish a checkpoint metric from end-to-end success, an overall fit from a subset fit, and exploratory observations from reproducible results.
 7. **Keep skill metadata valid.** `SKILL.md` frontmatter contains only `name` and a trigger-rich third-person `description`. Keep `agents/openai.yaml` aligned and do not add icon paths without real assets.
 8. **Use imperative skill prose and progressive disclosure.** Keep core workflow in `SKILL.md`; put detailed contracts in directly linked references.
 9. **Use no em dash or en dash.** Use a hyphen, colon, or sentence break.
-10. **Preserve unrelated user configuration.** Installer changes must validate container shapes, update atomically, and remove only this skill's own handlers.
-11. **Behavioral claims need evidence.** If you claim a rule changes agent behavior, add it to references/eval.md with a measured result.
-12. **The delegation threshold is load-bearing.** 3+ units / 5+ files / 30+ minutes was chosen between two measured data points. If you change it, say why, with numbers.
-13. **The two halves stay structural and distinct.** Delegation discipline and completion discipline are orthogonal halves of one skill; keep each half's enforcement in files and checks, and do not blur them.
+10. **Behavioral claims need evidence.** If you claim a rule changes agent behavior, add it to references/eval.md with a measured result.
+11. **The delegation threshold is load-bearing.** 3+ units / 5+ files / 30+ minutes was chosen between two measured data points. If you change it, say why, with numbers.
+12. **The two halves stay structural and distinct.** Delegation discipline and completion discipline are orthogonal halves of one skill; keep each half's enforcement in files and checks, and do not blur them.
 
 ## Tests
 
@@ -39,18 +38,16 @@ For script changes, add a regression that fails before the fix. Cover the releva
 - explicit one-file and multi-file targeting in different option orders
 - status versus re-verification and changed-oracle invalidation
 - zero gates, duplicates, incomplete attributes, fences, indentation, CRLF, and abandonment reasons
-- abandonment as non-successful checker/parent/Stop handoff, with bounded host messages
+- abandonment as non-successful checker/parent handoff, with bounded host messages
 - exit `0` plus `EXPECT:`, timeouts, missing commands, output limits, and evidence insertion
 - approval storage outside the repository and binding for ledger, gate, command, expectation, working directory, shell, timeout, limits, platform, and `PATH`
 - platform shell defaults, explicit shell override, inherited PATH, and paths containing spaces
 - Windows process-tree cleanup success, helper failure, direct-child fallback, and timeout settlement
 - sequential default and deterministic bounded `--jobs`
 - simultaneous conflicting lease claims, conservative glob overlap, unsafe paths, unknown leaves, and release
-- concurrent gate updates and concurrent session-keyed hook state
+- concurrent gate updates
 - native dispatch open/start/seal/return, partial-launch abandonment, and semantic progress hashing
 - PLAN contract omissions, stale owners/observations, amendments, explicit removal, and the focused solo path
-- Stop-hook block, progress reset, six-block release, all-met cleanup, ambiguity, and session routing
-- installer install, idempotence, moved paths, target-shape refusal, unrelated-handler preservation, and uninstall
 
 The delegation-ledger checker's fixtures live under `tests/fixtures/`; add a fixture when changing `ledger-check.mjs`. The repo-level `uv run pytest tests/` runs the same Node suites through a bridge.
 

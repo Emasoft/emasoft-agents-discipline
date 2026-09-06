@@ -30,7 +30,7 @@ claude plugin marketplace update emasoft-plugins
 claude plugin install emasoft-agents-discipline@emasoft-plugins
 ```
 
-Restart Claude Code after installing. Invoke it as `/agents-discipline` (or `/emasoft-agents-discipline:agents-discipline`), or let it trigger on the work itself. The core is `skills/agents-discipline/SKILL.md`; the checkers and the optional Stop hook require Node 16 or newer and use no third-party runtime packages.
+Restart Claude Code after installing. Invoke it as `/agents-discipline` (or `/emasoft-agents-discipline:agents-discipline`), or let it trigger on the work itself. The core is `skills/agents-discipline/SKILL.md`; the checkers require Node 16 or newer and use no third-party runtime packages.
 
 ## Usage
 
@@ -177,22 +177,6 @@ For every independent READY set, open a native launch wave, record each host age
 
 `gate-check.mjs --scope <id>` reduces the scope's ledgers and dispatch waves together. It prints `ALL MET` only when every gate is met and every wave is complete; an abandoned wave remains a non-successful `HANDOFF REQUIRED` outcome.
 
-## Optional Claude Code Stop hook
-
-The hook scans the current session's resolved ledger and dispatch state and returns Claude Code's documented top-level `decision: "block"` response while gates remain unmet or launch waves remain incomplete. It does not execute checks. Its own session-keyed progress guard releases after six consecutive blocks without semantic gate/dispatch progress; metadata-only edits do not reset it. Abandonment stays visible as an explicit bounded handoff in pure, mixed-blocking, and final-release messages, without echoing free-form reasons.
-
-Install only with the user's consent:
-
-```text
-node <path-to-skill>/scripts/install-hooks.mjs
-node <path-to-skill>/scripts/install-hooks.mjs --scope api
-node <path-to-skill>/scripts/install-hooks.mjs --uninstall
-```
-
-Default installation writes `.claude/settings.local.json`. Keep that file, `.agents-discipline/`, and `.agents-discipline-hook-state.json` in the project's ignore rules. `--shared` writes absolute Node and hook-script paths into project settings, so it is usually not portable and can expose local directory names. `--global` writes the current user's Claude settings.
-
-The installer preserves unrelated hooks, refuses malformed settings shapes, and identifies moved agents-discipline entries without depending on the install directory name. It writes settings atomically and creates `<settings-file>.agents-discipline.bak` beside an existing settings file before replacing it.
-
 ## The eval
 
 This skill is not a vibe; it is a measured result. Full writeup in [references/eval.md](skills/agents-discipline/references/eval.md), raw round-2 results in [evidence/eval-t4-ledger-gate.md](skills/agents-discipline/evidence/eval-t4-ledger-gate.md).
@@ -215,13 +199,13 @@ The lesson, in one line: **rules that describe delegation do nothing; a rule tha
 .claude-plugin/plugin.json       plugin manifest
 skills/agents-discipline/
   SKILL.md                       core instructions and mode routing
-  SECURITY.md                    CHECK, shell, approval, hook, and lease threat model
+  SECURITY.md                    CHECK, shell, approval, and lease threat model
   agents/openai.yaml             skill UI metadata
   package.json                   Node package manifest
   references/                    gates, method, orchestration, dispatch, parallel, token-economy,
                                   delegation-method, delegation-orchestration, delegation-token-economy, ledger-discipline, eval
   templates/                     PLAN, gate leaf/node, DELEGATION ledger, worker-brief
-  scripts/                       checker, linter, dispatch recorder, installer, Stop hook, ledger checker
+  scripts/                       checker, linter, dispatch recorder, ledger checker
   research/                      historical limitations and rerun protocol
   evidence/                      raw eval results
   tests/                         deterministic behavior and regression tests
@@ -272,7 +256,7 @@ Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) an
 
 ## Acknowledgments
 
-agents-discipline is born from the fusion of two skills by their original authors: [unlazy](https://github.com/Leonxlnx/unlazy) (completion discipline: gates, checker, Stop hook, Depth Tree) and [colony](https://github.com/kartikkabadi/colony) (delegation discipline: the unit gate, the delegation ledger, worker briefs). Both are MIT licensed; their copyright notices are preserved in LICENSE.
+agents-discipline is born from the fusion of two skills by their original authors: [unlazy](https://github.com/Leonxlnx/unlazy) (completion discipline: gates, checker, Depth Tree) and [colony](https://github.com/kartikkabadi/colony) (delegation discipline: the unit gate, the delegation ledger, worker briefs). Both are MIT licensed; their copyright notices are preserved in LICENSE.
 
 ## License
 

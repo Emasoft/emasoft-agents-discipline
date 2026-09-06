@@ -18,7 +18,6 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const GATE_CHECK = join(HERE, "..", "scripts", "gate-check.mjs");
-const STOP_HOOK = join(HERE, "..", "scripts", "stop-hook.mjs");
 const WINDOWS_ENV = { SystemRoot: "C:\\Windows", WINDIR: "C:\\Windows", SystemDrive: "C:" };
 const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
@@ -62,7 +61,7 @@ function run(script, args, options = {}) {
 }
 
 function gateRun(s, args, options = {}) {
-  const action = args.some((arg) => ["--status", "--claim", "--release", "--list-scopes", "--log", "--bind", "--help"].includes(arg));
+  const action = args.some((arg) => ["--status", "--claim", "--release", "--list-scopes", "--log", "--help"].includes(arg));
   const actual = options.approve !== false && !action && !args.includes("--approve") ? ["--approve", ...args] : args;
   return run(GATE_CHECK, actual, {
     cwd: s.dir,
@@ -708,7 +707,7 @@ test("parser: Markdown fence length and closing syntax are respected", async () 
   } finally { s.cleanup(); }
 });
 
-test("parser: malformed ledgers are usage errors in checker and blocking in hook", async () => {
+test("parser: malformed ledgers are usage errors in checker", async () => {
   const cases = [
     ["zero", "# Gates only\n", "zero live gates"],
     ["duplicate", "- [ ] G1: a\n  EVIDENCE: pending\n- [ ] G1: b\n  EVIDENCE: pending\n", "duplicate gate id"],
@@ -728,9 +727,6 @@ test("parser: malformed ledgers are usage errors in checker and blocking in hook
       const status = await gateRun(s, ["--status"], { approve: false });
       assert(status.code === 2, name + " should exit 2\n" + status.out);
       has(status.out, expected, name);
-      const hook = await run(STOP_HOOK, [], { cwd: s.dir, stdin: JSON.stringify({ cwd: s.dir, session_id: name }) });
-      has(hook.out, '"decision":"block"', name + " hook");
-      has(hook.out, "PARSE", name + " hook");
     } finally { s.cleanup(); }
   }
 });
