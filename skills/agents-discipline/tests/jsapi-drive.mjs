@@ -34,6 +34,18 @@ out.push(["localeCompare pairs", ["a", "A", "aB", "Ab", "aa", "aA", "Aa", "AA", 
   .sort((a, b) => a.localeCompare(b))]);
 // THREE characters, not two. A two-character pair cannot distinguish a correct positional
 // tertiary weight from several wrong schemes that happen to agree on pairs; three can.
+// UTF-16 code units, which is what .length counts and .slice() cuts. dispatch.mjs bounds a
+// handle at 256 and a reason at 500 with .length, and safeDiagnostic cuts at 500 with .slice --
+// so a port counting CODE POINTS accepts state the oracle rejects.
+const STRINGS = ["", "a", "aé", "😀", "😀😀", "a😀b", "\u{1F600}\u{1F601}\u{1F602}", "ⓐ", "😀".repeat(200)];
+out.push(["js_length", STRINGS.map((s) => s.length)]);
+for (const [a, b] of [[0, 1], [0, 2], [0, 3], [1, 3], [0, 500], [-3, undefined], [3, 1], [0, 0], [-99, 99]]) {
+  out.push([`js_slice ${a},${b}`, STRINGS.map((s) => Array.from(s.slice(a, b), (c) => c.codePointAt(0)))]);
+}
+// Punctuation in NON-initial position, where the tertiary tie-break also engages -- realistic
+// for wave ids like `w1.retry-2`, and not covered by a corpus built from two-character pairs.
+out.push(["localeCompare punctuation", ["a-B", "aB", "a.b", "ab", "a-b", "a_B", "w1.retry-2", "w1.retry-1"]
+  .sort((a, b) => a.localeCompare(b))]);
 out.push(["localeCompare triples", ["aAb", "AaB", "aab", "AAB", "aAB", "Aab", "abA", "aBa"]
   .sort((a, b) => a.localeCompare(b))]);
 // A dict nested inside an ARRAY. js_json_object passed lists through untouched, so its nested

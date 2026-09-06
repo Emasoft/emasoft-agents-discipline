@@ -118,7 +118,17 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
     guarantee the ledger never asked for and dispatch state does: `dispatch.mjs` passes a root
     for every read, so a `.agents-discipline/<scope>/dispatch.json` symlinked out of the
     repository is rejected rather than followed.
+
+    CALLER CONTRACT: `root` must come from argv or a computed path, NEVER from a parsed
+    document. JSON `null` decodes to None, and None here means "not supplied", so a root read
+    out of parsed JSON would silently DISABLE containment where the oracle throws. A non-string
+    root is rejected at the boundary below; `None` is the one case that cannot be told apart.
     """
+    # At the BOUNDARY, so a bad root fails here rather than two frames down: os.path.abspath on
+    # a bytes root SUCCEEDS and returns bytes, and _path_is_inside then compares str to bytes
+    # and raises inside the guard itself. This closes every JSON-derived shape except null.
+    if root is not None and not isinstance(root, str):
+        raise TypeError(f"{label} root must be a string path, not {type(root).__name__}")
     target = os.path.abspath(path)
     limit = DEFAULT_STABLE_FILE_MAX_BYTES if max_bytes is None else int(max_bytes)
     if limit < 1:
@@ -759,8 +769,16 @@ def with_file_lock(root, target, fn, timeout_ms=30000):
                     # "'list' object has no attribute 'get'" -- and dispatch's readState decides
                     # whether to re-wrap by testing for exactly that "invalid dispatch state:"
                     # prefix, so the port would have destroyed the diagnostic it branches on.
-                    # (Both runtimes leave the lock file behind here, by design: neither unlinks
-                    # a lock it cannot prove it owns.)
+                    # (Both runtimes leave the lock file behind here, by design.)
+                    #
+                    # CORRECTION to what an earlier commit message of mine asserted: "neither
+                    # runtime unlinks a lock it cannot prove it owns" is FALSE, of both. This
+                    # read-then-unlink is not atomic, so the proof is stale by the time the
+                    # syscall runs: read our token, get descheduled, a human removes the lock
+                    # (the documented recovery), a successor acquires and writes ITS token, and
+                    # this unlink then deletes the SUCCESSOR's lock. The oracle has the identical
+                    # shape, so it is a shared hazard rather than a port defect -- but it is not
+                    # the guarantee I claimed, and the next reader would have relied on it.
                     if isinstance(current, dict) and current.get("token") == token:
                         os.unlink(lock)
                     break

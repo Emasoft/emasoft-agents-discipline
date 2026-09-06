@@ -72,6 +72,50 @@ def js_json_object(value):
 
 
 # ---------------------------------------------------------------------------------------------
+# String length and slicing
+# ---------------------------------------------------------------------------------------------
+
+# A JS string is a sequence of UTF-16 CODE UNITS; a Python str is a sequence of CODE POINTS.
+# `.length` and `.slice()` therefore count different things the moment a character is outside
+# the BMP. Measured: "😀" * 200 is 400 to JS and 200 to Python, so dispatch.mjs's
+# `handle.length > 256` REJECTS a handle a naive port ACCEPTS -- and the handle is the wave's
+# uniqueness key, so the two runtimes would disagree about whether a state file is valid. The
+# same trap sits in validReason (500), safeDiagnostic's .slice(0, 500) and tail's .slice(0, max).
+#
+# This matters beyond tests: during the migration a JS gate-check and a Python dispatch-check
+# read and write the SAME dispatch.json, so a length disagreement is a live interop bug.
+
+
+def js_length(value):
+    """`value.length` -- the UTF-16 code-unit count, not the code-point count."""
+    return len(str(value).encode("utf-16-le", "surrogatepass")) // 2
+
+
+def js_slice(value, start, end=None):
+    """`value.slice(start, end)` over UTF-16 code units, including JS's clamping rules.
+
+    CAN RETURN A LONE SURROGATE, and that is faithful rather than sloppy: measured,
+    `"😀😀".slice(0, 3)` is "😀\ud83d" in V8. Note the interaction with this port's sha256,
+    which REFUSES a lone surrogate -- a diagnostic truncated mid-pair and then hashed would
+    raise here where the oracle hashes a replacement character. Both behaviours are deliberate;
+    they meet in safeDiagnostic, so a caller doing both needs to know.
+    """
+    text = str(value)
+    units = text.encode("utf-16-le", "surrogatepass")
+    count = len(units) // 2
+    start = count + start if start < 0 else start
+    start = max(0, min(count, start))
+    if end is None:
+        end = count
+    else:
+        end = count + end if end < 0 else end
+        end = max(0, min(count, end))
+    if end <= start:
+        return ""
+    return units[start * 2:end * 2].decode("utf-16-le", "surrogatepass")
+
+
+# ---------------------------------------------------------------------------------------------
 # localeCompare
 # ---------------------------------------------------------------------------------------------
 

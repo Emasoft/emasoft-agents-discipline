@@ -415,7 +415,7 @@ _PORT_FIXTURES = pathlib.Path(TESTS) / "fixtures" / "port"
 _fixtures = sorted(_PORT_FIXTURES.glob("*.md"))
 # Counted, not globbed-and-hoped: an empty glob would make the loop below pass by running zero
 # comparisons — a green section that checked nothing.
-report(len(_fixtures) == 5, "parse_gates: the fixture corpus is present", f"{len(_fixtures)} found")
+report(len(_fixtures) == 8, "parse_gates: the fixture corpus is present", f"{len(_fixtures)} found")
 # ...but the COUNT alone is not enough, and measured: five ZERO-BYTE .md files satisfy it and
 # then parse identically on both sides (`errors: ["ledger contains zero live gates"]`), so all
 # six rows go green while nothing is tested. That is the same defect as the empty glob with one
@@ -460,6 +460,13 @@ _classes = {
     # title AND the id together, so the id class firing is all it actually demonstrated.
     "a non-ASCII title": any(not d["lines"][0].isascii() for d in _all if d["lines"]),
     "a checked box": any(g.get("checked") for d in _all for g in d["gates"]),
+    # The shapes the seventh review round named as structurally invisible: a fence closed by a
+    # SHORTER run, a mismatched fence character, a backtick in the info string, an attribute
+    # after a blank line, an unindented attribute, and duplicate OWNS entries. Every one AGREED
+    # between the runtimes when measured -- these assertions keep the shapes in the corpus so
+    # that stays a measured fact rather than a remembered one.
+    "a fenced block": any("```" in line for d in _all for line in d["lines"]),
+    "a duplicated OWNS entry": any(len(d["owns"]) != len(set(d["owns"])) for d in _all),
 }
 for _name, _present in sorted(_classes.items()):
     report(_present, f"parse_gates: the corpus still contains {_name}")

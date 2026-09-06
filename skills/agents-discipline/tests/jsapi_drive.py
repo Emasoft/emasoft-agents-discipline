@@ -8,7 +8,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts", "lib"))
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
-    js_json_object, js_object_key_order, locale_compare_key, parse_date,
+    js_json_object, js_length, js_object_key_order, js_slice, locale_compare_key,
+    parse_date,
 )
 
 out = []
@@ -36,6 +37,16 @@ for a in alphabet:
 out.append(["localeCompare", sorted(ids, key=locale_compare_key)])
 out.append(["localeCompare pairs",
             sorted(["a", "A", "aB", "Ab", "aa", "aA", "Aa", "AA", "a1", "A1", "1a"],
+                   key=locale_compare_key)])
+STRINGS = ["", "a", "aé", "😀", "😀😀", "a😀b", "\U0001F600\U0001F601\U0001F602", "ⓐ", "😀" * 200]
+out.append(["js_length", [js_length(s) for s in STRINGS]])
+for a, b in [(0, 1), (0, 2), (0, 3), (1, 3), (0, 500), (-3, None), (3, 1), (0, 0), (-99, 99)]:
+    # Code POINTS of the result, not the string: a slice can end on a lone surrogate, which
+    # json.dump cannot serialise on either side. The code points compare exactly and survive.
+    out.append([f"js_slice {a},{b if b is not None else 'undefined'}",
+                [[ord(c) for c in js_slice(s, a, b)] for s in STRINGS]])
+out.append(["localeCompare punctuation",
+            sorted(["a-B", "aB", "a.b", "ab", "a-b", "a_B", "w1.retry-2", "w1.retry-1"],
                    key=locale_compare_key)])
 out.append(["localeCompare triples",
             sorted(["aAb", "AaB", "aab", "AAB", "aAB", "Aab", "abA", "aBa"],
