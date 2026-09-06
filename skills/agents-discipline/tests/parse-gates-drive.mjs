@@ -14,7 +14,7 @@
 import { readFileSync } from "node:fs";
 import {
   automaticEvidencePrefix, classifyGateEvidence, formatDocument, gateDefinitionDigest, gateState,
-  parseGates, qualify, tail,
+  globsOverlap, literalPrefix, parseGates, qualify, tail,
 } from "../scripts/lib/gates.mjs";
 
 // Shapes a ledger cannot express, where classifyGateEvidence's three divergence classes meet:
@@ -149,6 +149,37 @@ process.stdout.write(JSON.stringify({
   ].map((d) => JSON.stringify(formatDocument(d))),
   roundTrip: formatDocument(doc) === readFileSync(process.argv[2], "utf8"),
   roundTripBytes: [formatDocument(doc).length, readFileSync(process.argv[2], "utf8").length],
+  // globsOverlap decides whether two leaf leases may be held at once, so a wrong FALSE grants
+  // two workers write access to the same paths. Every pair is dumped in BOTH directions:
+  // symmetry is a property of the answer, not an assumption about the code, and a port that
+  // compared only `as` against `bs` (or lost the `||` in the wildcard test) would answer
+  // differently one way round. The expected value is written beside each pair so the row still
+  // means something to a reader who is not running the oracle.
+  globsOverlap: [
+    ["src/**", "src/a"],           // wildcard segment => conflict
+    ["a*", "ab"],                  // mid-segment wildcard => conflict, NOT a prefix test
+    ["src/a", "src/b"],            // literal segments disagree => the ONLY disjoint shape
+    ["a", "b"],                    // same, at depth 1
+    ["src/a", "src/a"],            // identical
+    ["src/a", "src/a/deep"],       // exact prefix may be a directory claim => conflict
+    ["src/a/deep", "src/a"],       // the reverse, so the pair is not self-symmetric by luck
+    ["src/{a,b}", "src/a"], ["src/[ab]", "src/a"], ["src/a?", "src/ab"],  // { [ ? are meta
+    ["./src/a", "src/a"],          // normalization runs before the comparison
+    ["src\\a", "src/a"],           // backslashes fold to /
+    ["", "src/a"], ["..", "src"], ["/abs", "src"],   // an ERROR must fail CLOSED (=> true)
+    // The measured U3 defect, pinned so a port cannot quietly "fix" it: an unreplaced OWNS
+    // placeholder carries no glob metacharacter, so its first segment merely DIFFERS from a
+    // real claim's and the pair is reported DISJOINT -- both claims exit 0 over the same tree.
+    ["<repository-relative globs>", "src/a"],
+    // Astral pair. JS compares UTF-16 code units and Python compares code points, which is a
+    // real divergence class for `<` -- this function only ever tests EQUALITY, where the two
+    // agree, so these rows are a CONTROL: they prove the astral path is exercised and equal,
+    // not that an ordering bug was caught. Built from code points, never typed.
+    [cp(0x1F600) + "/a", cp(0x1F600) + "/b"],
+    [cp(0x1F600) + "/a", cp(0x1F600) + "/a"],
+  ].flatMap(([x, y]) => [globsOverlap(x, y), globsOverlap(y, x)]),
+  literalPrefix: ["src/a/**", "**", "src/a", "", "src/{a}/b", "./src/a/*", "src/[x]/y", "..",
+    "a?b/c", "/abs", cp(0x1F600) + "/a/*"].map(literalPrefix),
   qualify: [["a/b.md", "g1"], ["b.md", "g1"], ["a/b/", "g1"], ["a/b//", "g1"], ["", "g1"],
     ["/", "g1"], ["a/b.MD", "g1"], ["a/b.md/", "g1"], ["./x.md", "g1"], ["x.md\n", "g1"],
     ["///", "g1"], ["a//", "g1"], ["no-ext", "g1"], [".md", "g1"], ["a.md.md", "g1"]]

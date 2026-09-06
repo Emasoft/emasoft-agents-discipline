@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
                                 "scripts", "lib"))
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
     automatic_evidence_prefix, classify_gate_evidence, format_document, gate_definition_digest,
-    gate_state, parse_gates, qualify, read_stable_regular_file, tail,
+    gate_state, globs_overlap, literal_prefix, parse_gates, qualify, read_stable_regular_file,
+    tail,
 )
 
 _SOURCE = read_stable_regular_file(sys.argv[1], label="gate ledger")
@@ -130,6 +131,27 @@ json.dump({
     ]],
     "roundTrip": format_document(doc) == _SOURCE,
     "roundTripBytes": [len(format_document(doc)), len(_SOURCE)],
+    # Mirrors the mjs corpus row for row -- see parse-gates-drive.mjs for why each pair is
+    # here and why every pair is dumped in BOTH directions.
+    "globsOverlap": [v for x, y in [
+        ["src/**", "src/a"],
+        ["a*", "ab"],
+        ["src/a", "src/b"],
+        ["a", "b"],
+        ["src/a", "src/a"],
+        ["src/a", "src/a/deep"],
+        ["src/a/deep", "src/a"],
+        ["src/{a,b}", "src/a"], ["src/[ab]", "src/a"], ["src/a?", "src/ab"],
+        ["./src/a", "src/a"],
+        ["src\\a", "src/a"],
+        ["", "src/a"], ["..", "src"], ["/abs", "src"],
+        ["<repository-relative globs>", "src/a"],
+        [chr(0x1F600) + "/a", chr(0x1F600) + "/b"],
+        [chr(0x1F600) + "/a", chr(0x1F600) + "/a"],
+    ] for v in (globs_overlap(x, y), globs_overlap(y, x))],
+    "literalPrefix": [literal_prefix(g) for g in [
+        "src/a/**", "**", "src/a", "", "src/{a}/b", "./src/a/*", "src/[x]/y", "..",
+        "a?b/c", "/abs", chr(0x1F600) + "/a/*"]],
     "qualify": [qualify(f, i) for f, i in [
         ["a/b.md", "g1"], ["b.md", "g1"], ["a/b/", "g1"], ["a/b//", "g1"], ["", "g1"],
         ["/", "g1"], ["a/b.MD", "g1"], ["a/b.md/", "g1"], ["./x.md", "g1"], ["x.md\n", "g1"],

@@ -310,6 +310,48 @@ def normalize_owns_glob(value):
     return {"value": normalized}
 
 
+# JS spells this /[*?[{]/ -- an unescaped `[` is literal inside a character class in both
+# languages, but writing it escaped here keeps the intent readable rather than clever.
+_GLOB_META_RE = re.compile(r"[*?\[{]")
+
+
+def literal_prefix(glob):
+    """Leading segments of a glob that carry no wildcard."""
+    normalized = normalize_owns_glob(glob)
+    if "error" in normalized:
+        return ""
+    literal = []
+    for part in normalized["value"].split("/"):
+        if _GLOB_META_RE.search(part):
+            break
+        literal.append(part)
+    return "/".join(literal)
+
+
+def globs_overlap(left, right):
+    """Prove disjointness only when literal path segments disagree.
+
+    Everything else conflicts, including mid-segment pairs such as a* and ab*. A lease is a
+    write-permission decision, so the safe answer under uncertainty is "conflict": a false
+    "disjoint" hands two workers the same paths, and this project has already seen that
+    happen live (an unreplaced OWNS: placeholder let two claims both exit 0).
+    """
+    a = normalize_owns_glob(left)
+    b = normalize_owns_glob(right)
+    if "error" in a or "error" in b:
+        return True
+    a_segments = a["value"].split("/")
+    b_segments = b["value"].split("/")
+    for av, bv in zip(a_segments, b_segments):
+        if _GLOB_META_RE.search(av) or _GLOB_META_RE.search(bv):
+            return True
+        if av != bv:
+            return False
+    # An exact prefix may denote a directory ownership claim, so it can overlap every
+    # descendant. Treat common-prefix length differences as conflicts.
+    return True
+
+
 # The checker consumes this exact result shape. Diagnostics are returned together so
 # callers can report all malformed input in one pass.
 def parse_gates(text, options=None):
