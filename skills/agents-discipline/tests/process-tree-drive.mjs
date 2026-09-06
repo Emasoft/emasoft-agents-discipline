@@ -57,12 +57,16 @@ try {
   ]);
 
   // Polled: `exit` reaps only the direct child, so a reparented sleep lingers as <defunct>
-  // carrying the pgid for a moment after a correct kill. Skipped under --fail-group-kill:
-  // the fallback signals only the DIRECT child, so the two backgrounded sleeps are MEANT to
-  // survive it. That arm is about `_child_kill` reporting honestly, not about reaping, and
-  // the `finally` clears the group either way.
+  // carrying the pgid for a moment after a correct kill.
+  // Under --fail-group-kill the expectation INVERTS rather than being skipped: the fallback
+  // signals only the DIRECT child, so the two backgrounded sleeps must still be there. Two
+  // nulls compared equal no matter what either runtime did, which is agreement about
+  // something neither side measured.
   let survivors = null;
-  if (!killGroup) {
+  let survivorsNonZero = null;
+  if (killGroup) {
+    survivorsNonZero = members(pgid) > 0;
+  } else {
     survivors = 1;
     for (let i = 0; i < 40 && survivors > 0; i++) {
       survivors = members(pgid);
@@ -71,13 +75,23 @@ try {
   }
 
   process.stdout.write(
-    JSON.stringify({
-      membersBefore,
-      ok: result.ok,
-      fallback: result.fallback,
-      diagnostic: result.diagnostic ?? null,
-      survivors,
-    }) + "\n",
+    JSON.stringify(
+      killGroup
+        ? {
+            membersBefore,
+            ok: result.ok,
+            fallback: result.fallback,
+            diagnostic: result.diagnostic ?? null,
+            survivorsNonZero,
+          }
+        : {
+            membersBefore,
+            ok: result.ok,
+            fallback: result.fallback,
+            diagnostic: result.diagnostic ?? null,
+            survivors,
+          },
+    ) + "\n",
   );
 } finally {
   // The port grew this guard in 80c2554 after its own self-check leaked two `sleep 47`

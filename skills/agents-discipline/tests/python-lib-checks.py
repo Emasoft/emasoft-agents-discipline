@@ -18,6 +18,7 @@ answering a constant would agree with each other, so the differing pair must als
 Run: python3 tests/python-lib-checks.py   (also runs as the last step of `npm test`)
 """
 
+import atexit
 import json
 import os
 import pathlib
@@ -38,6 +39,22 @@ LIB = os.path.join(ROOT, "scripts", "lib")
 WIN32 = sys.platform == "win32"
 
 failed = 0
+
+# A crash anywhere below (a subprocess timeout, a KeyError, a failed assert inside a driver)
+# truncates the run: every later section is skipped and NOTHING says so — the reader gets a
+# traceback naming one line and no signal that eight other comparisons were never attempted.
+# 8eb3710 named that gap in a commit message instead of closing it, which is the "filing is
+# not doing" failure: a documented hole is still a hole. atexit rather than wrapping each
+# section in try/except, because it needs no re-indentation and it reports the same fact.
+SECTIONS = ["regex_worker", "check_supervisor", "windows_taskkill_path", "process_tree"]
+completed = []
+
+
+@atexit.register
+def _report_truncation():
+    missing = [s for s in SECTIONS if s not in completed]
+    if missing:
+        print(f"FAIL  suite TRUNCATED — these sections never completed: {', '.join(missing)}")
 
 
 def report(ok, name, detail=""):
@@ -107,6 +124,7 @@ regex_case("an invalid pattern", "(", "x")
 # \d must stay ASCII: JS's is [0-9] with or without the `u` flag, Python's is Unicode by
 # default. Compared rather than asserted, so a change on either side is caught.
 regex_case("an ASCII-only \\d against Arabic-Indic digits", r"^\d+$", "١٢٣")
+completed.append("regex_worker")
 
 # --- check_supervisor: same argv, compare exit code AND the pumped output ------------------
 if WIN32:
@@ -131,6 +149,7 @@ else:
     report(ja != jb and pa != pb,
            "check_supervisor: the two CHECKs differ, in BOTH runtimes (vacuity control)",
            f"{pa} vs {pb}")
+completed.append("check_supervisor")
 
 # --- windows_taskkill_path: pure string logic, so it is testable on POSIX ------------------
 # It is the fail-closed decision that keeps an ARBITRARY executable from being selected, which
@@ -177,6 +196,7 @@ else:
     report(all(sum(1 for p in paths if p) == 1 and paths[0] for paths in (js_paths, py_paths)),
            "windows_taskkill_path: only the trusted environment selects a path, in BOTH "
            "runtimes (vacuity control)", str(py_paths[0]))
+completed.append("windows_taskkill_path")
 
 # --- the group kill: the module's whole purpose, and the last case still asserted ----------
 # Three real defects had already been found in this exact path (`child.exitCode`,
@@ -220,10 +240,17 @@ else:
                "" if js_fb == py_fb else f"js={js_fb} py={py_fb}")
         # Vacuity control: if the injection did not take, this would be the happy path again
         # and would agree just as well. The fallback flag must actually be set.
+        # Vacuity control: if the injection did not take this would be the happy path again
+        # and would agree just as well. `fallback is True` on BOTH is the load-bearing half
+        # (the diagnostic substring is one-sided, and only transitive through the equality
+        # above); `survivorsNonZero` on both is what says the fallback did the NARROWER thing
+        # it claims — signalled the direct child and left the group alone.
         report(py_fb["fallback"] is True and js_fb["fallback"] is True
+               and py_fb["survivorsNonZero"] is True and js_fb["survivorsNonZero"] is True
                and "fallback requested" in (py_fb["diagnostic"] or ""),
                "process_tree: the injected failure really reached the fallback (vacuity control)",
                str(py_fb["diagnostic"]))
+completed.append("process_tree")
 
 print("all pass" if not failed else f"{failed} FAILED")
 sys.exit(1 if failed else 0)

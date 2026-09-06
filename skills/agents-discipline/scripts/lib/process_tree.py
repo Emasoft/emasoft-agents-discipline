@@ -50,8 +50,16 @@ def _err_code(error):
     and the port said `process-group kill failed (No such process)`. These strings are the
     artifact a human reads out of a failed cleanup, so they have to be the same string.
     """
+    # code -> strerror -> str, and the middle rung is load-bearing: `str()` on a TWO-ARG
+    # OSError prepends a Python-only "[Errno N] ". Measured, an errno outside errno.errorcode
+    # (platform-specific ones are missing from it on some builds): the port printed
+    # "[Errno 9999] unmapped" where Node prints "unmapped". 8eb3710 dropped strerror as the
+    # FIRST choice correctly and as the FALLBACK wrongly, which left this branch — the one the
+    # `except OSError` arm exists to report — diverging in the commit that fixed the class.
     number = getattr(error, "errno", None)
-    return (errno.errorcode.get(number) if number is not None else None) or str(error)
+    return ((errno.errorcode.get(number) if number is not None else None)
+            or getattr(error, "strerror", None)
+            or str(error))
 
 
 def _sync_failure(result):
@@ -311,12 +319,18 @@ def _run_self_check(child, pgid, members, fail_group_kill=False):
     # The `finally` in _self_check clears the group either way.
     if fail_group_kill:
         child.wait(timeout=5)
+        # COUNTED, not reported as None. Both runtimes returning None compared equal no matter
+        # what either had done to the group -- agreement asserted about something neither side
+        # measured, the third instance of that shape in this file. The honest number is
+        # NON-ZERO: the fallback signals only the direct child, so the two backgrounded sleeps
+        # are reparented and alive, and a future edit that escalated `_child_kill` to a group
+        # kill in one runtime would show up here instead of hiding behind a pair of nulls.
         return {
             "membersBefore": len(alive),
             "ok": result["ok"],
             "fallback": result["fallback"],
             "diagnostic": result["diagnostic"],
-            "survivors": None,
+            "survivorsNonZero": len(members()) > 0,
         }
     child.wait(timeout=5)
     # Polled, not one snapshot: `wait` reaps only the DIRECT child, so a backgrounded sleep is
