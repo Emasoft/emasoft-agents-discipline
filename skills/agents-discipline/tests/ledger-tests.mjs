@@ -4,7 +4,7 @@
  * Usage: node tests/ledger-tests.mjs
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, copyFileSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,6 +93,23 @@ const cases = [
     want: 1,
     expect: ["evidence:    MISSING"],
   },
+  {
+    // The cheapest fabrication available: copy the template, flip every status to
+    // `verified`, add nothing. It must not pass. An earlier template shipped Evidence
+    // boilerplate containing a backticked span with whitespace, which scored as STRONG
+    // evidence all by itself -- so the copy-and-flip ledger reported `evidence: present`.
+    // Derived from the live template, not a snapshot, so a future template edit that
+    // reintroduces satisfying boilerplate fails here instead of shipping.
+    name: "copy the template and flip every status: still fails",
+    file: "templates/DELEGATION.md",
+    mutate: (t) => t.replace(/\| pending \|/g, "| verified |"),
+    want: 1,
+    // Needed for the UNBACKED assertion -- that verdict lives inside the re-run block.
+    // Safe: every Acceptance cell is the placeholder `<command>`, which has no whitespace,
+    // so acceptanceCommand extracts nothing and nothing is executed.
+    rerun: true,
+    expect: ["evidence:    MISSING", "UNBACKED verified rows"],
+  },
 ];
 
 for (const c of cases) {
@@ -112,10 +129,14 @@ for (const c of cases) {
   // Without this, running the suite would append a receipt to a tracked fixture and
   // dirty the working tree.
   let target = resolve(root, c.file);
-  if (c.rerun) {
+  if (c.rerun || c.mutate) {
     const dir = mkdtempSync(join(tmpdir(), "ledger-rerun-"));
     target = join(dir, basename(c.file));
-    copyFileSync(resolve(root, c.file), target);
+    // `mutate` derives the case's input from a LIVE repo file rather than a frozen copy,
+    // so the assertion keeps tracking that file as it changes. That is the point for the
+    // template: a fixture snapshot would go on passing after the template drifted.
+    const src = readFileSync(resolve(root, c.file), "utf8");
+    writeFileSync(target, c.mutate ? c.mutate(src) : src);
     // Create the artifacts the fixture cites, INSIDE the temp dir. Without this the
     // citation would still resolve -- `bases` appends process.cwd(), so it would find
     // the real repo copy -- and the case would pass or fail for a reason that has
