@@ -493,8 +493,13 @@ async function recordApproval(file, gate) {
       // Fail closed instead of trying to steal by path: an owner can release
       // and a successor can acquire between stat and unlink.
       try { statSync(lock); } catch (statError) {
-        if (statError.code === "ENOENT") continue;
-        throw statError;
+        if (statError.code !== "ENOENT") throw statError;
+        // A vanished lock is a retry, not a free pass. This used to `continue`, which
+        // skipped BOTH the deadline check and the sleep below -- so a peer repeatedly
+        // creating and removing the lock spun this loop synchronously, with no yield,
+        // starving the event loop and every armed timer with it. It was the only
+        // deadline-skipping loop in the repo; gates.mjs:791 has the correct order.
+        // Every path out of contention now goes through the same two lines.
       }
       if (Date.now() >= deadline) throw new Error("timed out waiting for approval lock");
       await sleep(20);

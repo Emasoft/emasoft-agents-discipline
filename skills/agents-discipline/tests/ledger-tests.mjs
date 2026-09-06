@@ -110,6 +110,28 @@ const cases = [
     rerun: true,
     expect: ["evidence:    MISSING", "UNBACKED verified rows"],
   },
+  {
+    // The read used to be a plain readFileSync: no size cap, no regular-file assertion,
+    // no O_NOFOLLOW, while every other reader here goes through readStableRegularFile.
+    // Measured against the pre-fix script, this argument HUNG the process indefinitely
+    // (timeout exit 124); it now returns in ~50ms. An unbounded wait in the one script a
+    // coordinator is told to run on a ledger it may not have written.
+    name: "a FIFO ledger path is rejected, not waited on",
+    fifo: true,
+    want: 2,
+    expect: ["must be one unchanged regular single-link file"],
+  },
+  {
+    // Same helper, the other bound: refuse before parsing rather than reading 9 MiB into
+    // memory to discover it is not a ledger.
+    // The exit code does NOT discriminate here -- measured, the pre-fix script also exits
+    // 2 on this input, just after reading the whole thing and finding no table header. The
+    // size message is the only evidence that the bound was the thing that stopped it.
+    name: "an oversized ledger is rejected before parsing",
+    oversized: true,
+    want: 2,
+    expect: ["exceeds 8388608 bytes"],
+  },
 ];
 
 for (const c of cases) {
@@ -128,6 +150,32 @@ for (const c of cases) {
   // (:412) -- which is why the skipped cases can safely point at tracked fixtures.
   // Without this, running the suite would append a receipt to a tracked fixture and
   // dirty the working tree.
+  // These two build their input rather than naming a fixture: a FIFO cannot be committed,
+  // and a 9 MiB file should not be.
+  if (c.fifo || c.oversized) {
+    if (c.fifo && process.platform === "win32") {
+      report(true, `${c.name} (skipped: no mkfifo on win32)`);
+      continue;
+    }
+    const dir = mkdtempSync(join(tmpdir(), "ledger-bounds-"));
+    const target = join(dir, "ledger.md");
+    if (c.fifo) execFileSync("mkfifo", [target]);
+    else writeFileSync(target, "x".repeat(9 * 1024 * 1024));
+    let out = "";
+    try {
+      out = execFileSync("node", [checker, target], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15000, env: process.env });
+      code = 0;
+    } catch (err) {
+      code = err.status;
+      out = `${err.stdout ?? ""}${err.stderr ?? ""}`;
+    }
+    // A regression here is a HANG, and a hung suite reads as a stuck machine rather than a
+    // failing test -- so the timeout above turns it back into an ordinary failure.
+    report(code === c.want, c.name, `exit ${code}, want ${c.want}`);
+    for (const want of c.expect ?? []) report(out.includes(want), `${c.name} -> ${want}`);
+    continue;
+  }
+
   let target = resolve(root, c.file);
   if (c.rerun || c.mutate) {
     const dir = mkdtempSync(join(tmpdir(), "ledger-rerun-"));

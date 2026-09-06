@@ -17,7 +17,7 @@ import * as fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as nodePath from "node:path";
-const { readFileSync } = fs;
+import { readStableRegularFile } from "./lib/gates.mjs";
 const { resolve } = nodePath;
 // why: the same runner vocabulary as a word set — a regex alternation of shell names trips the
 // publish gate's injection scanner, and a dynamically built RegExp trips its ReDoS rule.
@@ -32,7 +32,11 @@ function fail(code, msg) {
 
 let text;
 try {
-  text = readFileSync(resolve(path), "utf8");
+  // Every other reader in this codebase goes through readStableRegularFile; this one used a
+  // plain readFileSync, with no size cap, no regular-file assertion and no O_NOFOLLOW. A FIFO
+  // passed as argv blocked the process forever -- an unbounded wait in the one script a
+  // coordinator is told to run on a ledger it may not have written.
+  text = readStableRegularFile(path, { label: "ledger" });
 } catch (err) {
   fail(2, `agents-discipline: cannot read ${path}: ${err.message}`);
 }
