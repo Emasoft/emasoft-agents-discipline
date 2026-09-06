@@ -422,7 +422,11 @@ for (const c of cases) {
     if (c.fifo) execFileSync("mkfifo", [target]);
     else if (c.symlink) {
       // A REAL, valid ledger behind the link, so a refusal cannot be mistaken for the file
-      // being unreadable for some other reason: follow it and the checker would succeed.
+      // being unreadable for some other reason. MEASURED, not assumed: reading that target
+      // directly exits 0 in BOTH runtimes, so `want: 2` can only come from the refusal —
+      // if O_NOFOLLOW were dropped, this case would go green-to-red rather than passing on.
+      // (`getattr(os, "O_NOFOLLOW", 0)` degrades to 0 on a platform without it, exactly as
+      // the oracle's `fsConstants.O_NOFOLLOW || 0` does; the case skips on win32 anyway.)
       const real = join(dir, "real.md");
       writeFileSync(real, readFileSync(resolve(root, "tests/fixtures/complete.md"), "utf8"));
       symlinkSync(real, target);

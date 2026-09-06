@@ -24,6 +24,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import tempfile
 
 # The suite declares `engines: node >=16` and declared no Python floor at all — while
 # ledger_check.py already needed 3.11 (datetime.fromisoformat did not accept a colon-less
@@ -146,10 +147,19 @@ else:
     # failure or as a crash, and it was never driven. It found a divergence at once: exit 127
     # agreed, but the oracle prints `CHECK spawn failed: spawn <file> ENOENT` (Node's
     # err.message shape) and the port printed `could not start CHECK: [Errno 2] ...`.
+    # A second spawn failure with a DIFFERENT errno, because one sample cannot tell a
+    # faithful port from a fitted one: `spawn <file> ENOENT` could have been hardcoded and
+    # still pass. Measured, both runtimes print `spawn <file> EACCES` here.
+    noexec = os.path.join(tempfile.mkdtemp(), "noexec.sh")
+    with open(noexec, "w") as fh:
+        fh.write("#!/bin/sh\necho hi\n")
+    os.chmod(noexec, 0)
+
     for shell, name, script in (
         ("/bin/bash", "propagates exit code and pumps stdout", "echo hi; exit 3"),
         ("/bin/bash", "a signalled CHECK", "kill -9 $$"),
-        ("/nonexistent/sh", "an unspawnable shell", "echo hi"),
+        ("/nonexistent/sh", "an unspawnable shell (ENOENT)", "echo hi"),
+        (noexec, "a non-executable shell (EACCES)", "echo hi"),
     ):
         js, py = both(["check-supervisor.mjs", shell, script],
                       ["check_supervisor.py", shell, script])
