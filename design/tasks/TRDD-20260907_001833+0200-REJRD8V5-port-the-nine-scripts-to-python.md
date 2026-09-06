@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T00:53:58+0200
+updated: 2026-09-07T01:08:57+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -41,6 +41,12 @@ revert. If no mutation isolates a row, that row does not earn its place.
   divergence has no site here. The measured `OWNS:` placeholder disjointness is PINNED as a
   row, so the port reproduces the defect rather than quietly diverging from the oracle.
 
+- `gates.py`: `stat_current_named_file` (36e3785) and `claim_leases` / `release_leases` /
+  `read_leases` / `sleep` (f3a4c86). The leases have their own STATEFUL 22-step differential
+  (`tests/lease-diff.sh`) — the first place `globs_overlap` runs against real lock FILES. Four
+  controls redden, two only after adding records that ISOLATE the filename-identity and
+  glob-normalization checks: the tampered records already there fail the SHAPE test first, so
+  neither check was ever the sole reason for a rejection.
 - `gates.py`: `list_scopes`, `scope_files`, `legacy_files`, `resolve_target`,
   `same_file_identity`, and the private `_named_entry` / `_real_directory_inside` /
   `_markdown_discovery` / `_scope_discovery` / `_legacy_discovery`. Eight tree shapes
@@ -51,6 +57,30 @@ revert. If no mutation isolates a row, that row does not earn its place.
   back reversed — `markdownDiscovery` sorts filenames with NO id filter, so nothing upstream
   prevents it. Fixed with `jsapi.js_sort_key` (UTF-16-BE bytes; big-endian is the property
   that makes byte order equal unit order) at both sort sites.
+
+### ROUNDS 2-4 — every review of a fix found the fix defective
+**The base rate is the finding.** Rounds 2, 3 and 4 each found the PREVIOUS round's fix wrong.
+A fix ships under the authority of "a review found this", and a control proving the intended
+row MOVED is not evidence the new behaviour is RIGHT.
+
+**Round 4's headline, the worst defect of the session: a mutation control was measuring a
+SYNTAX ERROR.** The anchor omitted the `for` line above it, so the mutant was an
+IndentationError; `gates.py` would not import, the driver exited non-zero on all 9 variants,
+and the probe counted CRASH as reddening. It reported "reddens 9" for a fix that had NO
+coverage — every corpus row was a string, so the behaviour was unobservable either way.
+`tests/mutate-probe.sh` now enforces: unique anchor, edit must change the file, **mutant must
+still import**, and only DIVERGE counts. A crash is INCONCLUSIVE, never a catch.
+
+Also round 4: that fix's guard was REMOVED as redundant (`os.fspath` rejects the same values)
+and its message was invented; `_node_message_error.__str__` raised `AttributeError` under
+`copy.copy`; a subclass named `Node`+base leaked into tracebacks.
+
+**Round 3's** three defects all traced to one habit — reaching for a Python convenience where
+the oracle has semantics (`str()` coercion, an integral float printing as `1.0`, a bare
+`OSError` destroying `FileNotFoundError` and `.errno`).
+
+**"Reddens N" counts ROWS, not defects.** A corpus row is identical in every tree, so one
+divergence in it reports as nine. Say "1 row, all trees".
 
 ### ROUND 2 — the review of the fixes found the fixes defective (36e3785)
 The lesson worth keeping: **a fix ships under the authority of "a review found this", and a
@@ -68,13 +98,17 @@ control proving the intended row MOVED is not evidence the new behaviour is RIGH
   catch would turn a typo into "no pipelines configured".
 
 ### NEXT ACTION
-1. ~~`statCurrentNamedFile`~~ **DONE** (36e3785) — its own driver rows caught a propagated
-   `lstat` message divergence on their first run. The Windows branch is ported and UNWITNESSED.
-2. **`claim_leases` / `release_leases` / `sleep`** — the two gate-check actually imports,
-   plus the one-line alias. `globs_overlap` is already their conflict predicate, so this is
-   the layer that finally EXERCISES it against real lock files. `read_leases` is NOT imported
-   by gate-check and is optional; do it with the other two only if convenient.
-3. **`gate-check.mjs`** (950 lines) — last, because it consumes all of the above.
+**`lib/gates.py` is COMPLETE** — every name `gate-check.mjs` imports is ported. One item left:
+
+1. **`gate-check.mjs`** (950 lines). Its own ~30 private functions are the work now, not the
+   library: `parseArgs`, the approval store (`recordApproval`, `approvalExists`,
+   `readApprovalFile`, `validatedApprovalDir`, `assertPrivateApprovalEntry`), the runner
+   (`runCheck`, `runRolling`, `safeRegexMatch` and its Worker), and evidence rewriting
+   (`insertOrUpdateEvidence`). It also spawns two siblings needing their own ports —
+   `lib/check-supervisor.mjs` and `lib/regex-worker.mjs` — plus `lib/process-tree.mjs`, ported.
+
+   **Use `tests/mutate-probe.sh` for every control.** Hand-rolled inline probes produced two
+   false results in this port, the worse of which reported a syntax error as nine catches.
 
 **Measured — and the claim is narrower than it first read.** `gate-check.mjs` imports **23**
 names from `lib/gates.mjs`; exactly **4** are absent from `gates.py` — `claimLeases`,
@@ -107,7 +141,7 @@ spawns two siblings that need their own ports — `lib/check-supervisor.mjs` and
 `scopeFiles`/`legacyFiles` have ZERO callers in `scripts/` or `tests/` (verified) — ported
 because they are exported and would ship, not because anything exercises them.
 
-### REVIEW FINDINGS — all verified first-hand, ALL FIXED in e547741
+### REVIEW FINDINGS — all verified first-hand, fixed across e547741, 36e3785, 50788cd, f3a4c86
 Four adversarial reviews; every finding was re-measured here rather than taken on report,
 and each is fixed with a control proving the fix was load-bearing. The fourth review found
 the THIRD review's fix defective -- see round 2 below.
