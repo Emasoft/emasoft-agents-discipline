@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T01:20:59+0200
+updated: 2026-09-07T01:31:28+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -57,6 +57,39 @@ revert. If no mutation isolates a row, that row does not earn its place.
   back reversed — `markdownDiscovery` sorts filenames with NO id filter, so nothing upstream
   prevents it. Fixed with `jsapi.js_sort_key` (UTF-16-BE bytes; big-endian is the property
   that makes byte order equal unit order) at both sort sites.
+
+### ROUNDS 5-7 — the reviews moved off the PORT and onto the TEST HARNESS
+Rounds 4-7 all fixed `tests/mutate-probe.sh`, not the port. `gate-check.mjs` did not advance in
+any of them. That is worth knowing before deciding how much more of this to run: the reviews
+kept finding real defects, but in infrastructure built to review the port rather than in the
+port. **Recommendation to the USER, not yet approved: narrow the review gate to commits
+touching `scripts/lib/`.** The token cost is real — one heartbeat measured a 12.3x spike over
+the session median, which is the fork cycle, each fork inheriting the full context.
+
+- **R5** — the harness reported REDDENS for ANY anchor while the tree was already red (no
+  baseline check), and my invocations passed anchors through `"$(eval echo $old)"`, which
+  word-splits and strips ALL leading whitespace. Four lease controls ran on anchors I did not
+  write and matched only by luck of uniqueness.
+- **R6** — every verdict exited 0, so nothing could gate on it; dropping the runner argument
+  entirely reported a confident `NOTHING REDDENED` about code never executed (`"$@"` empty is
+  a no-op exiting 0, exempt from `set -u`).
+- **R7 — a NET DELETION, and the lesson is about judgment.** The 0/1/2/3 exit-code protocol
+  added in R6 had NO caller anywhere in the repo, and its `DIFFERS` branch shared exit 0 with
+  `REDDENS` — reinstating in the same commit the "distinction lives only in prose" flaw the
+  codes were added to remove. **I implemented a review's PREMISE ("nothing can gate on this")
+  instead of a need.** Deleted, along with a success-marker guard that was exactly redundant
+  with the exit-status check. `PROBE FAILED` keeps exit 1.
+
+**Standing limit, stated rather than papered over:** a baseline that merely exits 0 is not
+proof the runner can OBSERVE anything. A true positive control needs a canary mutation known
+to diverge, run once per batch. It does not exist — do not read `NOTHING REDDENED` as proof of
+no coverage without one.
+
+**`lease-diff.sh`'s two checks are COMPLEMENTS** (its comment previously claimed the opposite,
+which is the sentence a reader would have trusted). Both halves measured: a degraded PORT
+leaves the oracle-derived counts untouched, so the gate passes and the DIFF fires; a degraded
+SEQUENCE makes both sides agree, so the diff passes and the GATE fires (`VACUOUS: ok=3
+conflicted=8 released=1`).
 
 ### ROUNDS 2-4 — every review of a fix found the fix defective
 **The base rate is the finding.** Rounds 2, 3 and 4 each found the PREVIOUS round's fix wrong.
@@ -122,12 +155,13 @@ difference — but every call site has to drop the await). One item left:
    (`insertOrUpdateEvidence`). It also spawns two siblings needing their own ports —
    `lib/check-supervisor.mjs` and `lib/regex-worker.mjs` — plus `lib/process-tree.mjs`, ported.
 
-   **Use `tests/mutate-probe.sh` for every control, and pass anchors as ordinary quoted
-   arguments.** Hand-rolled probes produced THREE false results in this port: one reported a
-   syntax error as nine catches; one ran with anchors that `eval echo` had stripped of all
-   leading whitespace (they matched only by luck of uniqueness); and the harness itself would
-   have reported REDDENS for any anchor while the tree was already failing — it now runs the
-   runner once BEFORE mutating and refuses to proceed unless that baseline is green.
+   **Use `tests/mutate-probe.sh` for every control, and pass anchors as ordinary QUOTED
+   arguments** — never `"$(eval echo $old)"`, which strips all leading whitespace. Read the
+   verdict from stdout and do NOT pipe the script through a filter: a pipeline returns its
+   last command's status, discarding even `PROBE FAILED`. Hand-rolled probes produced FOUR
+   false results in this port: a syntax error counted as nine catches; anchors silently
+   stripped by `eval echo`; REDDENS for any anchor while the tree was already red; and a
+   dropped runner argument reported as `NOTHING REDDENED`. The harness now guards each.
 
    `runRolling(tasks, limit)` is the first place the sync-vs-async choice stops being free:
    it is bounded concurrency over promises, so a synchronous port needs threads or processes
