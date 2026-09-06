@@ -49,7 +49,7 @@ failed = 0
 # not doing" failure: a documented hole is still a hole. atexit rather than wrapping each
 # section in try/except, because it needs no re-indentation and it reports the same fact.
 SECTIONS = ["regex_worker", "check_supervisor", "windows_taskkill_path", "process_tree",
-            "gates_helpers"]
+            "gates_helpers", "jsapi"]
 completed = []
 
 
@@ -363,6 +363,46 @@ finally:
     shutil.rmtree(_js_root, ignore_errors=True)
     shutil.rmtree(_py_root, ignore_errors=True)
 completed.append("gates_helpers")
+
+# --- jsapi: the JS built-ins a Python idiom gets wrong -------------------------------------
+# Object key enumeration order, localeCompare collation, and Date.parse. The oracle here is the
+# JS ENGINE, not a gates.mjs function, so the driver calls the built-ins raw.
+_js = subprocess.run(["node", os.path.join(TESTS, "jsapi-drive.mjs")],
+                     capture_output=True, text=True, timeout=60)
+_py = subprocess.run([sys.executable, os.path.join(TESTS, "jsapi_drive.py")],
+                     capture_output=True, text=True, timeout=60)
+report(_js.returncode == 0 and _py.returncode == 0, "jsapi: both drivers ran",
+       (_js.stderr + _py.stderr).strip()[-300:])
+_jr = json.loads(_js.stdout) if _js.returncode == 0 else []
+_pr = json.loads(_py.stdout) if _py.returncode == 0 else []
+
+# The DECLARED exception, asserted rather than hidden: Date.parse also accepts formats ECMA-262
+# leaves implementation-defined ("Jan 1 2020"), and the port returns None for them. Those rows
+# are excluded from the equality check HERE -- one place, where the exception's shape can be
+# checked -- instead of being dropped from the corpus, which would make the suite agree by not
+# looking.
+_DECLARED = "declared non-ISO"
+_cmp = [(a, b) for (ka, a), (_kb, b) in zip(_jr, _pr) if _DECLARED not in ka]
+_diff = next((f"{a!r} != {b!r}" for a, b in _cmp if a != b), "")
+report(_jr and _pr and not _diff and len(_jr) == len(_pr),
+       "jsapi: port matches the engine on every non-declared row",
+       _diff[:300] or f"{len(_cmp)} compared of {len(_jr)}/{len(_pr)}")
+_dec = [(a, b) for (ka, a), (_kb, b) in zip(_jr, _pr) if _DECLARED in ka]
+report(bool(_dec) and all(isinstance(a, int) and b is None for a, b in _dec),
+       "jsapi: the declared non-ISO exception has the shape it claims", str(_dec)[:200])
+
+# Vacuity controls for the two shims whose whole value is being UNLIKE the obvious Python idiom.
+# Without these, a shim that had quietly degraded to `sorted()` or to insertion order would pass
+# the equality check the day someone made the drivers agree.
+_by = dict(_jr)
+report(_by.get("keys mixed") != sorted(_by.get("keys mixed", [])) and
+       _by.get("keys mixed") == ["2", "10", "b", "a", "01", "-1"],
+       "jsapi: JS key order really is not insertion or sorted order (vacuity control)",
+       str(_by.get("keys mixed")))
+report(_by.get("localeCompare pairs") != sorted(_by.get("localeCompare pairs", [])),
+       "jsapi: localeCompare really differs from code-point order (vacuity control)",
+       str(_by.get("localeCompare pairs")))
+completed.append("jsapi")
 
 # INLINE, before the exit, so a missing section actually FAILS the run. The atexit hook alone
 # was decorative for the case it was written for: a section that returns early WITHOUT raising
