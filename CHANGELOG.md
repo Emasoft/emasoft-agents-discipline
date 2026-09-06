@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.1] — 2026-09-06
+
+### Bug Fixes
+
+- Drop the cpv divergence key from plugin.json (cf934a4)
 ## [1.0.0] — 2026-09-06
 
 ### Documentation
@@ -16,6 +21,7 @@ All notable changes to this project will be documented in this file.
 
 - Set the pre-release version to 0.9.0 (6eb0f83)
 - Point the marketplace notification at Emasoft/emasoft-plugins (74bfd6a)
+- Bump version to 1.0.0 (7466acc)
 
 ### Refactor
 

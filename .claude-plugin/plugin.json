@@ -1,6 +1,6 @@
 {
   "name": "emasoft-agents-discipline",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Delegation and completion discipline for substantial autonomous agent work: a unit-count gate with a DELEGATION.md ledger and one fresh subagent per unit, plus acceptance gates with an approval-bound checker, Depth Tree decomposition, and an optional Stop hook so no leaf lands half-done.",
   "author": {
     "name": "Emasoft",
