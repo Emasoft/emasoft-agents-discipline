@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Keep a stable process-group leader alive until CHECK stdio closes.
-# Zero dependencies. Python 3.9+.
+# Zero dependencies. Python 3.11+ (the floor the ported ledger checker sets; see
+# tests/python-lib-checks.py, which states and enforces it).
 
 import os
 import signal as signal_module

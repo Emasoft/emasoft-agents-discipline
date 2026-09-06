@@ -351,6 +351,22 @@ const cases = [
     expect: ["older than the ledger", "tests/fixtures/complete.md"],
   },
   {
+    // The CONTROL for the case above, and it belongs in the suite rather than in a commit
+    // message: byte-for-byte the same ledger except for one digit in `Created:`, so the same
+    // future date and the same citation now yield COMPLETE. Without it, "the T24 case
+    // discriminates" rests on a one-off measurement that never runs again.
+    // `T24:00:01` and not merely an unparseable string, because it pins the TIGHTENING too:
+    // hour 24 is legal ISO only as exactly 24:00:00, and Date.parse returns NaN for this one
+    // (measured). A rewrite loose enough to accept it — the `(:.*)?` this replaced — makes
+    // the port ENFORCE staleness where the oracle skips it, and this pair is what says so:
+    // both cases would then report stale, and only one of them should.
+    name: "hour 24 with a non-zero second skips the rule, as Date.parse does",
+    file: "tests/fixtures/created-unparseable.md",
+    want: 0,
+    expect: ["artifacts:   1 cited, all present"],
+    reject: ["older than the ledger"],
+  },
+  {
     // Node reports a signal death as `status: null`, which the oracle's `typeof === "number"`
     // test renders as `exit 1`; Python reports it as returncode -9. Same verdict, different
     // line — and the ledger's own printed output is the artifact a human reads, so a row that

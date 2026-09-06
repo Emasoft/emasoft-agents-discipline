@@ -1,5 +1,6 @@
 """Best-effort process-tree cleanup shared by the gate runner and tests.
-Zero dependencies. Python 3.9+.
+Zero dependencies. Python 3.11+ (the floor the ported ledger checker sets; see
+tests/python-lib-checks.py, which states and enforces it).
 """
 
 import ntpath
@@ -179,6 +180,11 @@ def terminate_process_tree(child, options=None):
 
 
 def _child_kill(child, sig):
+    # An OSError from here propagates to the caller's `except OSError`, which reports "child
+    # fallback failed" — where the oracle's kill() returns false for both ESRCH and EPERM and
+    # so reports "returned false". Diagnostic-only (`ok` is False either way), and ESRCH is
+    # unreachable for a Popen-owned child anyway: send_signal polls first, and a zombie is
+    # still signalable, so os.kill cannot answer ESRCH here.
     # NOT REACHABLE PARITY, and chasing it further would be pretending: Node's `kill()` asks
     # "have I NOTICED the exit yet?" and poll() asks "has it exited?". Between the OS reaping
     # a process and libuv delivering the exit event, the oracle signals a zombie, succeeds and
@@ -279,7 +285,7 @@ def _run_self_check(child, pgid, members):
     # after the kill. A single snapshot in that window reads it as a survivor and fails a
     # correct kill. (`members()` matches on pgid alone, so a recycled pgid inside the window
     # would read as a survivor too -- vanishingly unlikely, and named rather than guarded.)
-    survivors = ["(not yet sampled)"]
+    survivors = []
     for _ in range(40):
         survivors = members()
         if not survivors:
