@@ -20,6 +20,7 @@ Run: python3 tests/python-lib-checks.py   (also runs as the last step of `npm te
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 
@@ -144,12 +145,18 @@ ENVS = [
 ]
 js_out = subprocess.run(
     ["node", "--input-type=module", "-e",
-     # json.dumps, not an f-string in quotes: this path lands inside a JS string literal, and
-     # a Windows path is full of backslash escapes. Measured — node reads
-     # "C:\Users\test\scripts\lib\process-tree.mjs" as "C:Users<TAB>estscriptslibprocess-tree.mjs"
-     # (\U, \l, \p dropped, \t a tab), so the ONE case written to cover the Windows branch
-     # would be the one that breaks on Windows, failing with a path nobody typed.
-     f'import {{ windowsTaskkillPath }} from {json.dumps(os.path.join(LIB, "process-tree.mjs"))};'
+     # A file:// URI, JSON-quoted. Two separate defects, and fixing only the first leaves the
+     # case broken with a quieter message:
+     #   1. The path lands inside a JS string literal, and a Windows path is backslash
+     #      escapes. Measured: node reads "C:\Users\test\scripts\lib\x.mjs" as
+     #      "C:Users<TAB>estscriptslibx.mjs" — \U, \l, \p lose the backslash, \t is a tab.
+     #   2. Even correctly escaped, a bare `C:\...` is not a valid ESM specifier — Node's
+     #      loader wants a file:// URL and answers ERR_UNSUPPORTED_ESM_URL_SCHEME.
+     # as_uri() answers both: no backslashes, no quotes, percent-encoded, and it is the form
+     # Node documents for every platform. Verified to import on POSIX; the Windows half rests
+     # on Node's documented specifier rule, not on a run — there is no Windows machine here.
+     f'import {{ windowsTaskkillPath }} from '
+     f'{json.dumps(pathlib.Path(os.path.join(LIB, "process-tree.mjs")).as_uri())};'
      f'console.log(JSON.stringify({json.dumps(ENVS)}.map((e) => windowsTaskkillPath(e) ?? null)));'],
     capture_output=True, text=True, timeout=30,
 )
@@ -193,6 +200,30 @@ else:
         report(js_kill["membersBefore"] >= 3 and py_kill["membersBefore"] >= 3,
                "process_tree: both saw a live 3-member group before killing it (vacuity control)",
                f"js={js_kill['membersBefore']} py={py_kill['membersBefore']}")
+
+    # The FALLBACK arm, reached by injecting a group kill that throws ESRCH. It holds
+    # `_child_kill`, which has been fixed three times and had never been executed by any test
+    # in either runtime — every defect this module produced lives off the happy path the
+    # comparison above walks. It found one immediately: the oracle reads `error.code` (the
+    # errno NAME) and the port read `error.strerror`, so the same failure printed
+    # "process-group kill failed (ESRCH)" in one runtime and "(No such process)" in the other.
+    py_fb = process_tree._self_check(fail_group_kill=True)
+    js_fb_out = subprocess.run(
+        ["node", os.path.join(TESTS, "process-tree-drive.mjs"), "--fail-group-kill"],
+        capture_output=True, text=True, timeout=60)
+    if js_fb_out.returncode != 0:
+        report(False, "process_tree: oracle fallback could not be driven",
+               js_fb_out.stderr.strip()[:160])
+    else:
+        js_fb = json.loads(js_fb_out.stdout)
+        report(js_fb == py_fb, "process_tree: group-kill FALLBACK — port matches oracle",
+               "" if js_fb == py_fb else f"js={js_fb} py={py_fb}")
+        # Vacuity control: if the injection did not take, this would be the happy path again
+        # and would agree just as well. The fallback flag must actually be set.
+        report(py_fb["fallback"] is True and js_fb["fallback"] is True
+               and "fallback requested" in (py_fb["diagnostic"] or ""),
+               "process_tree: the injected failure really reached the fallback (vacuity control)",
+               str(py_fb["diagnostic"]))
 
 print("all pass" if not failed else f"{failed} FAILED")
 sys.exit(1 if failed else 0)

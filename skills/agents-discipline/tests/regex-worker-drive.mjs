@@ -17,8 +17,10 @@ import { fileURLToPath } from "node:url";
 
 // Reads ALL of stdin; the port reads ONE line. Identical while a caller sends one message
 // (JSON.stringify escapes newlines), and the first divergence the moment anyone sends two.
-// Never call process.exit() here: stdout is a pipe, the reply write is async, and a pending
-// write is what keeps this process alive long enough to flush it.
+// Never exit before the write callback fires. stdout and stderr are both pipes here and both
+// writes are async, so an immediate process.exit() can truncate either one. The reply path
+// needs no exit at all (the pending write keeps the process alive); the error path does exit,
+// because a non-zero status is its signal — but only from inside the callback.
 const message = JSON.parse(readFileSync(0, "utf8"));
 const worker = new Worker(
   resolve(dirname(fileURLToPath(import.meta.url)), "../scripts/lib/regex-worker.mjs"),
@@ -33,7 +35,8 @@ worker.once("message", (reply) => {
 // REPLY has that exact shape, so a broken shim would otherwise be indistinguishable from an
 // oracle that correctly rejected a bad pattern, and the comparison would pass on two failures.
 worker.once("error", (err) => {
-  process.stderr.write(`regex-worker-drive: could not run the oracle: ${err.message}\n`);
-  worker.terminate().finally(() => process.exit(1));
+  process.stderr.write(`regex-worker-drive: could not run the oracle: ${err.message}\n`, () => {
+    worker.terminate().finally(() => process.exit(1));
+  });
 });
 worker.postMessage(message);

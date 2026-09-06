@@ -3,6 +3,7 @@ Zero dependencies. Python 3.11+ (the floor the ported ledger checker sets; see
 tests/python-lib-checks.py, which states and enforces it).
 """
 
+import errno
 import ntpath
 import os
 import re
@@ -40,12 +41,25 @@ def windows_taskkill_path(env=None):
     return None
 
 
+def _err_code(error):
+    """The oracle's `error.code || error.message`, which is the errno NAME, not its prose.
+
+    Node puts "ESRCH"/"EPERM" in `.code`; the nearest Python field is `.strerror`, which is
+    "No such process" — a different string in every diagnostic this module emits. Measured
+    side by side on the fallback path: the oracle said `process-group kill failed (ESRCH)`
+    and the port said `process-group kill failed (No such process)`. These strings are the
+    artifact a human reads out of a failed cleanup, so they have to be the same string.
+    """
+    number = getattr(error, "errno", None)
+    return (errno.errorcode.get(number) if number is not None else None) or str(error)
+
+
 def _sync_failure(result):
     if not result:
         return "returned no result"
     if result.get("error"):
         error = result["error"]
-        return getattr(error, "code", None) or str(error) or "spawn error"
+        return _err_code(error) or "spawn error"
     if result.get("signal"):
         return "signal " + str(result["signal"])
     if result.get("status") != 0:
@@ -86,7 +100,7 @@ def terminate_process_tree(child, options=None):
                 return {
                     "ok": True,
                     "fallback": True,
-                    "diagnostic": "process-group kill failed (" + (error.strerror or str(error)) +
+                    "diagnostic": "process-group kill failed (" + _err_code(error) +
                         "); supervisor already exited",
                 }
             try:
@@ -95,21 +109,21 @@ def terminate_process_tree(child, options=None):
                     return {
                         "ok": False,
                         "fallback": True,
-                        "diagnostic": "process-group kill failed (" + (error.strerror or str(error)) +
+                        "diagnostic": "process-group kill failed (" + _err_code(error) +
                             "); child fallback returned false",
                     }
                 return {
                     "ok": True,
                     "fallback": True,
-                    "diagnostic": "process-group kill failed (" + (error.strerror or str(error)) +
+                    "diagnostic": "process-group kill failed (" + _err_code(error) +
                         "); child fallback requested",
                 }
             except OSError as fallback_error:
                 return {
                     "ok": False,
                     "fallback": True,
-                    "diagnostic": "process-group kill failed (" + (error.strerror or str(error)) +
-                        "); child fallback failed (" + (fallback_error.strerror or str(fallback_error)) + ")",
+                    "diagnostic": "process-group kill failed (" + _err_code(error) +
+                        "); child fallback failed (" + _err_code(fallback_error) + ")",
                 }
 
     # taskkill addresses the stored leader PID, unlike a POSIX process-group
@@ -141,7 +155,7 @@ def terminate_process_tree(child, options=None):
             )
             failure = _sync_failure(result)
         except OSError as error:
-            failure = error.strerror or str(error) or "spawn threw"
+            failure = _err_code(error) or "spawn threw"
 
     if not failure:
         return {"ok": True, "fallback": False, "diagnostic": None, "command": command}
@@ -175,7 +189,7 @@ def terminate_process_tree(child, options=None):
             "fallback": True,
             "command": command,
             "diagnostic": "taskkill failed (" + failure + "); child fallback failed (" +
-                (error.strerror or str(error)) + ")",
+                _err_code(error) + ")",
         }
 
 
@@ -210,7 +224,7 @@ def _child_kill(child, sig):
     return child.returncode is None
 
 
-def _self_check():
+def _self_check(fail_group_kill=False):
     """Kill a REAL detached group with a backgrounded grandchild, then prove it is gone.
 
     The point of this module is reaping descendants, and "the module imports" cannot see a
@@ -230,6 +244,13 @@ def _self_check():
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     pgid = os.getpgid(child.pid)
+    # If setsid had not taken, getpgid would answer OUR pgid — and the `finally` below would
+    # then killpg the test runner and everything in its group. Essentially unreachable
+    # (setsid fails only with EPERM, and a freshly forked child is never already a group
+    # leader), but the consequence of being wrong is "the suite kills itself", so it is
+    # cheaper to assert than to reason about. The oracle degrades safely here by taking
+    # child.pid directly; this side does not, which is why only this side needs the guard.
+    assert pgid != os.getpgid(0), f"setsid did not take: the child shares our group {pgid}"
 
     # ps snapshot FIRST, then read it: a live `pgrep -f`/`ps | grep` matches the very shell
     # running the pipeline, because that shell carries the pattern in its own argv.
@@ -255,7 +276,7 @@ def _self_check():
     # bash plus ONE sleep, the other not yet spawned. The control fired on that -- an
     # assertion that failed for the right reason before it ever passed.
     try:
-        return _run_self_check(child, pgid, members)
+        return _run_self_check(child, pgid, members, fail_group_kill)
     finally:
         # A leak-detection check that LEAKS on failure is the irony this guard exists to
         # avoid: every assertion below fires while two `sleep 47` processes are alive, and an
@@ -268,7 +289,13 @@ def _self_check():
             pass
 
 
-def _run_self_check(child, pgid, members):
+def _fails_esrch(*_args):
+    # ESRCH, because that is the errno a group kill answers when the group is already gone --
+    # the realistic way the fallback arm is reached.
+    raise OSError(errno.ESRCH, os.strerror(errno.ESRCH))
+
+
+def _run_self_check(child, pgid, members, fail_group_kill=False):
     alive = []
     for _ in range(40):
         alive = members()
@@ -277,8 +304,20 @@ def _run_self_check(child, pgid, members):
         time.sleep(0.05)
     assert len(alive) >= 3, f"expected the bash and its two sleeps in group {pgid}, saw {alive}"
 
-    result = terminate_process_tree(child)
+    result = terminate_process_tree(child, {"killGroup": _fails_esrch} if fail_group_kill else None)
     assert result["ok"], result
+    # The fallback signals only the DIRECT child, so the two backgrounded sleeps are meant to
+    # survive it -- that arm is about `_child_kill` reporting honestly, not about reaping.
+    # The `finally` in _self_check clears the group either way.
+    if fail_group_kill:
+        child.wait(timeout=5)
+        return {
+            "membersBefore": len(alive),
+            "ok": result["ok"],
+            "fallback": result["fallback"],
+            "diagnostic": result["diagnostic"],
+            "survivors": None,
+        }
     child.wait(timeout=5)
     # Polled, not one snapshot: `wait` reaps only the DIRECT child, so a backgrounded sleep is
     # reparented to init and lingers as a <defunct> entry still carrying the pgid for a moment
