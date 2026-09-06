@@ -18,7 +18,7 @@ import time
 # separators U+001C-U+001F and U+0085 the other). Every `.trim()` in the gates.mjs half is ported
 # through this helper rather than str.strip(); see jsapi.js_trim for the measured sets.
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
-    js_length, js_slice, js_string, js_trim, js_truthy,
+    js_length, js_slice, js_sort_key, js_string, js_trim, js_truthy,
 )
 
 AGENTS_DISCIPLINE_DIR = ".agents-discipline"
@@ -764,6 +764,175 @@ def scope_root(root, scope):
     # the doubled separator. Callers pass an already-resolved root, so this only matters for a
     # caller that does not -- which is exactly the case a silent divergence would hide.
     return os.path.normpath(os.path.join(root, AGENTS_DISCIPLINE_DIR, scope))
+
+
+def same_file_identity(left, right):
+    """Two stat results name the same file. Mapping-or-attribute, because the oracle's callers
+    pass plain objects (`{dev, ino}`) as well as real stat results, and hardening-tests does
+    exactly that."""
+    def field(value, name):
+        return value[name] if isinstance(value, dict) else getattr(value, "st_" + name)
+    return field(left, "dev") == field(right, "dev") and field(left, "ino") == field(right, "ino")
+
+
+def _named_entry(file):
+    """The oracle's namedEntry: any lstat outcome EXCEPT ENOENT counts as present.
+
+    The asymmetry is deliberate upstream -- an entry that exists but cannot be stat'ed must
+    stay visible as bad input rather than collapse into the harmless "no such thing" answer.
+    Reproduce the polarity exactly: an inverted default here turns an unreadable scope into a
+    silent success.
+    """
+    try:
+        os.lstat(file)
+        return True
+    except OSError as error:
+        return error.errno != errno.ENOENT
+
+
+def _real_directory_inside(root, directory):
+    """A real (non-symlink) directory whose resolved path lies inside the resolved root."""
+    try:
+        named = os.lstat(directory)
+        if statmod.S_ISLNK(named.st_mode) or not statmod.S_ISDIR(named.st_mode):
+            return False
+        # strict=True, because the oracle's realpathSync THROWS on a missing path and lands in
+        # the catch (=> False). Python's default realpath silently returns a non-existent path,
+        # which would then be compared and could answer True for a path that is not there.
+        return _path_is_inside(os.path.realpath(os.path.abspath(root), strict=True),
+                               os.path.realpath(directory, strict=True))
+    except OSError:
+        return False
+
+
+def list_scopes(root):
+    directory = os.path.join(root, AGENTS_DISCIPLINE_DIR)
+    if not os.path.exists(directory):
+        return []
+    try:
+        if not _real_directory_inside(root, directory):
+            return []
+        # is_dir(follow_symlinks=False) is BOTH of the oracle's first two filters at once:
+        # withFileTypes dirents carry lstat semantics, so a symlink-to-directory is
+        # isDirectory()=false there. Following symlinks here would admit exactly the entry the
+        # oracle's second filter exists to reject.
+        # js_sort_key even here, where validate_scope_id has already confined every surviving
+        # name to [A-Za-z0-9._-] and the two orders provably agree. The oracle spells both
+        # sorts the same way; spelling one of them differently because THIS one is currently
+        # unreachable by the divergence leaves a trap for whoever widens the id charset.
+        return sorted((entry.name for entry in os.scandir(directory)
+                       if entry.is_dir(follow_symlinks=False) and entry.name != "locks"
+                       and not validate_scope_id(entry.name)
+                       and _real_directory_inside(root, os.path.join(directory, entry.name))),
+                      key=js_sort_key)
+    except OSError:
+        return []
+
+
+def _markdown_discovery(root, directory):
+    if not _named_entry(directory):
+        return {"files": [], "errors": []}
+    try:
+        if not _real_directory_inside(root, directory):
+            return {"files": [], "errors": [
+                "gate directory must be a real directory inside the repository: " + directory]}
+        # Every named Markdown entry, unfiltered by type. Consumers run the stable-file check,
+        # so a FIFO, link or directory surfaces as an error rather than vanishing as "no gates".
+        # Joins FIRST, then sorts -- the oracle's order of operations, kept rather than
+        # "simplified" to sorting the names. The two agree only because the prefix is
+        # identical for every entry here, and reasoning that out again at each edit is exactly
+        # how a port drifts; matching the oracle costs nothing and needs no such argument.
+        files = sorted((os.path.join(directory, entry.name) for entry in os.scandir(directory)
+                        if entry.name.endswith(".md")), key=js_sort_key)
+        return {"files": files, "errors": []}
+    except OSError as error:
+        return {"files": [], "errors": [
+            "cannot inspect gate directory " + directory + ": " + _err_code(error)]}
+
+
+def _scope_discovery(root, scope):
+    base = scope_root(root, scope)
+    if not _real_directory_inside(root, base):
+        return {"files": [], "errors": [
+            "scope directory must be a real directory inside the repository: " + base]}
+    files = []
+    top = os.path.join(base, "GATES.md")
+    if _named_entry(top):
+        files.append(top)
+    nested = _markdown_discovery(root, os.path.join(base, "gates"))
+    files.extend(nested["files"])
+    return {"files": files, "errors": nested["errors"]}
+
+
+def _legacy_discovery(root):
+    files = []
+    top = os.path.join(root, "GATES.md")
+    if _named_entry(top):
+        files.append(top)
+    nested = _markdown_discovery(root, os.path.join(root, "gates"))
+    files.extend(nested["files"])
+    return {"files": files, "errors": nested["errors"]}
+
+
+def scope_files(root, scope):
+    return _scope_discovery(root, scope)["files"]
+
+
+def legacy_files(root):
+    return _legacy_discovery(root)["files"]
+
+
+def _target_from_discovery(mode, scope, discovery):
+    return {"mode": mode, "scope": scope, "files": discovery["files"],
+            "discoveryErrors": discovery["errors"]}
+
+
+def resolve_target(options=None):
+    options = options or {}
+    root = os.path.abspath(options.get("root") or os.getcwd())
+    files = options.get("files") or []
+    if files:
+        return {"mode": "explicit", "scope": None,
+                "files": [os.path.abspath(os.path.join(root, f)) for f in files]}
+
+    scopes = list_scopes(root)
+    wanted = options.get("scope") or os.environ.get("AGENTS_DISCIPLINE_SCOPE") or None
+    if wanted:
+        invalid = validate_scope_id(wanted)
+        if invalid:
+            return {"mode": "none", "scope": wanted, "files": [], "error": invalid}
+        if wanted not in scopes:
+            scope_path = scope_root(root, wanted)
+            state_path = os.path.join(root, AGENTS_DISCIPLINE_DIR)
+            # A scope that is physically ABSENT is stale configuration and answers harmlessly.
+            # One that EXISTS but list_scopes excluded (link, file, FIFO, outside-root, or an
+            # unreadable state container) must stay visible as invalid input instead of
+            # collapsing into the same "no such scope" result.
+            if (_named_entry(scope_path)
+                    or (_named_entry(state_path) and not _real_directory_inside(root, state_path))):
+                return _target_from_discovery("scope", wanted, _scope_discovery(root, wanted))
+            return {
+                "mode": "none", "scope": wanted, "files": [],
+                "error": 'no such scope "' + wanted + '" under ' + AGENTS_DISCIPLINE_DIR +
+                         "/ (have: " + (", ".join(scopes) or "none") + ")",
+            }
+        return _target_from_discovery("scope", wanted, _scope_discovery(root, wanted))
+
+    if len(scopes) == 1:
+        return _target_from_discovery("scope", scopes[0], _scope_discovery(root, scopes[0]))
+    if len(scopes) > 1:
+        # Ambiguity is REFUSED, not guessed at. The session-binding branch that used to sit
+        # here served the Stop hook, which had no way to pass --scope; every caller now can.
+        return {
+            "mode": "none", "scope": None, "files": [], "ambiguous": scopes,
+            "error": str(len(scopes)) + " pipelines present (" + ", ".join(scopes) +
+                     "); pass --scope <id> or set AGENTS_DISCIPLINE_SCOPE. Refusing to guess.",
+        }
+
+    legacy = _legacy_discovery(root)
+    if legacy["files"] or legacy["errors"]:
+        return _target_from_discovery("legacy", None, legacy)
+    return {"mode": "none", "scope": None, "files": []}
 
 
 def status_log_path(root, scope):

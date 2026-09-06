@@ -426,3 +426,22 @@ def _days_from_civil(year, month, day):
     day_of_year = (153 * (month + (-3 if month > 2 else 9)) + 2) // 5 + day - 1
     day_of_era = year_of_era * 365 + year_of_era // 4 - year_of_era // 100 + day_of_year
     return era * 146097 + day_of_era - 719468
+
+
+def js_sort_key(value):
+    """Sort key reproducing `Array.prototype.sort()`'s DEFAULT order: UTF-16 code units.
+
+    JS compares strings by code UNIT and Python by code POINT, and the two disagree for every
+    astral character: U+1F600 is the surrogate pair D83D DE00, so it sorts BEFORE U+FFFD in JS
+    and AFTER it in Python. MEASURED against the oracle on a gates/ directory holding both --
+    plain `sorted()` reversed those two filenames, which reorders the gate list a checker
+    walks and, on a first-error-wins path, changes which failure a user is shown.
+
+    Big-endian is load-bearing, not stylistic: comparing UTF-16-BE BYTES is equivalent to
+    comparing the 16-bit units themselves, because the high byte of each unit is compared
+    first. The little-endian encoding of the same string does NOT have that property.
+    `surrogatepass` because a filename read from the filesystem can carry a lone surrogate,
+    which strict UTF-16 refuses to encode -- and a crash while merely SORTING would be a worse
+    divergence than the one this fixes.
+    """
+    return str(value).encode("utf-16-be", "surrogatepass")
