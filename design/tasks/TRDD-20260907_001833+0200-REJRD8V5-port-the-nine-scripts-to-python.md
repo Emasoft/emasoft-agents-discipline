@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T00:35:07+0200
+updated: 2026-09-07T00:36:35+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -58,7 +58,20 @@ revert. If no mutation isolates a row, that row does not earn its place.
    own option surface (`maxBytes`, `openFlags`, `label`, `stableSnapshot`) and its
    non-creating/non-truncating flag assertion. The Windows fstat-bracketing branch is
    unreachable on this machine — port it, mark it UNWITNESSED, do not pretend otherwise.
-2. **`gate-check.mjs`** (950 lines) — last, because it consumes all of the above.
+2. **`claim_leases` / `release_leases` / `read_leases` / `sleep`** — the lease trio plus the
+   one-liner. `globs_overlap` is already their conflict predicate, so this is the layer that
+   finally EXERCISES it against real lock files.
+3. **`gate-check.mjs`** (950 lines) — last, because it consumes all of the above.
+
+**Measured, so the remaining path is not a guess:** `gate-check.mjs` imports **23** names from
+`lib/gates.mjs`, and exactly **4** are unported — `claimLeases`, `releaseLeases`, `sleep`,
+`statCurrentNamedFile`. Items 1 and 2 above ARE that list; nothing else in the library blocks
+the final stage. Its own 30-odd private functions are a separate body of work: `parseArgs`,
+the approval store (`recordApproval`, `approvalExists`, `readApprovalFile`,
+`validatedApprovalDir`, `assertPrivateApprovalEntry`), the runner (`runCheck`, `runRolling`,
+`safeRegexMatch` and its Worker), and evidence rewriting (`insertOrUpdateEvidence`). It also
+spawns two siblings that need their own ports — `lib/check-supervisor.mjs` and
+`lib/regex-worker.mjs` — plus `lib/process-tree.mjs`, which is already ported.
 
 `readLeases` needs `releaseLeases`/`claimLeases` context and is dumped by no driver yet;
 `scopeFiles`/`legacyFiles` have ZERO callers in `scripts/` or `tests/` (verified) — ported
