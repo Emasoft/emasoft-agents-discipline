@@ -98,12 +98,23 @@ def _success_case():
         chunks.append(view)
         return len(view)
 
+    # This rebinds os.write PROCESS-WIDE, not just for gates: `gates.os` IS the global module
+    # object (verified: `gates.os is os`), and there is no gates-local alias to patch instead.
+    # Two things make that acceptable rather than merely convenient, and both were measured:
+    # the window contains exactly one call and no other statement, and print() does NOT route
+    # through the Python `os.write` name (checked by counting calls during a print), so the
+    # probe's own output is unaffected. The fd is -1 so that if the stub ever failed to install,
+    # the real os.write raises EBADF immediately instead of writing the payload somewhere.
     gates_module = sys.modules[_write_all.__module__]
     gates_module.os.write = short_write
     try:
-        _write_all(-1, PAYLOAD)          # fd is never touched: short_write ignores it
+        _write_all(-1, PAYLOAD)
     finally:
         gates_module.os.write = real_write
+    # Asserted, not assumed: a future edit that moves the restore out of the finally would
+    # otherwise leave every later os.write in this process returning a 4 KiB lie, and the two
+    # RLIMIT cases run AFTER this one.
+    assert os.write is real_write, "os.write was not restored"
 
     delivered = b"".join(chunks)
     ok = delivered == PAYLOAD and len(chunks) > 1
