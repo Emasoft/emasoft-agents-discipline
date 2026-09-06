@@ -39,7 +39,28 @@ echo "$label -> backup: $backup" >&2   # stderr: stdout carries the VERDICT
 # The restore is CHECKED: an unchecked cp that fails (read-only target, full disk) leaves the
 # mutant in the working tree while the script still prints a normal verdict, and the next
 # probe's baseline guard would report it as somebody else's problem.
-trap 'cp "$backup" "$target" || echo "RESTORE FAILED -- $target may still be MUTATED; original at $backup" >&2' EXIT INT TERM
+#
+# INT/TERM get their OWN handler that EXITS. A bash signal handler that does not exit returns
+# control to the script, so Ctrl-C during the runner killed the child, restored the file, and
+# then fell through to the verdict block -- printing NOTHING REDDENED about source that was no
+# longer mutated. MEASURED: interrupting a probe mid-run produced exactly that, which is this
+# harness's own headline failure mode reachable by a keystroke. 130 = 128 + SIGINT.
+# The backup is REMOVED once the restore succeeds -- every probe otherwise left a full copy of
+# the target in /tmp forever, and dozens accumulated in one session. It is kept, and its path
+# reported, ONLY when the restore failed, which is the one case where it is the recovery path
+# the startup line advertises.
+restore() {
+  # IDEMPOTENT. The EXIT trap still runs after the INT/TERM handler, so restore() is called
+  # TWICE on a signal -- and the first call removes the backup. Without this guard the second
+  # cp failed with "cannot stat" and printed "may still be MUTATED" about a file it had just
+  # correctly restored: a false alarm introduced by the cleanup and the signal handler landing
+  # in the same edit. A missing backup means the restore already happened.
+  [ -f "$backup" ] || return 0
+  if cp "$backup" "$target"; then rm -f "$backup"
+  else echo "RESTORE FAILED -- $target may still be MUTATED; original at $backup" >&2; fi
+}
+trap restore EXIT
+trap 'restore; echo "$label -> INTERRUPTED (no verdict; file restored)" >&2; exit 130' INT TERM
 
 # Guard 0. A pre-existing divergence makes every subsequent probe a false positive, so the
 # harness must establish its own baseline rather than assume one.
@@ -99,13 +120,14 @@ crashed=$(printf '%s\n' "$output" | grep -cE '^(CRASH|BUILD-FAILED|VACUOUS)')
 # Read the verdict from stdout, and do NOT pipe this script through a filter: a pipeline
 # returns its LAST command's status, which discards even the PROBE FAILED code.
 if [ "$diverged" -gt 0 ]; then
-  # For a target under tests/, DIVERGE may mean the DRIVERS were unpaired rather than that the
-  # implementation fix is load-bearing -- the harness cannot tell those apart, so it refuses to
-  # claim the stronger reading.
-  case "$target" in
-    */tests/*|tests/*) echo "$label -> DIFFERS ($diverged variant(s)) -- target is a DRIVER, so this may only mean the two drivers no longer match" ;;
-    *) echo "$label -> REDDENS ($diverged diverging variant(s)$([ "$crashed" -gt 0 ] && echo ", $crashed crash(es)"))" ;;
-  esac
+  # A DIFFERS branch for driver targets was DELETED here, by the same reasoning that deleted
+  # the exit codes: no probe has ever targeted a driver, so it was a dead branch carrying a
+  # caveat nobody had read, behind a glob nobody had exercised (and one that misfires for a
+  # repo checked out under a directory named tests/). Applying that reasoning to one unconsumed
+  # addition and not the other, in the same file, was the inconsistency.
+  # If you DO mutate a driver: DIVERGE then means the two drivers no longer match, NOT that an
+  # implementation fix is load-bearing. The harness cannot tell those apart; you must.
+  echo "$label -> REDDENS ($diverged diverging variant(s)$([ "$crashed" -gt 0 ] && echo ", $crashed crash(es)"))"
 elif [ "$crashed" -gt 0 ]; then
   # A crash is NOT a catch: the mutant broke the harness, so the probe proved nothing.
   echo "$label -> INCONCLUSIVE (only crashes, $crashed) -- the mutant broke the runner"
