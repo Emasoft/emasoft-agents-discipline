@@ -14,6 +14,11 @@ import stat as statmod
 import sys
 import time
 
+# `.trim()` is NOT `str.strip()`: the sets differ in both directions (U+FEFF one way, the five
+# separators U+001C-U+001F and U+0085 the other). Every `.trim()` in the gates.mjs half is ported
+# through this helper rather than str.strip(); see jsapi.js_trim for the measured sets.
+from jsapi import js_trim  # noqa: E402  # type: ignore[import-not-found]
+
 AGENTS_DISCIPLINE_DIR = ".agents-discipline"
 LOCK_DIR = os.path.join(AGENTS_DISCIPLINE_DIR, "locks")
 DEFAULT_STABLE_FILE_MAX_BYTES = 8 * 1024 * 1024
@@ -287,7 +292,7 @@ def parse_regex(expect):
 
 def normalize_owns_glob(value):
     """Canonicalize an OWNS path: relative, backslash-free, no traversal, no implicit root."""
-    raw = str(value or "").strip().replace("\\", "/")
+    raw = js_trim(str(value or "")).replace("\\", "/")
     if raw.startswith("./"):
         raw = raw[2:]
     if not raw:
@@ -338,10 +343,10 @@ def parse_gates(text, options=None):
         gate_match = _GATE_RE.match(line)
         if gate_match:
             seen_gate = True
-            raw_title = gate_match.group(2).strip()
+            raw_title = js_trim(gate_match.group(2))
             id_match = _ID_MATCH_RE.match(raw_title)
             gate_id = id_match.group(1) if id_match else "L" + str(index + 1)
-            title = raw_title[len(id_match.group(0)):].strip() if id_match else raw_title
+            title = js_trim(raw_title[len(id_match.group(0)):]) if id_match else raw_title
             current = {
                 "line": index,
                 "checked": gate_match.group(1).lower() == "x",
@@ -402,7 +407,7 @@ def parse_gates(text, options=None):
         if any_attr is not None and current is not None:
             attr_match = any_attr
             key = attr_match.group(2).lower()
-            value = attr_match.group(3).strip()
+            value = js_trim(attr_match.group(3))
             current_seen = seen_attrs[len(gates) - 1]
             if key in current_seen:
                 errors.append("line " + str(index + 1) + ": duplicate " + attr_match.group(2) +
@@ -418,7 +423,7 @@ def parse_gates(text, options=None):
         abandon_match = _ABANDON_RE.match(line)
         if abandon_match:
             abandon_id = _TRAILING_COLON_RE.sub("", abandon_match.group(1))
-            reason = abandon_match.group(2).strip()
+            reason = js_trim(abandon_match.group(2))
             if not abandon_id:
                 errors.append("line " + str(index + 1) + ": ABANDON needs a gate id and reason")
             elif not reason:
@@ -436,7 +441,7 @@ def parse_gates(text, options=None):
                 errors.append("line " + str(index + 1) + ": OWNS must appear before the first gate")
                 current = None
                 continue
-            declared = [item.strip() for item in owns_match.group(1).split(",") if item.strip()]
+            declared = [t for t in (js_trim(i) for i in owns_match.group(1).split(",")) if t]
             if not declared:
                 errors.append("line " + str(index + 1) + ": OWNS declares no paths")
             for item in declared:

@@ -415,7 +415,7 @@ _PORT_FIXTURES = pathlib.Path(TESTS) / "fixtures" / "port"
 _fixtures = sorted(_PORT_FIXTURES.glob("*.md"))
 # Counted, not globbed-and-hoped: an empty glob would make the loop below pass by running zero
 # comparisons — a green section that checked nothing.
-report(len(_fixtures) == 8, "parse_gates: the fixture corpus is present", f"{len(_fixtures)} found")
+report(len(_fixtures) == 9, "parse_gates: the fixture corpus is present", f"{len(_fixtures)} found")
 # ...but the COUNT alone is not enough, and measured: five ZERO-BYTE .md files satisfy it and
 # then parse identically on both sides (`errors: ["ledger contains zero live gates"]`), so all
 # six rows go green while nothing is tested. That is the same defect as the empty glob with one
@@ -467,6 +467,20 @@ _classes = {
     # pure ASCII -- the non-ASCII lived only in ids and titles, which the digest never reads.
     # So the guard was untested while two neighbouring unicode classes were green. Without this
     # predicate, ASCII-ising one fixture line silently restores that hole.
+    # A value padded with U+FEFF -- stripped by `.trim()`, kept by `str.strip()`. Both halves are
+    # load-bearing: the padding is IN the file, and the ORACLE's parse does not carry it. My first
+    # spelling was `any("﻿" not in check ...)`, which every ASCII fixture satisfies on its own --
+    # vacuous, in the same way three earlier predicates in this dict were.
+    #
+    # This guards the CORPUS, not the port: _oracle_docs is Node's output, so the second half
+    # holds no matter what the port does. Catching a port regression is the differential's job,
+    # and it does -- measured, reverting js_trim to str.strip() makes js-trim.md diverge.
+    "a value padded with JS-only whitespace": (
+        "﻿" in (_PORT_FIXTURES / "js-trim.md").read_text(encoding="utf-8")
+        and all("﻿" not in str(g.get(_f) or "")
+                for g in _oracle_docs.get("js-trim.md", {}).get("gates", [])
+                for _f in ("check", "expect", "title"))
+    ),
     "non-ASCII in a digested field": any(
         isinstance(g.get(_f), str) and not g[_f].isascii()
         for d in _all for g in d["gates"] for _f in ("check", "expect", "cwd")

@@ -85,4 +85,17 @@ for (const s of spec) {
   const key = DECLARED_NON_ISO.includes(s) ? "Date.parse (declared non-ISO) " : "Date.parse ";
   out.push([key + JSON.stringify(s), value]);
 }
+// trim(): every code point the two runtimes could disagree about, plus the ones they agree on,
+// asked as "does trimming (c + 'a' + c) leave 'a'". Built from code points rather than written
+// as characters -- the fixture attempt proved a markdown file cannot carry these reliably (a
+// trailing U+0085 was silently stripped, an escaped one became U+2026), and a corpus that
+// quietly loses its hostile input asserts nothing.
+const TRIM_PROBE = [
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0x85, 0xa0, 0x1680, 0x2000, 0x200a, 0x2028, 0x2029,
+  0x202f, 0x205f, 0x3000, 0xfeff, 0x1c, 0x1d, 0x1e, 0x1f, 0x180e, 0x200b, 0x61,
+];
+for (const cp of TRIM_PROBE) {
+  const c = String.fromCodePoint(cp);
+  out.push(["trim U+" + cp.toString(16).padStart(4, "0"), (c + "a" + c).trim() === "a"]);
+}
 process.stdout.write(JSON.stringify(out, null, 2) + "\n");

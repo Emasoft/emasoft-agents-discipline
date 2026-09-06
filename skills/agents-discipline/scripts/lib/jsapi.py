@@ -23,6 +23,43 @@ import datetime
 import re
 
 # ---------------------------------------------------------------------------------------------
+# String.prototype.trim
+# ---------------------------------------------------------------------------------------------
+
+# `.trim()` strips the ECMAScript WhiteSpace + LineTerminator set; `str.strip()` strips whatever
+# `str.isspace()` accepts. The two sets are NEITHER equal nor nested -- measured by asking both
+# runtimes about every code point from 0 to 0x10FFFF:
+#
+#     JS strips, Python does not:  U+FEFF
+#     Python strips, JS does not:  U+001C U+001D U+001E U+001F U+0085
+#
+# Both directions are live defects, and one of them shipped: an abandon reason of a single
+# U+FEFF was REFUSED by the oracle (trimmed to "", then rejected as blank) and ACCEPTED by the
+# port, which wrote the BOM into the shared dispatch.json as the reason. Exit 2 versus exit 0 on
+# the same command, on the file both runtimes read during the migration.
+#
+# Built with chr() from the code points, NOT written as characters and NOT as backslash-u
+# escapes. Both of those spellings put invisible bytes in this file: the literal version embedded
+# a raw CR and a raw newline and left the module unparseable, and so did the escaped version,
+# because the escapes are materialised before they reach the file. chr() is the only spelling
+# whose source stays pure ASCII, and it is also the only one that shows a reader the code points
+# by name. dispatch.py's control-character class learned this the same way.
+#
+# Python's `\s` is NOT a shortcut here: it carries the five separators above, so a `[\s...FEFF]`
+# class would fix the FEFF direction and leave the other one. (_safe_diagnostic in dispatch.py
+# can use that spelling only because its CONTROL pass has already replaced all five.)
+_JS_WHITESPACE = "".join(chr(c) for c in (
+    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0, 0x1680,
+    *range(0x2000, 0x200B), 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF,
+))
+
+
+def js_trim(value):
+    """`String(value).trim()` -- the ECMAScript set, not `str.strip()`'s."""
+    return str(value).strip(_JS_WHITESPACE)
+
+
+# ---------------------------------------------------------------------------------------------
 # Object key order
 # ---------------------------------------------------------------------------------------------
 

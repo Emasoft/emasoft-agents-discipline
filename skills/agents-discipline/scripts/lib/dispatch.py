@@ -22,7 +22,7 @@ from gates import (  # type: ignore[import-not-found]
     write_atomic,
 )
 from jsapi import (  # type: ignore[import-not-found]
-    js_entries, js_json_object, js_length, js_slice, parse_date,
+    js_entries, js_json_object, js_length, js_slice, js_trim, parse_date,
 )
 
 SCHEMA = 1
@@ -36,10 +36,12 @@ _CONTROL = re.compile(r"[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u20
 # Python does not, and CONTROL does not cover it, so a diagnostic containing a BOM would collapse
 # in one runtime and not the other.
 _JS_SPACE = re.compile(r"[\s\ufeff]+")
-# `.trim()` uses the same JS whitespace set, so one class does both. A
-# hand-typed str.strip() set is how literal control bytes -- including a NUL --
-# got into this file on the first write, so neither class is typed literally.
-_JS_TRIM = re.compile(r"^[\s\ufeff]+|[\s\ufeff]+$")
+# `.trim()` is jsapi.js_trim, NOT a regex here and NOT str.strip(). This comment used to claim
+# ".trim() uses the same JS whitespace set, so one class does both" -- true of the class, and
+# false of the code, because the two validators below called str.strip() and never touched it.
+# The gap was a shipped defect: an abandon reason of one U+FEFF exited 2 in the oracle and 0
+# here. A comment asserting a shared implementation is worth nothing while the callers each roll
+# their own; the helper is now the only spelling of trim in this file.
 
 
 class DispatchError(Exception):
@@ -70,7 +72,7 @@ def _safe_diagnostic(value):
     # message would otherwise be cut at a different point in each runtime. js_slice can return a
     # lone surrogate here, exactly as the oracle can.
     collapsed = _JS_SPACE.sub(" ", _CONTROL.sub(" ", str(value)))
-    return js_slice(_JS_TRIM.sub("", collapsed), 0, 500)
+    return js_slice(js_trim(collapsed), 0, 500)
 
 
 def _valid_id(value, label):
@@ -87,7 +89,7 @@ def _valid_id(value, label):
 def _valid_handle(value):
     if not isinstance(value, str):
         _fail("handle must be a string")
-    handle = value.strip()
+    handle = js_trim(value)
     # js_length, not len(): the oracle bounds this at 256 UTF-16 CODE UNITS. Measured, 200 emoji
     # are 400 units to JS and 200 code points to Python, so `len(...) > 256` would ACCEPT a handle
     # the oracle REJECTS -- and the handle is a wave's uniqueness key, so the two runtimes would
@@ -100,7 +102,7 @@ def _valid_handle(value):
 def _valid_reason(value):
     if not isinstance(value, str):
         _fail("reason must be a string")
-    reason = value.strip()
+    reason = js_trim(value)
     if not reason or js_length(reason) > 500 or _CONTROL.search(reason):
         _fail("reason must be printable, nonblank, and at most 500 characters")
     return reason

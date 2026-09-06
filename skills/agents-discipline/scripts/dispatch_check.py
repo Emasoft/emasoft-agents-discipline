@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from dispatch import (  # noqa: E402  # type: ignore[import-not-found]
     DispatchError, get_dispatch_wave, update_dispatch,
 )
+from jsapi import js_trim  # noqa: E402  # type: ignore[import-not-found]
 
 COMMANDS = ("open", "start", "seal", "return", "abandon", "status")
 OPTIONS = ("--root", "--scope", "--wave", "--leaf", "--handle", "--reason")
@@ -141,7 +142,10 @@ def main(argv):
     elif command == "abandon":
         if options["leaves"] or options["handle"] is not None:
             die("abandon does not accept --leaf or --handle")
-        if options["reason"] is None or not options["reason"].strip():
+        # js_trim, not .strip(): the oracle's `!options.reason.trim()` rejects a reason of one
+        # U+FEFF and .strip() does not, so this guard let an abandon through that the oracle
+        # refused -- exit 0 against exit 2, with the BOM written into the shared dispatch.json.
+        if options["reason"] is None or not js_trim(options["reason"]):
             die("abandon requires --reason")
     elif options["leaves"] or options["handle"] is not None or options["reason"] is not None:
         die(command + " does not accept --leaf, --handle, or --reason")

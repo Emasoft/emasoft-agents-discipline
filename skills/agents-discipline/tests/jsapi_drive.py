@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts", "lib"))
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
-    js_json_object, js_length, js_object_key_order, js_slice, locale_compare_key,
+    js_json_object, js_length, js_object_key_order, js_slice, js_trim, locale_compare_key,
     parse_date,
 )
 
@@ -84,6 +84,17 @@ for value in spec:
                     parsed])
     else:
         out.append(["Date.parse " + json.dumps(value, ensure_ascii=False), parsed])
+
+# trim(): the same probe as the oracle's. js_trim, NOT str.strip() -- str.strip() answers True
+# for the five separators the oracle leaves alone and False for U+FEFF, so a port built on it
+# diverges on 6 of these 24 rows. That was a shipped defect, not a hypothetical: an abandon
+# reason of one U+FEFF exited 2 in the oracle and 0 in the port.
+for _cp in (
+    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0x85, 0xA0, 0x1680, 0x2000, 0x200A, 0x2028, 0x2029,
+    0x202F, 0x205F, 0x3000, 0xFEFF, 0x1C, 0x1D, 0x1E, 0x1F, 0x180E, 0x200B, 0x61,
+):
+    _c = chr(_cp)
+    out.append(["trim U+" + format(_cp, "04x"), js_trim(_c + "a" + _c) == "a"])
 
 json.dump(out, sys.stdout, indent=2, ensure_ascii=False)
 sys.stdout.write("\n")
