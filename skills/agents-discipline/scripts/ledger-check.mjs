@@ -95,10 +95,18 @@ function isStrongEvidence(l) {
   for (const s of spans) {
     const inner = s.slice(1, -1).trim();
     if (/\s/.test(inner) || /[/.]/.test(inner)) return true;
+    // A runner word counts only when it IS the span -- `pytest`, `make`. The scan this
+    // replaced read the whole LINE and split on non-alphanumerics, so "I will go to the
+    // shop" was strong evidence: `go` is a runner. One English sentence satisfied the
+    // evidence requirement for an entire ledger.
+    if (RUNNER_WORDS.has(inner.toLowerCase())) return true;
   }
-  if (l.toLowerCase().split(/[^a-z0-9_]+/).some((w) => RUNNER_WORDS.has(w))) return true;
-  if (/\b[\w./-]+\.[a-z0-9]{1,5}\b/i.test(l)) return true;
-  if (/\b\d+\s*(passed|pass|ok|of)\b/i.test(l)) return true;
+  // {2,5}, not {1,5}: a one-character extension made "U.S.A." look like a filename.
+  // No real artifact this checker cares about has a single-char extension.
+  if (/\b[\w./-]+\.[a-z0-9]{2,5}\b/i.test(l)) return true;
+  // `of` dropped from the alternation: "3 of them" is not a measured result. "93 of 93
+  // passed" still matches on `passed`, so nothing honest is lost.
+  if (/\b\d+\s*(passed|pass|ok)\b/i.test(l)) return true;
   if (/exit\s+\d+/i.test(l)) return true;
   return false;
 }

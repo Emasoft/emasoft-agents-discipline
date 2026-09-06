@@ -82,6 +82,17 @@ const cases = [
     artifacts: ["reports/chained-1.txt"],
     expect: ["re-ran:      1 acceptance command(s), all passed"],
   },
+  {
+    // Ordinary English must not satisfy the evidence bar. Three separate holes, one
+    // fixture: `go` is a RUNNER_WORD and the scan read the whole LINE, `3 of them` hit
+    // the measured-result pattern via its `of` alternative, and `U.S.A.` looked like a
+    // filename to the extension pattern. Conjunctive on purpose -- evidenceOk is
+    // ledger-wide, so if ANY of the three still passes this assertion fails.
+    name: "ordinary English is not evidence",
+    file: "tests/fixtures/evidence-english.md",
+    want: 1,
+    expect: ["evidence:    MISSING"],
+  },
 ];
 
 for (const c of cases) {
