@@ -13,7 +13,8 @@
  */
 import { readFileSync } from "node:fs";
 import {
-  automaticEvidencePrefix, classifyGateEvidence, gateDefinitionDigest, gateState, parseGates, tail,
+  automaticEvidencePrefix, classifyGateEvidence, formatDocument, gateDefinitionDigest, gateState,
+  parseGates, qualify, tail,
 } from "../scripts/lib/gates.mjs";
 
 // Shapes a ledger cannot express, where classifyGateEvidence's three divergence classes meet:
@@ -127,4 +128,29 @@ process.stdout.write(JSON.stringify({
     id: g.id, evidence: classifyGateEvidence(g), state: gateState(g, doc.abandoned),
   })),
   synthetic: SYNTHETIC,
+  // THE ROUND TRIP, byte for byte. gate-check WRITES formatDocument's result over the user's
+  // tracked ledger, so a defect here corrupts a file rather than failing a check. Comparing the
+  // reconstruction to the SOURCE (not just JS-to-Python) makes this the one row that would catch
+  // a parse/format pair that is self-consistent in BOTH runtimes and still wrong.
+  // The finalNewline arm is UNREACHABLE from a parsed doc: parse keeps a trailing "" in `lines`
+  // whenever finalNewline is true, so the join already ends in the eol and the arm is a no-op.
+  // Measured -- disabling it changed NOTHING across all nine fixtures. It exists for a doc a
+  // CALLER mutated, which gate-check does when it rewrites gate lines, so these rows drive that
+  // shape directly. Without them the arm has no coverage at all.
+  formatSynthetic: [
+    { lines: ["a", "b"], eol: "\n", finalNewline: true },
+    { lines: ["a", "b"], eol: "\n", finalNewline: false },
+    { lines: ["a", "b", ""], eol: "\n", finalNewline: true },
+    { lines: ["a", "b"], eol: "\r\n", finalNewline: true },
+    { lines: ["a", "b", ""], eol: "\r\n", finalNewline: true },
+    { lines: [], eol: "\n", finalNewline: true },
+    { lines: [], eol: "\n", finalNewline: false },
+    { lines: [""], eol: "\n", finalNewline: true },
+  ].map((d) => JSON.stringify(formatDocument(d))),
+  roundTrip: formatDocument(doc) === readFileSync(process.argv[2], "utf8"),
+  roundTripBytes: [formatDocument(doc).length, readFileSync(process.argv[2], "utf8").length],
+  qualify: [["a/b.md", "g1"], ["b.md", "g1"], ["a/b/", "g1"], ["a/b//", "g1"], ["", "g1"],
+    ["/", "g1"], ["a/b.MD", "g1"], ["a/b.md/", "g1"], ["./x.md", "g1"], ["x.md\n", "g1"],
+    ["///", "g1"], ["a//", "g1"], ["no-ext", "g1"], [".md", "g1"], ["a.md.md", "g1"]]
+    .map(([f, id]) => qualify(f, id)),
 }, null, 2) + "\n");

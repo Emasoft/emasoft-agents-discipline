@@ -494,6 +494,47 @@ def parse_gates(text, options=None):
     }
 
 
+def format_document(doc):
+    """Port of formatDocument: re-join a parsed ledger into the bytes it came from.
+
+    Four lines, and the highest-risk function in this half -- not because it is subtle, but
+    because gate-check WRITES its result over the user's tracked ledger. A defect here does not
+    fail a check; it corrupts a file, and the corruption is invisible until someone diffs. The
+    guarantee that matters is therefore the ROUND TRIP, asserted byte-for-byte over every
+    fixture: parse_gates(text) -> format_document(...) must return `text` unchanged, including
+    its CRLF endings and the presence or absence of a final newline.
+    """
+    output = doc["eol"].join(doc["lines"])
+    if doc["finalNewline"] and not output.endswith(doc["eol"]):
+        output += doc["eol"]
+    return output
+
+
+# `\Z` not `$`, and re.A: JS `$` does not match before a trailing newline, so a label of
+# "x.md\n" keeps its extension in the oracle and a `$`-spelled port would strip it. re.A because
+# JS `i` on an ASCII pattern folds ASCII only.
+_MD_SUFFIX_RE = re.compile(r"\.md\Z", re.IGNORECASE | re.ASCII)
+
+
+def js_basename(value):
+    """`path.basename(String(value))` -- which os.path.basename is NOT.
+
+    MEASURED: Node strips TRAILING SEPARATORS first, so basename("a/b/") is "b". Python's
+    returns "" for the same input, and "" would then qualify every gate in such a ledger as
+    ":<id>" -- a different label for the same gate in the two runtimes. Three of thirteen probe
+    cases differed. `.rstrip("/")` before the split reproduces Node's rule for all thirteen.
+
+    POSIX rule only. `node:path`'s basename is platform-specific and so is os.path's; on Windows
+    both also split on "\\", and neither this nor the oracle's import is exercised there by any
+    test in this repository.
+    """
+    return os.path.basename(str(value).rstrip("/"))
+
+
+def qualify(file_or_label, gate_id):
+    return _MD_SUFFIX_RE.sub("", js_basename(file_or_label)) + ":" + gate_id
+
+
 # ---------------------------------------------------------------------------------------------
 # The gate-definition digest. This one is security-relevant: it is what binds a recorded
 # approval to the exact CHECK/EXPECT/CWD that was approved, so a digest that differs between

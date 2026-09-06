@@ -16,11 +16,12 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts", "lib"))
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
-    automatic_evidence_prefix, classify_gate_evidence, gate_definition_digest, gate_state,
-    parse_gates, read_stable_regular_file, tail,
+    automatic_evidence_prefix, classify_gate_evidence, format_document, gate_definition_digest,
+    gate_state, parse_gates, qualify, read_stable_regular_file, tail,
 )
 
-doc = parse_gates(read_stable_regular_file(sys.argv[1], label="gate ledger"))
+_SOURCE = read_stable_regular_file(sys.argv[1], label="gate ledger")
+doc = parse_gates(_SOURCE)
 
 # No key-stripping. An earlier version dropped a `_seen_attrs` set the port had put on every
 # gate dict, which made the shapes match while leaving the real difference in place — the
@@ -117,6 +118,22 @@ json.dump({
     "verdicts": [{"id": g["id"], "evidence": classify_gate_evidence(g),
                   "state": gate_state(g, doc["abandoned"])} for g in gates],
     "synthetic": _SYNTHETIC,
+    "formatSynthetic": [json.dumps(format_document(d), ensure_ascii=False) for d in [
+        {"lines": ["a", "b"], "eol": "\n", "finalNewline": True},
+        {"lines": ["a", "b"], "eol": "\n", "finalNewline": False},
+        {"lines": ["a", "b", ""], "eol": "\n", "finalNewline": True},
+        {"lines": ["a", "b"], "eol": "\r\n", "finalNewline": True},
+        {"lines": ["a", "b", ""], "eol": "\r\n", "finalNewline": True},
+        {"lines": [], "eol": "\n", "finalNewline": True},
+        {"lines": [], "eol": "\n", "finalNewline": False},
+        {"lines": [""], "eol": "\n", "finalNewline": True},
+    ]],
+    "roundTrip": format_document(doc) == _SOURCE,
+    "roundTripBytes": [len(format_document(doc)), len(_SOURCE)],
+    "qualify": [qualify(f, i) for f, i in [
+        ["a/b.md", "g1"], ["b.md", "g1"], ["a/b/", "g1"], ["a/b//", "g1"], ["", "g1"],
+        ["/", "g1"], ["a/b.MD", "g1"], ["a/b.md/", "g1"], ["./x.md", "g1"], ["x.md\n", "g1"],
+        ["///", "g1"], ["a//", "g1"], ["no-ext", "g1"], [".md", "g1"], ["a.md.md", "g1"]]],
     # ensure_ascii=False: json.dumps escapes non-ASCII to \uXXXX by default and
     # JSON.stringify does not, so a ledger with a non-Latin title diverged on the SERIALISER
     # rather than on the parse. Measured: "тесты пройдены ✓" came back as те...
