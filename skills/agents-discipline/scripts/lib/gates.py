@@ -510,9 +510,17 @@ def format_document(doc):
     return output
 
 
-# `\Z` not `$`, and re.A: JS `$` does not match before a trailing newline, so a label of
-# "x.md\n" keeps its extension in the oracle and a `$`-spelled port would strip it. re.A because
-# JS `i` on an ASCII pattern folds ASCII only.
+# `\Z` not `$`: JS `$` does not match before a trailing newline, so a label of "x.md\n" keeps its
+# extension in the oracle and a `$`-spelled port would strip it. That one HAS a witness in the
+# qualify corpus.
+#
+# re.ASCII is DEFENSIVE and has NO witness, which is the honest label. A review predicted U+217F
+# (SMALL ROMAN NUMERAL ONE THOUSAND) folds onto "m" under Python's Unicode IGNORECASE and not
+# under JS's, making the flag load-bearing -- MEASURED, and it does not: `re.compile(r"\.md\Z",
+# re.IGNORECASE).search(".ⅿd")` is None with or without re.ASCII, and JS agrees. No
+# character folds onto "m" or "d", so nothing distinguishes the flag's presence for THIS pattern
+# and a corpus row for it would assert nothing. Kept because the flag costs nothing and states
+# the intent; recorded as unwitnessed rather than claimed as tested.
 _MD_SUFFIX_RE = re.compile(r"\.md\Z", re.IGNORECASE | re.ASCII)
 
 
@@ -524,11 +532,14 @@ def js_basename(value):
     ":<id>" -- a different label for the same gate in the two runtimes. Three of thirteen probe
     cases differed. `.rstrip("/")` before the split reproduces Node's rule for all thirteen.
 
-    POSIX rule only. `node:path`'s basename is platform-specific and so is os.path's; on Windows
-    both also split on "\\", and neither this nor the oracle's import is exercised there by any
-    test in this repository.
+    PLATFORM-CORRECT, not posix-only. `node:path`'s basename is platform-specific and so is
+    os.path's, and stripping "/" alone is wrong on Windows: node's win32 basename splits on BOTH
+    separators, so basename("a\\b\\") is "b" there, while ntpath.basename("a\\b\\".rstrip("/"))
+    is "" -- the same empty-label defect this function exists to prevent, just one platform over.
+    `os.sep + (os.altsep or "")` IS the platform's separator set: "/" on posix (where a backslash
+    is a legal filename character node's posix basename keeps), "\\/" on Windows.
     """
-    return os.path.basename(str(value).rstrip("/"))
+    return os.path.basename(str(value).rstrip(os.sep + (os.altsep or "")))
 
 
 def qualify(file_or_label, gate_id):
