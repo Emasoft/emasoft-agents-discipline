@@ -12,6 +12,15 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const checker = resolve(root, "scripts/ledger-check.mjs");
 
+// The port runs THESE assertions unchanged against the Python implementation: hold the
+// oracle fixed, vary only the implementation, so a divergence is a port bug and not a
+// re-specified test. `AD_RUNTIME=python node tests/ledger-tests.mjs` selects the port.
+const runtime =
+  process.env.AD_RUNTIME === "python"
+    ? ["python3", [resolve(root, "scripts/ledger_check.py")]]
+    : ["node", [checker]];
+const [runtimeBin, runtimeArgs] = runtime;
+
 let failed = 0;
 function report(ok, name, detail) {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
@@ -289,7 +298,7 @@ for (const c of cases) {
     else writeFileSync(target, "x".repeat(9 * 1024 * 1024));
     let out = "";
     try {
-      out = execFileSync("node", [checker, target], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15000, env: process.env });
+      out = execFileSync(runtimeBin, [...runtimeArgs, target], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15000, env: process.env });
       code = 0;
     } catch (err) {
       code = err.status;
@@ -324,7 +333,7 @@ for (const c of cases) {
   }
   let out = "";
   try {
-    out = execFileSync("node", [checker, target], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env });
+    out = execFileSync(runtimeBin, [...runtimeArgs, target], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env });
     code = 0;
   } catch (err) {
     code = err.status;
