@@ -55,6 +55,33 @@ const cases = [
       "unreproducible: 1 verified row",
     ],
   },
+  {
+    // Every one of these exits 0 by construction, so each is an attempt to satisfy the
+    // re-run without testing anything. #5 (`ls`) was already caught; #1-#4 were not.
+    name: "no-op acceptances are rejected",
+    file: "tests/fixtures/noop-acceptance.md",
+    want: 1,
+    rerun: true,
+    artifacts: ["reports/noop-1.txt", "reports/noop-2.txt", "reports/noop-3.txt", "reports/noop-4.txt", "reports/noop-5.txt"],
+    expect: [
+      "#1 $ : -> no-op acceptance",
+      "#2 $ exit 0 -> no-op acceptance",
+      "#3 $ /bin/true -> no-op acceptance",
+      "#4 $ [ -f package.json ] -> no-op acceptance",
+      "#5 $ ls -> no-op acceptance",
+    ],
+  },
+  {
+    // Positive control for the case above. A no-op scan strict enough to catch `echo ok`
+    // must NOT also reject `echo ok && <real verifier>` -- that is a legitimate command,
+    // and rejecting it reddens honest ledgers until someone deletes the check.
+    name: "echo chained to a real check is not a no-op",
+    file: "tests/fixtures/chained-acceptance.md",
+    want: 0,
+    rerun: true,
+    artifacts: ["reports/chained-1.txt"],
+    expect: ["re-ran:      1 acceptance command(s), all passed"],
+  },
 ];
 
 for (const c of cases) {

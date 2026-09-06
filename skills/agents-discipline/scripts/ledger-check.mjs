@@ -283,6 +283,19 @@ for (let d = runCwd; ; d = nodePath.dirname(d)) {
   if (d === nodePath.dirname(d)) break;
 }
 
+// WHOLE-COMMAND anchored, mirroring gate-lint.mjs:112's FIXED_OUTPUT_COMMAND. The prefix
+// form this replaced (`/^(?:true|:|echo|...)\b/`) was wrong in both directions, measured:
+//   MISSED  `:`  `exit 0`  `/bin/true`  `[ -f x ]`
+//           -- `:` and `[` are non-word characters, so the trailing \b needed a word char
+//              that is not there; `exit 0` and an absolute path were not in the list at all.
+//   REJECTED `echo ok && pytest -q`
+//           -- a legitimate chained verifier, failed on its first word. A check that reddens
+//              honest ledgers is a check someone eventually deletes.
+// `[^&|;]*` is what buys both: the argument tail cannot cross a shell operator, so `echo ok`
+// is a no-op and `echo ok && <real check>` is not. Anchoring at $ is what makes that hold.
+const NOOP_ACCEPTANCE =
+  /^\s*(?:(?:echo|printf|ls|pwd|cat|sleep)(?:\s+[^&|;]*)?|(?:\/(?:usr\/)?bin\/)?true|command\s+true|:|exit\s+0|(?:test|\[)\s[^&|;]*)\s*$/i;
+
 const reran = [];
 const reproFailed = [];
 const unreproducible = [];
@@ -296,7 +309,7 @@ if (!rerunSkipped) {
     // one word, and the row passes. Scan first, then extract.
     const noop = (r.acceptance.match(/`[^`]+`/g) ?? [])
       .map((s) => s.slice(1, -1).trim())
-      .find((s) => /^(?:true|:|echo|printf|ls|pwd|cat|sleep|test|\[)\b/.test(s));
+      .find((s) => NOOP_ACCEPTANCE.test(s));
     if (noop) {
       reproFailed.push({ unit: r.unit, cmd: noop, code: "no-op acceptance — exits 0 by construction, tests nothing" });
       continue;
