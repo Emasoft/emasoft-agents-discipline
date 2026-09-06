@@ -7,6 +7,7 @@ runtimes produce byte-identical state files; without it every row diverges on th
 
 import errno
 import json
+import re
 import os
 import sys
 
@@ -84,6 +85,29 @@ attempt("ord 7", lambda: up({"scope": "ord", "wave": "7", "action": "open", "lea
 with open(dispatch_state_path(root, "ord"), "r", encoding="utf-8") as handle:
     record("ord state file", handle.read())
 record("ord status", dispatch_status(root, "ord"))
+
+# 2c. The DEFAULT clock -- see the oracle driver; only the SHAPE is comparable.
+def _default_clock():
+    result = up({"scope": "clock", "wave": "c1", "action": "open", "leaves": ["a"]})
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z",
+                             result["wave"]["openedAt"]))
+
+
+attempt("default clock", _default_clock)
+
+# 2d. The logWarning branch: a committed transition whose audit append FAILS.
+os.makedirs(os.path.dirname(dispatch_state_path(root, "warn")), exist_ok=True)
+os.symlink("/nonexistent-target",
+           dispatch_state_path(root, "warn").replace("dispatch.json", "status.log"))
+
+
+def _log_warning():
+    result = up({"scope": "warn", "wave": "w1", "action": "open", "leaves": ["a"], "now": T(1)})
+    return {"state": result["wave"]["state"],
+            "warned": result["logWarning"].startswith("state transition committed")}
+
+
+attempt("logWarning", _log_warning)
 
 record("status", dispatch_status(root, "api"))
 record("status no scope", dispatch_status(root, ""))

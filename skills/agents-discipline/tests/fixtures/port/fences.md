@@ -3,20 +3,25 @@
 ```
 text
 `
-- [ ] sneaky1: after a single-backtick line
+- [ ] sneaky1: a single-backtick line must not close a ``` fence
 ```
 
 ~~~
 text
 ```
-- [ ] sneaky2: after a mismatched closer
+- [ ] sneaky2: a mismatched fence character must not close it either
 ~~~
 
 ```a`b
-- [ ] sneaky3: a backtick in the info string means no fence opened
+- [ ] sneaky3: a backtick in the info string means NO fence opened, so this IS a gate
+  CHECK: echo ok
+  EXPECT: ok
+  EVIDENCE: pending
+```
+inside the fence that line opened
 ```
 
-- [ ] real: a genuine gate
+- [ ] real: a genuine gate, outside every fence
   CHECK: echo ok
   EXPECT: ok
   EVIDENCE: pending

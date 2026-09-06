@@ -465,7 +465,17 @@ _classes = {
     # after a blank line, an unindented attribute, and duplicate OWNS entries. Every one AGREED
     # between the runtimes when measured -- these assertions keep the shapes in the corpus so
     # that stays a measured fact rather than a remembered one.
-    "a fenced block": any("```" in line for d in _all for line in d["lines"]),
+    # The OUTCOME, not the presence of a backtick run. `any("```" in line ...)` passed on any
+    # fixture that merely CONTAINED a fence, so stripping the sneaky gates out of fences.md would
+    # have kept it green while the coverage silently vanished — the same defect as "a checked
+    # box" meaning "any gate at all". This pins what the state machine must DO: a gate-shaped
+    # line inside a fence is not a gate, and a real one after it still is.
+    "a fence that swallows gate-shaped lines": any(
+        any(g["id"] == "real" for g in d["gates"])
+        and not any(g["id"].startswith("sneaky1") or g["id"].startswith("sneaky2")
+                    for g in d["gates"])
+        and any("```" in line for line in d["lines"])
+        for d in _all),
     "a duplicated OWNS entry": any(len(d["owns"]) != len(set(d["owns"])) for d in _all),
 }
 for _name, _present in sorted(_classes.items()):

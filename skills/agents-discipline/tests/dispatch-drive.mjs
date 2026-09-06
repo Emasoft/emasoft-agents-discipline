@@ -7,7 +7,7 @@
  * state files; without it the timestamps differ and every row diverges on the clock.
  */
 import { readFileSync } from "node:fs";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, symlinkSync } from "node:fs";
 import { dirname } from "node:path";
 import { dispatchStatePath, dispatchStatus, getDispatchWave, updateDispatch }
   from "../scripts/lib/dispatch.mjs";
@@ -65,6 +65,23 @@ await attempt("ord zz", () => up({ scope: "ord", wave: "zz", action: "open", lea
 await attempt("ord 7", () => up({ scope: "ord", wave: "7", action: "open", leaves: ["a"], now: T(1) }));
 record("ord state file", readFileSync(dispatchStatePath(root, "ord"), "utf8"));
 record("ord status", dispatchStatus(root, "ord"));
+
+// 2c. The DEFAULT clock. Every row above passes an explicit `now`, so _iso_now never ran --
+// the double-now() bug fixed this turn could not have been caught by any test. Only the SHAPE is
+// comparable (the two runtimes call the clock microseconds apart), so the row records a regex
+// verdict rather than the stamp.
+await attempt("default clock", async () => {
+  const r = await up({ scope: "clock", wave: "c1", action: "open", leaves: ["a"] });
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(r.wave.openedAt);
+});
+// 2d. The logWarning branch: a committed transition whose audit append FAILS. Nothing else
+// reaches it, so neither the warning text nor safeDiagnostic on that path was exercised.
+mkdirSync(dispatchStatePath(root, "warn").replace("/dispatch.json", ""), { recursive: true });
+symlinkSync("/nonexistent-target", dispatchStatePath(root, "warn").replace("dispatch.json", "status.log"));
+await attempt("logWarning", async () => {
+  const r = await up({ scope: "warn", wave: "w1", action: "open", leaves: ["a"], now: T(1) });
+  return { state: r.wave.state, warned: r.logWarning.startsWith("state transition committed") };
+});
 
 // 3. Reporting.
 record("status", dispatchStatus(root, "api"));

@@ -115,6 +115,13 @@ def _valid_time(value, label):
 
 def validate_state(state):
     """Port of `validateState`. Mutates and returns `state`, as the oracle does."""
+    # NO counterpart to the oracle's `record()` / `Object.assign(Object.create(null), ...)`, and
+    # that is correct rather than an omission: those exist to strip the PROTOTYPE chain, because
+    # `state.waves["toString"]` is otherwise a truthy inherited function and `if
+    # (state.waves[waveId])` would refuse to open a wave named `toString` on a fresh state --
+    # reachable, since "toString" matches the id pattern. A Python dict has no prototype, so
+    # `.get("toString")` is None and the same answer falls out with no code. Recorded because the
+    # next reader will look for the missing construct.
     if (not isinstance(state, dict) or isinstance(state, list) or state.get("schema") != SCHEMA
             or not isinstance(state.get("waves"), dict)):
         _fail("expected schema 1 with a waves object")
@@ -247,6 +254,14 @@ def read_state(root, path):
         # this branch would have returned an empty wave set on a race the oracle refuses.
         if error.errno == errno.ENOENT:
             return _empty_state()
+        # str(error), NOT _err_code(error), and the choice is deliberate at the one site the
+        # convention would otherwise cover. For an AUTHORED OSError (the size cap, the
+        # containment refusal) errno is None and str() is the bare message -- an exact match. For
+        # a genuine syscall error neither spelling matches: Python says "[Errno 13] Permission
+        # denied: '/x'", Node says "EACCES: permission denied, open '/x'", and _err_code would
+        # say "EACCES" -- three different strings, none reproducing the oracle. This is the
+        # declared OS-error normalization the drivers already apply by comparing errno NAMES, so
+        # the exact prose is out of scope here rather than silently assumed equal.
         raise DispatchError("invalid dispatch state: " + str(error)) from error
     except DispatchError as error:
         # The oracle re-raises ONLY when the message ALREADY carries the prefix, and wraps
@@ -292,7 +307,12 @@ def dispatch_status(root, scope):
     # `.sort(([left], [right]) => left.localeCompare(right))` -- ICU collation, not code point
     # order, so this goes through locale_compare_key rather than sorted()'s default.
     from jsapi import locale_compare_key  # type: ignore[import-not-found]
-    for wave_id, wave in sorted(state["waves"].items(), key=lambda kv: locale_compare_key(kv[0])):
+    # js_entries as the INPUT, not .items(): both sorts are stable, so the input order is the
+    # tie-break. Ties are believed impossible over the id charset, but that belief rests on a
+    # hand-built collation key with a documented non-ICU fallback -- one word removes the
+    # dependency on the argument holding.
+    for wave_id, wave in sorted(js_entries(state["waves"]),
+                                key=lambda kv: locale_compare_key(kv[0])):
         started = len(wave["started"])
         returned = len(wave["returned"])
         total = len(wave["leaves"])
@@ -313,7 +333,7 @@ def dispatch_status(root, scope):
     return result
 
 
-def update_dispatch(root, spec, now=None):
+def update_dispatch(root, spec):
     scope = _valid_id(spec.get("scope"), "scope")
     wave_id = _valid_id(spec.get("wave"), "wave")
     path = dispatch_state_path(root, scope)
@@ -321,7 +341,7 @@ def update_dispatch(root, spec, now=None):
 
     def transaction():
         state = read_state(root, path)
-        stamp = spec.get("now") or now or _iso_now()
+        stamp = spec.get("now") or _iso_now()
         _valid_time(stamp, "timestamp")
         action = spec.get("action")
 
