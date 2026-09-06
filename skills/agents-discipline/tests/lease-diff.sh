@@ -20,7 +20,12 @@ const ok = steps.filter((s) => s.outcome && s.outcome.ok === true).length;
 const conflicted = steps.filter((s) => s.outcome && s.outcome.conflicts &&
   s.outcome.conflicts.length > 0).length;
 const released = steps.filter((s) => typeof s.outcome === "number" && s.outcome > 0).length;
-if (ok < 4 || conflicted < 8 || released < 2) {
+// EQUALITY, not a floor. These are the exact counts the 22-step sequence produces, so a `<`
+// against the observed value is an equality wearing a floor'"'"'s clothes -- it admits no slack
+// while implying it does. CHANGING THE SEQUENCE MUST UPDATE THESE NUMBERS DELIBERATELY.
+// A floor set BELOW the real counts would silently tolerate steps degrading into no-ops,
+// which is the failure this gate exists to catch.
+if (ok !== 4 || conflicted !== 8 || released !== 2) {
   console.error(`VACUOUS: ok=${ok} conflicted=${conflicted} released=${released}`);
   process.exit(1);
 }' || { echo "VACUOUS lease sequence"; exit 1; }
