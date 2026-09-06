@@ -73,11 +73,27 @@ raw "C1 control escaped" "$(python3 -c 'print("a" + chr(0x9b) + "b")')"
 raw "DEL escaped" "$(python3 -c 'print("a" + chr(0x7f) + "b")')"
 # NOT a bare emoji: U+1F600 is not in _UNSAFE_TERMINAL and 4 bytes is far under the budget, so
 # a bare-emoji row duplicates the plain unknown-command row and NO mutation of the escape or
-# truncation logic can redden it -- the name claimed more than the row could show. Placed at the
-# byte budget instead, where the surrogate pair straddles the cut and js_slice's UTF-16
-# semantics decide whether a lone surrogate is emitted.
-raw "astral straddling the budget" "$(python3 -c 'print("z"*497 + chr(0x1F600)*4)')"
-raw "astral just under the budget" "$(python3 -c 'print("z"*480 + chr(0x1F600)*4)')"
+# truncation logic can redden it -- the name claimed more than the row could show.
+#
+# MEASURED, and it corrects TWO wrong reasons I wrote here before. terminal_safe does NOT slice:
+# it walks CHARACTERS accumulating BYTE sizes and breaks before adding one that would not fit, so
+# a surrogate pair is never split and js_slice is not involved at all (that is _safe_diagnostic
+# in dispatch.py, which really does slice by UTF-16 units -- the surrogate-split row belongs
+# THERE, not here). And the message carries a 16-byte "unknown command " prefix that has to be
+# counted, which is what made my first labels wrong:
+#   497 z + 4 emoji -> 513 bytes, the cut lands in the ASCII run; no emoji ever enters `pieces`
+#   480 z + 4 emoji -> 512 bytes, ONE emoji enters `pieces` (496+4 = 500, not over), then the
+#                      marker backoff has to pop that 4-BYTE piece
+#   400 z + 4 emoji -> 432 bytes, fits whole: the control proving the emoji survive intact
+#
+# The first two produce BYTE-IDENTICAL output (528 bytes, zero emoji), so they look redundant --
+# I labelled the second "just under the budget", and it truncates. What separates them is only
+# visible under mutation: replacing `total -= sizes.pop()` with `total -= 1` in the backoff
+# reddens the EMOJI-RUN row and NOTHING else in this file. It is the only row here that checks
+# the backoff subtracts a piece's real byte size rather than one byte.
+raw "astral cut in the ascii run" "$(python3 -c 'print("z"*497 + chr(0x1F600)*4)')"
+raw "astral cut in the emoji run" "$(python3 -c 'print("z"*480 + chr(0x1F600)*4)')"
+raw "astral under budget, intact"  "$(python3 -c 'print("z"*400 + chr(0x1F600)*4)')"
 raw "over-budget truncates" "$(python3 -c 'print("z"*900)')"
 raw "escape inside the backoff" "$(python3 -c 'print("z"*495 + chr(0x202e)*4)')"
 raw "unknown option echoes value" open --scope api --wave w1 --leaf a "$(printf -- '--o\001pt')"

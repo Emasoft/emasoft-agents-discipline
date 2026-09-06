@@ -434,15 +434,34 @@ _all = list(_oracle_docs.values())
 report(len(_oracle_docs) == len(_fixtures),
        "parse_gates: the oracle parsed EVERY fixture (none silently dropped)",
        f"{len(_oracle_docs)} of {len(_fixtures)}")
+if len(_oracle_docs) != len(_fixtures):
+    # FAIL FAST rather than continue. Every class predicate below is an `any(...)` over this
+    # corpus, so a short corpus does not make them fail -- it makes them ask a smaller question
+    # and print GREEN. One red line above a screen of greens is the shape a skimmer misreads,
+    # and the greens are the ones they trust. There is no useful answer to be had from a corpus
+    # that is missing a fixture, so stop.
+    print(f"{failed} FAILED")
+    sys.exit(1)
 _jstrim = _oracle_docs.get("js-trim.md", {})
 
 
-def _digest_of(doc, gate_id):
-    """The gate's definition digest from the ORACLE's own dump, or None."""
-    for row in doc.get("digests", []):
-        if row["id"] == gate_id:
-            return row["digest"]
-    return None
+def _gates_with_digests(doc):
+    """Pair each gate with ITS digest, POSITIONALLY.
+
+    Not a lookup by id: gate ids are not unique in this corpus -- crlf-duplicates.md and
+    owns-duplicates.md exist precisely to carry duplicates -- so a first-match-by-id join
+    returns the wrong row whenever two gates share an id. Concretely, put a digest-None gate
+    (non-ASCII CHECK, no EXPECT) AFTER a digest-set gate with the same id and the id join hands
+    the digest-None gate the other one's digest, re-opening the hole the digest join was added
+    to close. Both drivers build `digests` by mapping over `gates` in order, so index
+    correspondence is exact and needs no key at all.
+    """
+    _g, _d = doc.get("gates", []), doc.get("digests", [])
+    # zip() truncates to the shorter side, so a driver that stopped emitting one digest per gate
+    # would silently shrink every predicate built on this rather than fail. Assert the pairing.
+    report(len(_g) == len(_d), "parse_gates: one digest per gate in the oracle dump",
+           f"{len(_g)} gates, {len(_d)} digests")
+    return list(zip(_g, _d))
 
 # Each predicate must be satisfiable ONLY by a fixture that exercises the class in its name.
 # Three of these were not, and they had the exact defect they were written to catch:
@@ -510,9 +529,8 @@ _classes = {
     # keeps this predicate green while ensure_ascii=False goes back to being untested -- the
     # exact vacuity it was added to close, re-opened one fixture edit later.
     "non-ASCII in a digested field": any(
-        isinstance(g.get(_f), str) and not g[_f].isascii()
-        and _digest_of(d, g["id"]) is not None
-        for d in _all for g in d["gates"] for _f in ("check", "expect", "cwd")
+        isinstance(g.get(_f), str) and not g[_f].isascii() and _row["digest"] is not None
+        for d in _all for g, _row in _gates_with_digests(d) for _f in ("check", "expect", "cwd")
     ),
     # The shapes the seventh review round named as structurally invisible: a fence closed by a
     # SHORTER run, a mismatched fence character, a backtick in the info string, an attribute
@@ -733,8 +751,14 @@ if True:
     sys.path.insert(0, LIB)
     import gates as _g  # noqa: E402  # type: ignore[import-not-found]
     _hex = "a" * 64
+    # The first two labels say "via the falsy coalesce" because that is what they test: the guard
+    # is `"" if not definition_digest else str(...)`, so None and "" BOTH reach the pattern as ""
+    # and neither asks whether it is 64 lowercase hex. Six of these eight rows exercise the
+    # pattern proper; calling the first two "rejects None"/"rejects empty" read as if the pattern
+    # had refused them.
     for _bad, _why in (
-        ("", "empty"), (None, "None"), ("A" * 64, "uppercase"), ("a" * 63, "63 chars"),
+        ("", "empty via the falsy coalesce"), (None, "None via the falsy coalesce"),
+        ("A" * 64, "uppercase"), ("a" * 63, "63 chars"),
         ("a" * 65, "65 chars"), (_hex + "\n", "trailing newline (the \\Z case)"),
         ("g" * 64, "non-hex letter"), (" " + _hex, "leading space"),
     ):
@@ -743,6 +767,14 @@ if True:
             report(False, f"automatic_evidence_prefix rejects {_why}", "it RETURNED instead")
         except ValueError:
             report(True, f"automatic_evidence_prefix rejects {_why}")
+        except Exception as _exc:  # noqa: BLE001
+            # NOT decoration. Measured: mutating _DIGEST_HEX_RE to `.*` makes the None row fall
+            # through to `"..." + None`, which raises TypeError -- uncaught, that aborted the
+            # WHOLE suite with a traceback after 3 lines instead of reporting 8 failures. So the
+            # block did react to the mutation, but by dying in a way that hid the other 7 rows,
+            # and I had claimed it "catches .*" without ever running it under .*.
+            report(False, f"automatic_evidence_prefix rejects {_why}",
+                   f"raised {type(_exc).__name__}, not ValueError: {_exc}")
     report(_g.automatic_evidence_prefix(_hex) ==
            "automatic-evidence=v1; definition-sha256=" + _hex + ";",
            "automatic_evidence_prefix accepts a real digest (positive control)")
