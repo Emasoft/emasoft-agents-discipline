@@ -4,7 +4,7 @@
  * Usage: node tests/ledger-tests.mjs
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -249,6 +249,17 @@ const cases = [
     expect: ["exceeds 8388608 bytes"],
   },
   {
+    // The same helper's THIRD bound, and the only one that is a security property rather than
+    // a liveness one: O_NOFOLLOW. A ledger path that is a symlink is refused outright, so
+    // pointing one at a file outside the project cannot make the checker read it. ac569dc
+    // claimed this guarantee was "ported, not dropped" and nothing had ever executed it in
+    // either runtime — a claim about a security control, resting on having read the code.
+    name: "a symlinked ledger path is refused, not followed",
+    symlink: true,
+    want: 2,
+    expect: ["must be one unchanged regular single-link file"],
+  },
+  {
     // A ledger is prose a human pasted into, so ONE byte of it is routinely not UTF-8: a
     // latin-1 accent, a smart quote out of a word processor, a name copied from a terminal in
     // another encoding. Node decodes those lossily (U+FFFD) and checks the ledger anyway.
@@ -401,15 +412,21 @@ for (const c of cases) {
   // dirty the working tree.
   // These two build their input rather than naming a fixture: a FIFO cannot be committed,
   // and a 9 MiB file should not be.
-  if (c.fifo || c.oversized || c.rawBytes) {
-    if (c.fifo && process.platform === "win32") {
-      report(true, `${c.name} (skipped: no mkfifo on win32)`);
+  if (c.fifo || c.oversized || c.rawBytes || c.symlink) {
+    if ((c.fifo || c.symlink) && process.platform === "win32") {
+      report(true, `${c.name} (skipped: no mkfifo/symlink on win32)`);
       continue;
     }
     const dir = mkdtempSync(join(tmpdir(), "ledger-bounds-"));
     const target = join(dir, "ledger.md");
     if (c.fifo) execFileSync("mkfifo", [target]);
-    else if (c.rawBytes) writeFileSync(target, c.rawBytes);
+    else if (c.symlink) {
+      // A REAL, valid ledger behind the link, so a refusal cannot be mistaken for the file
+      // being unreadable for some other reason: follow it and the checker would succeed.
+      const real = join(dir, "real.md");
+      writeFileSync(real, readFileSync(resolve(root, "tests/fixtures/complete.md"), "utf8"));
+      symlinkSync(real, target);
+    } else if (c.rawBytes) writeFileSync(target, c.rawBytes);
     else writeFileSync(target, "x".repeat(9 * 1024 * 1024));
     let out = "";
     try {

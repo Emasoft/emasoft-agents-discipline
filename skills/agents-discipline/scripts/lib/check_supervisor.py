@@ -3,6 +3,7 @@
 # Zero dependencies. Python 3.11+ (the floor the ported ledger checker sets; see
 # tests/python-lib-checks.py, which states and enforces it).
 
+import errno
 import os
 import signal as signal_module
 import subprocess
@@ -42,7 +43,14 @@ def main():
             creationflags=creationflags,
         )
     except OSError as error:
-        print(f"agents-discipline-check-supervisor: could not start CHECK: {error}", file=sys.stderr)
+        # The oracle prints `CHECK spawn failed: ` + Node's err.message, which for a spawn
+        # failure is the fixed shape `spawn <file> <ERRNO>`. Python's `str(error)` is
+        # "[Errno 2] No such file or directory: '/nonexistent/sh'" — a different sentence for
+        # the same event, in the branch that decides whether a broken CHECK reads as a
+        # failure or as a crash. Exit code already agreed (127); only the text did not.
+        code = errno.errorcode.get(error.errno or -1) or str(error.errno)
+        print(f"agents-discipline-check-supervisor: CHECK spawn failed: spawn {shell} {code}",
+              file=sys.stderr)
         sys.exit(127)
 
     stdout_thread = threading.Thread(target=_pump, args=(child.stdout, sys.stdout.buffer))

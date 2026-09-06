@@ -325,6 +325,11 @@ def _run_self_check(child, pgid, members, fail_group_kill=False):
         # NON-ZERO: the fallback signals only the direct child, so the two backgrounded sleeps
         # are reparented and alive, and a future edit that escalated `_child_kill` to a group
         # kill in one runtime would show up here instead of hiding behind a pair of nulls.
+        # ONE sample, where the paths above poll forty times, and the difference is not
+        # arbitrary: those wait for a state to ARRIVE (three members after a fork, zero after
+        # a <defunct> is reaped), while here the state is already settled -- `wait()` has
+        # returned, and `membersBefore >= 3` already proved the sleeps are visible. Nothing is
+        # in flight to wait for, so polling would only hide a kill that should not happen.
         return {
             "membersBefore": len(alive),
             "ok": result["ok"],

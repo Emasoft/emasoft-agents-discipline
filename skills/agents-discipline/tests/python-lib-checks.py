@@ -50,11 +50,22 @@ SECTIONS = ["regex_worker", "check_supervisor", "windows_taskkill_path", "proces
 completed = []
 
 
+def _missing_sections():
+    return [s for s in SECTIONS if s not in completed]
+
+
 @atexit.register
 def _report_truncation():
-    missing = [s for s in SECTIONS if s not in completed]
-    if missing:
+    # CRASH path only. On a normal end the check below has already run and fed `failed`;
+    # here the interpreter is already exiting non-zero from the traceback, so this only has
+    # to SAY which sections were lost. It cannot influence the exit code: atexit runs after
+    # sys.exit has fixed it, which is exactly why it is not the whole guard.
+    missing = _missing_sections()
+    if missing and not _checked_completeness:
         print(f"FAIL  suite TRUNCATED — these sections never completed: {', '.join(missing)}")
+
+
+_checked_completeness = False
 
 
 def report(ok, name, detail=""):
@@ -131,12 +142,17 @@ if WIN32:
     report(True, "check_supervisor: skipped (the cases drive /bin/bash)")
 else:
     seen = {}
-    for name, script in (
-        ("propagates exit code and pumps stdout", "echo hi; exit 3"),
-        ("a signalled CHECK", "kill -9 $$"),
+    # The spawn-failure case is the branch that decides whether a BROKEN CHECK reads as a
+    # failure or as a crash, and it was never driven. It found a divergence at once: exit 127
+    # agreed, but the oracle prints `CHECK spawn failed: spawn <file> ENOENT` (Node's
+    # err.message shape) and the port printed `could not start CHECK: [Errno 2] ...`.
+    for shell, name, script in (
+        ("/bin/bash", "propagates exit code and pumps stdout", "echo hi; exit 3"),
+        ("/bin/bash", "a signalled CHECK", "kill -9 $$"),
+        ("/nonexistent/sh", "an unspawnable shell", "echo hi"),
     ):
-        js, py = both(["check-supervisor.mjs", "/bin/bash", script],
-                      ["check_supervisor.py", "/bin/bash", script])
+        js, py = both(["check-supervisor.mjs", shell, script],
+                      ["check_supervisor.py", shell, script])
         report(js == py, f"check_supervisor: {name} — port matches oracle",
                "" if js == py else f"js={js} py={py}")
         seen[script] = (js, py)
@@ -245,12 +261,25 @@ else:
         # (the diagnostic substring is one-sided, and only transitive through the equality
         # above); `survivorsNonZero` on both is what says the fallback did the NARROWER thing
         # it claims — signalled the direct child and left the group alone.
+        # `.get`, not `[...]`: if a future edit made both runtimes emit the happy-path shape,
+        # the equality above would PASS and this line would raise KeyError — a traceback where
+        # a FAIL row belongs, and (until the inline completeness check below) a truncated run.
         report(py_fb["fallback"] is True and js_fb["fallback"] is True
-               and py_fb["survivorsNonZero"] is True and js_fb["survivorsNonZero"] is True
+               and py_fb.get("survivorsNonZero") is True
+               and js_fb.get("survivorsNonZero") is True
                and "fallback requested" in (py_fb["diagnostic"] or ""),
                "process_tree: the injected failure really reached the fallback (vacuity control)",
                str(py_fb["diagnostic"]))
 completed.append("process_tree")
+
+# INLINE, before the exit, so a missing section actually FAILS the run. The atexit hook alone
+# was decorative for the case it was written for: a section that returns early WITHOUT raising
+# leaves `failed` at 0, `sys.exit(0)` is evaluated first, and the hook then prints "FAIL" onto
+# a run that already succeeded. Measured before this fix: exit 0, "all pass", and the FAIL
+# line underneath it — npm test green on a truncated suite.
+_checked_completeness = True
+for _s in _missing_sections():
+    report(False, f"suite TRUNCATED — section never completed: {_s}")
 
 print("all pass" if not failed else f"{failed} FAILED")
 sys.exit(1 if failed else 0)
