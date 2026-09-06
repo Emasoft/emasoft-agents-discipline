@@ -17,6 +17,14 @@ against this implementation (`AD_RUNTIME=python node tests/ledger-tests.mjs`), s
 divergence is a porting defect rather than a re-specified test.
 """
 
+import sys
+# BEFORE the local imports. A .pyc is validated by (source mtime, source size) ALONE, so a
+# SAME-SIZE rewrite inside one mtime second -- exactly what a mutation probe does, e.g.
+# range(1, 26) -> range(1, 18) -- leaves STALE bytecode executing while the .py reads
+# correct. Measured: it produced a false "no divergence", and inspect.getsource() cannot
+# reveal it because it reads the .py. This script is spawned by the Node suites, which do
+# not carry PYTHONDONTWRITEBYTECODE, so the guard belongs at the entry point itself.
+sys.dont_write_bytecode = True
 import hashlib
 import os
 import re

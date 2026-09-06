@@ -18,15 +18,25 @@ answering a constant would agree with each other, so the differing pair must als
 Run: python3 tests/python-lib-checks.py   (also runs as the last step of `npm test`)
 """
 
+import os
 import sys
 # BEFORE any local import. A stale .pyc in scripts/lib/__pycache__ once executed while
-# inspect.getsource() read the CORRECTED .py -- so the source looked right, every branch
-# condition evaluated true, and the output was still wrong, and two runs of "the same"
-# code disagreed. Not writing bytecode for these modules removes the failure mode.
+# inspect.getsource() read the CORRECTED .py: the source looked right, every branch
+# condition evaluated true, and the output was still wrong -- two runs of "the same"
+# code disagreeing, which is worse than a failure because the natural reaction is to
+# distrust the newer measurement.
+#
+# CORRECTED SCOPE, measured: `sys.dont_write_bytecode` stops this process WRITING a
+# .pyc. It does NOT stop Python READING an existing one, and it is NOT inherited by a
+# child -- so with only that line, a full run of this file still left three .pyc files
+# behind, written by the very subprocesses it spawns. The env var is what reaches the
+# children. Neither prevents a stale .pyc that some OTHER tool already wrote from
+# being used; nothing in-process can. That residual is why the incident was resolved
+# by DELETING __pycache__, and the honest claim is prevention of creation, not of use.
 sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 import atexit
 import json
-import os
 import pathlib
 import shutil
 import subprocess

@@ -9,6 +9,12 @@
 #
 # Usage: bash tests/dispatch-cli-drive.sh   (run from skills/agents-discipline)
 set -u
+# Every python3 invocation below imports scripts/lib/*, and a .pyc is validated by
+# (source mtime, source size) ALONE. MEASURED: a same-size rewrite inside one mtime second
+# -- exactly what a mutation probe does, e.g. range(1, 26) -> range(1, 18) -- leaves the
+# STALE bytecode executing while the .py on disk reads correct. That produced a false "no
+# divergence" once already. No .pyc, no staleness.
+export PYTHONDONTWRITEBYTECODE=1
 fail=0
 run() {                     # run <label> <args...>
   local label="$1"; shift

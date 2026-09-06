@@ -119,7 +119,10 @@ def _js_number(value):
         # Plain decimal, at the SHORTEST precision that still round-trips -- which is what both
         # engines print, but Python's repr may hand back an exponent form inside this band.
         # range to 25, NOT 18. `places` counts digits AFTER the point, and this band reaches down
-        # to 1e-6, so a value needs up to 6 leading zeros PLUS 17 significant digits. Capping at
+        # to 1e-6, so a value needs up to 5 leading zeros PLUS 17 significant digits -- 22, not
+        # the 24 first recorded here. n >= 16 cannot reach this branch at all (the spacing
+        # between doubles exceeds 1 there, so every such value is integral and the branch
+        # above catches it), so 22 is the true maximum and 25 tries leave real margin. Capping at
         # 17 made the loop exhaust and fall through to repr(), which returns the EXPONENT form --
         # so every such value rendered as "1.2430862257523161e-06" where JS prints
         # "0.0000012430862257523161". Found by a randomized differential over 4314 doubles (21
