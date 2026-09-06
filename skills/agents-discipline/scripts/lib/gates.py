@@ -538,6 +538,13 @@ def js_basename(value):
     is "" -- the same empty-label defect this function exists to prevent, just one platform over.
     `os.sep + (os.altsep or "")` IS the platform's separator set: "/" on posix (where a backslash
     is a legal filename character node's posix basename keeps), "\\/" on Windows.
+
+    SCOPE OF THE CLAIM, narrowed after review: the STRIP SET is right on both platforms, but that
+    does not make this equal to node's basename in general. ntpath.basename itself still diverges
+    on a UNC root -- node's win32 basename is purely lexical and answers "share" for
+    "\\\\server\\share", while ntpath treats the whole thing as a drive with an empty tail and
+    answers "". That gap predates this function and is untouched by it; it would surface as the
+    same empty-label defect, and no test in this repository runs on Windows at all.
     """
     return os.path.basename(str(value).rstrip(os.sep + (os.altsep or "")))
 
