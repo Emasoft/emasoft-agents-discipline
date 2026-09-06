@@ -70,10 +70,15 @@ real defects, but in infrastructure built to review the port rather than in the 
 **Recommendation to the USER, not yet approved: narrow the review gate to commits touching
 `scripts/lib/`.**
 
-**The honest evidence, after two attempts at it.** Per-fork cost across ELEVEN forks: 315k,
-326k, 327k, 390k, 420k, 459k, 516k, 533k, 552k, 571k, 572k subagent tokens — monotonic, each
-fork inheriting the whole conversation. Two earlier framings of this were wrong and are worth
-keeping as a warning:
+**The honest evidence, after THREE attempts at it — and stop hand-transcribing this series.**
+Per-fork cost grew monotonically from ~315k to ~618k subagent tokens across twelve-plus forks,
+each inheriting the whole conversation. **Do not quote a list of values here.** Twice in a row
+a hand-copied list dropped the LARGEST entry — the second time dropping a value that was in the
+very review message telling me the first list had dropped values. The shape (monotonic, roughly
+doubling) is what matters and is stable; the exact list is transcription-error bait, and the
+count changes every round. Read it from the fork notifications if you need it.
+
+Three earlier framings were wrong and are worth keeping as a warning:
 1. a "12.3x spike over the session median" — a 5-minute BURSTINESS statistic from one
    heartbeat, session-local and not re-derivable by any future reader;
 2. the same series above, given as "nine forks" and asserted to make "the stronger case" for
@@ -144,11 +149,13 @@ will re-raise it at the cost of another full-context fork:
    `### NEXT ACTION`, in a block whose stated purpose is resumption and whose budget is shared
    with the compaction handoff.
 
-Both are real. Neither changes what a resuming session would DO, and this document has already
-been rewritten three times in one turn — each rewrite carrying its own risk of introducing the
-factual errors the rewrites exist to remove (two were introduced exactly that way). **The merge
-is the right move for whoever next edits this file for a substantive reason; it is not worth a
-dedicated pass.**
+Both are real, and neither changes what a resuming session would DO. **The reason this note
+exists is that SILENCE is expensive, not that the merge is** — an earlier version claimed the
+merge was "not worth a dedicated pass", which is backwards: the merge recovers about as many
+lines as this note costs. What justifies the note is the alternative — a skipped finding no one
+can tell from an overlooked one gets re-raised by the next reviewer at ~600k tokens, which is
+four orders of magnitude more than the fifteen lines either way. **Do the merge next time this
+file is opened for a substantive reason.**
 
 ### ROUNDS 2-4 — every review of a fix found the fix defective
 **The base rate is the finding.** Rounds 2, 3 and 4 each found the PREVIOUS round's fix wrong.

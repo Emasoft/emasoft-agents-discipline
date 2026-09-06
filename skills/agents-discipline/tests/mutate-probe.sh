@@ -62,8 +62,10 @@ restore() {
   # silently -- the exact false negative this harness exists to prevent, reintroduced by the
   # guard meant to fix a false alarm. A flag records what actually happened.
   [ "$restored" = 1 ] && return 0
+  # STDOUT: see interrupted(). A caller's `2>/dev/null` must never be able to hide the one
+  # message saying the working tree may still hold a mutant.
   if cp "$backup" "$target"; then restored=1; rm -f "$backup"; return 0
-  else echo "RESTORE FAILED -- $target may still be MUTATED; original at $backup" >&2; return 1; fi
+  else echo "RESTORE FAILED -- $target may still be MUTATED; original at $backup"; return 1; fi
 }
 interrupted() {   # interrupted <signal-number>
   # 128+signal, per convention: SIGINT 2 -> 130, SIGTERM 15 -> 143. Both were hardcoded to 130,
@@ -75,8 +77,13 @@ interrupted() {   # interrupted <signal-number>
   # restore() printed "may still be MUTATED" gives a skimmer two contradictory claims with the
   # wrong one last. It cannot branch on restore()'s old return value -- its failure arm ended in
   # a successful echo, so it returned 0 either way; that is what the explicit `return 1` fixes.
-  if restore; then echo "$label -> INTERRUPTED (no verdict; file restored)" >&2
-  else echo "$label -> INTERRUPTED (no verdict; RESTORE FAILED -- see above)" >&2; fi
+  # STDOUT, not stderr. The backup line was moved to stderr so callers could filter it, and
+  # every invocation since has been `... 2>/dev/null` -- which then swallowed these two
+  # messages as well. The one notice that the run DIED and the one notice that the file may
+  # still be MUTATED were sharing a channel with the noise the redirect existed to suppress,
+  # so an interrupted probe under the standard invocation printed nothing at all.
+  if restore; then echo "$label -> INTERRUPTED (no verdict; file restored)"
+  else echo "$label -> INTERRUPTED (no verdict; RESTORE FAILED -- see below)"; fi
   exit $((128 + $1))
 }
 trap restore EXIT
