@@ -365,6 +365,44 @@ check("every reference and template is linked from an entry document", () => {
   return orphans.length ? "unlinked file(s): " + orphans.join(", ") : null;
 });
 
+// The merge's whole promise is that the completion half reaches the LEAF. Until this check
+// existed, `templates/worker-brief.md` contained the word "gate" ZERO times: SKILL.md told
+// the coordinator to hand each worker a gate ledger, and the template that actually goes to
+// the worker never mentioned one. That is the gap this skill was created to close, and
+// nothing detected it. These are cheap structural assertions, not behaviour tests -- their
+// job is to make the two halves fail loudly when they drift apart again.
+check("worker brief carries the completion half", () => {
+  const brief = read("templates/worker-brief.md");
+  const missing = [];
+  if (!/^## Gates$/m.test(brief)) missing.push("a `## Gates` section");
+  if (!/CHECK/.test(brief) || !/EXPECT/.test(brief)) missing.push("CHECK/EXPECT written out inline");
+  if (!/timeout/i.test(brief)) missing.push("a timeout wrapper (gate-check's bounds do not reach a raw shell)");
+  if (!/--status/.test(brief)) missing.push("the read-only `--status` self-validation");
+  if (!/^## You are a leaf$/m.test(brief)) missing.push("the `## You are a leaf` no-delegation guard");
+  if (!/four passes/i.test(brief)) missing.push("the four-pass rule");
+  if (!/AGENTS_DISCIPLINE_SKIP_RERUN/.test(brief)) missing.push("the env-hygiene list");
+  return missing.length ? "worker-brief.md is missing " + missing.join("; ") : null;
+});
+
+check("the no-delegation guard is in Rule zero, not only the template", () => {
+  const skill = read("SKILL.md");
+  // A line in a template the coordinator must remember to fill loses to Rule zero, which is
+  // longer, more specific, and says "you must split". Both ends have to agree.
+  return /leaf/i.test(skill) && /AGENTS_DISCIPLINE_ROLE/.test(skill)
+    ? null
+    : "SKILL.md's Rule zero does not close the gate for a worker whose brief says it is a leaf";
+});
+
+check("approval is named where --reverify is prescribed", () => {
+  const skill = read("SKILL.md");
+  const runBoth = skill.split(/^## Run both$/m)[1] ?? "";
+  // Without --approve, gate-check takes the unapproved branch, runs ZERO commands and reports
+  // the gate unmet. A coordinator following this section verbatim would see a false failure.
+  return /--reverify/.test(runBoth) && !/--approve/.test(runBoth)
+    ? "`## Run both` prescribes --reverify without the --approve step, so it would run nothing"
+    : null;
+});
+
 let passed = 0;
 const failures = [];
 for (const c of checks) {
