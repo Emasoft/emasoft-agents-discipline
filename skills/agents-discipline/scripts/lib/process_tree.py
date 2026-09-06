@@ -179,6 +179,11 @@ def terminate_process_tree(child, options=None):
 
 
 def _child_kill(child, sig):
+    # NOT REACHABLE PARITY, and chasing it further would be pretending: Node's `kill()` asks
+    # "have I NOTICED the exit yet?" and poll() asks "has it exited?". Between the OS reaping
+    # a process and libuv delivering the exit event, the oracle signals a zombie, succeeds and
+    # returns true where this returns False. That flips the caller to {"ok": False} -- a false
+    # alarm about cleanup, never a false pass, so the residual divergence errs safely.
     # Node's `child.kill(sig)` takes a signal and RETURNS a boolean; Popen.kill() takes no
     # argument and Popen.send_signal() raises ProcessLookupError when the child is already
     # gone. Translating the raise into the oracle's `false` keeps the caller's three-way
@@ -189,13 +194,14 @@ def _child_kill(child, sig):
     # oracle's `child.kill()` returns false. The caller checks exit before entering, but the
     # child can die in the window between that check and this call -- which is precisely the
     # case the fallback exists for.
-    if child.poll() is not None:
-        return False
-    try:
-        child.send_signal(sig)
-        return True
-    except ProcessLookupError:
-        return False
+    # Decided AFTER the call, on the poll send_signal already did. A pre-call `poll()` guard
+    # only NARROWS the window, it cannot close it: CPython's send_signal polls internally and
+    # returns silently when the child has exited, so a child dying between the guard and the
+    # call is reported as "requested" for a signal nobody received. Measured: returncode None
+    # before the call, 7 after, guard-form returns True. That window is exactly the one the
+    # fallback path exists for, since the caller already checked exit before entering.
+    child.send_signal(sig)
+    return child.returncode is None
 
 
 def _self_check():
@@ -209,7 +215,11 @@ def _self_check():
         print("self-check skipped: POSIX group kill only")
         return
     child = subprocess.Popen(
-        ["/bin/bash", "-c", "sleep 47 & sleep 47"],
+        # BOTH sleeps backgrounded, bash blocking in `wait`: three processes exist by
+        # construction. `sleep 47 & sleep 47` leaves the last command exposed to bash's
+        # fork-suppression optimisation, which can exec it and yield two members on some
+        # versions -- an assertion betting on shell internals rather than on this module.
+        ["/bin/bash", "-c", "sleep 47 & sleep 47 & wait"],
         start_new_session=True,  # its own process group, so -pid addresses the whole tree
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
@@ -264,7 +274,17 @@ def _run_self_check(child, pgid, members):
     result = terminate_process_tree(child)
     assert result["ok"], result
     child.wait(timeout=5)
-    survivors = members()
+    # Polled, not one snapshot: `wait` reaps only the DIRECT child, so a backgrounded sleep is
+    # reparented to init and lingers as a <defunct> entry still carrying the pgid for a moment
+    # after the kill. A single snapshot in that window reads it as a survivor and fails a
+    # correct kill. (`members()` matches on pgid alone, so a recycled pgid inside the window
+    # would read as a survivor too -- vanishingly unlikely, and named rather than guarded.)
+    survivors = ["(not yet sampled)"]
+    for _ in range(40):
+        survivors = members()
+        if not survivors:
+            break
+        time.sleep(0.05)
     assert not survivors, f"group {pgid} survived the kill: {survivors}"
     print(f"self-check ok: group {pgid} had {len(alive)} members, all reaped "
           "(including the backgrounded grandchild)")

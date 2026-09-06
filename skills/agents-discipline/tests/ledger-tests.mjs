@@ -323,6 +323,47 @@ const cases = [
     want: 2,
     expect: ["must be a positive number of milliseconds", '"1_000"'],
   },
+  {
+    // The other half of the same divergence, and it needs its own case because it fails in
+    // the opposite direction: `Number("0x10")` is 16, so the oracle ACCEPTS a 16 ms budget
+    // where a bare `float()` raises and the port refused with exit 2. Deterministic —
+    // measured identical on both runtimes: 16 ms is under a node startup, so row 1 dies on
+    // its own timeout and row 2 on the exhausted budget.
+    name: "a hex budget JavaScript accepts is accepted by every runtime",
+    file: "tests/fixtures/budget-two-rows.md",
+    rerun: true,
+    artifacts: ["reports/budget-1.txt", "reports/budget-2.txt"],
+    envExtra: { AGENTS_DISCIPLINE_RERUN_BUDGET_MS: "0x10" },
+    want: 1,
+    expect: ["budget exhausted before this row ran"],
+    reject: ["must be a positive number of milliseconds"],
+  },
+  {
+    // `T24:00:00` is legal ISO 8601 for next-day midnight and Date.parse returns it;
+    // datetime.fromisoformat raises ("hour must be in 0..23"). Swallowed, that ValueError
+    // leaves `Created:` unparsed and the STALENESS RULE SILENTLY SKIPPED — a gate that stops
+    // running without saying so. The ledger is dated in the FUTURE so every artifact on disk
+    // is necessarily older than it, which is what makes the rule's absence visible: unfixed,
+    // the port reported a complete ledger (exit 0) on a citation it should have called stale.
+    name: "a Created hour of 24 still enforces the staleness rule",
+    file: "tests/fixtures/created-hour-24.md",
+    want: 1,
+    expect: ["older than the ledger", "tests/fixtures/complete.md"],
+  },
+  {
+    // Node reports a signal death as `status: null`, which the oracle's `typeof === "number"`
+    // test renders as `exit 1`; Python reports it as returncode -9. Same verdict, different
+    // line — and the ledger's own printed output is the artifact a human reads, so a row that
+    // segfaults or is OOM-killed must not describe itself two ways depending on which
+    // implementation ran.
+    name: "a signal-killed acceptance renders the same in every runtime",
+    file: "tests/fixtures/signal-killed-acceptance.md",
+    rerun: true,
+    artifacts: ["reports/signal-1.txt"],
+    want: 1,
+    expect: ["ACCEPTANCE DID NOT REPRODUCE", "$ kill -9 $$ -> exit 1"],
+    reject: ["exit -9"],
+  },
 ];
 
 for (const c of cases) {

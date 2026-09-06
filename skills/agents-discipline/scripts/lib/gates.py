@@ -27,6 +27,11 @@ def read_stable_regular_file(path, max_bytes=None, label="file"):
     on a FIFO so the descriptor can be rejected by its type rather than waited on. The
     before/after stat pair makes a file that changes under the read an error instead of a
     silently half-old string.
+
+    NOT PORTED YET: the oracle also takes a `root` and refuses a target whose realpath falls
+    outside it (`pathIsInside`). No caller needs it yet -- the ledger passes no root -- but
+    gate-check passes one for lease records, so this must land before that port, or the
+    containment guarantee silently disappears at the call site that actually relies on it.
     """
     target = os.path.abspath(path)
     limit = DEFAULT_STABLE_FILE_MAX_BYTES if max_bytes is None else int(max_bytes)

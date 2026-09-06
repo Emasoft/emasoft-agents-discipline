@@ -312,10 +312,15 @@ if any(r["status"] == "verified" for r in rows):
         # ("hour must be in 0..23"). Left unhandled, the ValueError below swallows the failure
         # and the staleness rule is SILENTLY SKIPPED -- a gate that quietly stops running is
         # worse than one that complains. Rewrite it to the midnight it denotes.
-        m24 = re.match(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})T24(:.*)?$", raw)
+        # Only the forms ISO 8601 actually permits, because hour 24 is legal ONLY as exactly
+        # 24:00:00. Measured: Date.parse("2020-01-01T24:00:00") is next-day local midnight,
+        # and Date.parse("2020-01-01T24:00:01") is NaN. A loose `(:.*)?` rewrote the second
+        # into a parseable datetime, so the port ENFORCED staleness where the oracle skips it
+        # — the opposite direction from the bug this fix is for, and just as silent.
+        m24 = re.match(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})T24(:00(?::00)?)?((?:[+-].*)?)$", raw)
         if m24:
             raw = (datetime.fromisoformat(m24.group(1)) + timedelta(days=1)).strftime("%Y-%m-%d") \
-                + "T00" + (m24.group(2) or "")
+                + "T00" + (m24.group(2) or "") + m24.group(3)
         try:
             dt = datetime.fromisoformat(raw)
             # A bare datetime with no offset is local time in both runtimes.
@@ -489,7 +494,12 @@ def _js_number(s):
     sane in a milliseconds variable — the point is that the two runtimes must disagree with
     the operator identically, or the same configuration means two different things.
     """
-    if "_" in s:  # JS numeric separators are a LITERAL feature; Number("1_000") is NaN
+    # `_`: JS numeric separators are a LITERAL feature; Number("1_000") is NaN.
+    # `isascii()`: Python's float() accepts non-ASCII decimal digits and Number() does not.
+    # Measured — `１２３` (fullwidth) and `١٢٣` (Arabic-Indic) are both 123.0 to float and NaN
+    # to Number, so a budget written in them would run in the port and hard-fail in the
+    # oracle. Same "one variable, two meanings" class as the `1_000` bug this replaced.
+    if "_" in s or not s.isascii():
         return float("nan")
     try:
         for prefix, base in (("0x", 16), ("0o", 8), ("0b", 2)):
