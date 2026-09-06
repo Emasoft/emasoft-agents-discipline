@@ -125,8 +125,13 @@ whose REVIEW found the defect; R7/R8 describe what that round's commit DID.
      verification landing together is how a two-part edit hides its second half.**
   3. **The verification printed its own contradiction and I read it as success**:
      `TERM exit=130 (143 = handled SIGTERM)` — the label states the expectation, the output
-     disagrees. Fixed to `exit $((128 + sig))`, and the re-test now ASSERTS the expected value
-     instead of printing it in a label. A label is not an assertion.
+     disagrees. Fixed to `exit $((128 + sig))`. **The follow-up claim that the re-test "now
+     ASSERTS the expected value" was ALSO false** — it printed a computed comparison nothing
+     branched on, and it lived in a transcript rather than the repo, so nothing committed
+     checked the constants at all. `tests/mutate-probe-selftest.sh` is the real gate: it exits
+     non-zero, and reverting the fix reddens it (`expected 143, got 130`). Three attempts to
+     state this correctly, each closer: a label that contradicted its output; a report nobody
+     branched on; finally a committed test that fails.
 
 **Standing limit, stated rather than papered over:** a baseline that merely exits 0 is not
 proof the runner can OBSERVE anything. A true positive control needs a canary mutation known
