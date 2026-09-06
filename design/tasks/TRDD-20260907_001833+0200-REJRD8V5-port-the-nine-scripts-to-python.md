@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T00:18:33+0200
+updated: 2026-09-07T00:24:55+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -32,16 +32,24 @@ revert. If no mutation isolates a row, that row does not earn its place.
   `locale_compare_key`, `parse_date`, `js_trim`, `js_truthy`, `js_string`/`_js_number`
 - `gates.py`: `gate_definition_digest`, `automatic_evidence_prefix`, `classify_gate_evidence`,
   `gate_state`, `tail`, `format_document`, `qualify`, `js_basename`
+- `gates.py`: `globs_overlap`, `literal_prefix` — 18 pairs, each dumped in BOTH directions.
+  Six mutation controls all redden. The doubling is EARNED, not defensive: dropping the `or`
+  from the wildcard test changes only ODD indices (measured `[1, 3, 15, 17, 19]`), so a
+  one-direction corpus ships that defect. Symmetry is a discriminating property here — it
+  holds for the oracle and BREAKS under that mutant. The astral rows are a CONTROL, not a
+  catch: this function only tests EQUALITY, where UTF-16 and code points agree; the `<`
+  divergence has no site here. The measured `OWNS:` placeholder disjointness is PINNED as a
+  row, so the port reproduces the defect rather than quietly diverging from the oracle.
 
 ### NEXT ACTION
-1. **`globsOverlap` / `literalPrefix`** — the lease-conflict decision, and the highest-severity
-   remaining piece: a false "disjoint" grants two workers write access to the same paths, a
-   failure already observed live (the unreplaced `OWNS:` placeholder let two claims both exit 0).
-   Needs a SYMMETRY row (`overlap(a,b) == overlap(b,a)` for every pair in the corpus) plus
-   adversarial pairs: `src/**` vs `src/a`, `a*` vs `ab`, and one astral path — JS string `<`
-   compares UTF-16 code units and Python compares code points, which disagree for astral
-   characters.
-2. **`gate-check.mjs`** (950 lines) and the ~10 remaining `gates.mjs` helpers.
+1. **The 7 remaining `gates.mjs` exports**, in dependency order: `sameFileIdentity`,
+   `statCurrentNamedFile`, `listScopes`, `scopeFiles`, `legacyFiles`, `resolveTarget`,
+   `readLeases`. All are FILESYSTEM-facing, so the differential needs a built tree, not a
+   string corpus — and the divergence classes shift accordingly: `errno` names vs `strerror`,
+   `readdir` order vs `os.scandir` order (neither sorted; `listScopes` sorts, the others may
+   not), symlink and `realpath` behaviour, and `existsSync` swallowing every error where
+   `os.path.exists` does the same but `os.stat` does not.
+2. **`gate-check.mjs`** (950 lines) — last, because it consumes all of the above.
 
 ### GOTCHAS THAT HAVE ALREADY COST TIME — do not rediscover these
 - **Stale `.pyc` makes two measurements of the same code disagree.** A `.pyc` validates on
