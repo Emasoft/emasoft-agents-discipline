@@ -105,12 +105,16 @@ function isStrongEvidence(l) {
     // evidence requirement for an entire ledger.
     if (RUNNER_WORDS.has(inner.toLowerCase())) return true;
   }
-  // {2,5}, not {1,5}: a one-character extension made "U.S.A." look like a filename.
-  // No real artifact this checker cares about has a single-char extension.
+  // {2,5}, not {1,5}: a one-character extension made "U.S.A." look like a filename. The
+  // trade is real and worth naming rather than denying -- `main.c`, `foo.h` and `analysis.R`
+  // no longer read as filename-shaped in UNBACKTICKED prose. Cite those in backticks, where
+  // the span loop above accepts any path character. The citation pattern is untouched.
   if (/\b[\w./-]+\.[a-z0-9]{2,5}\b/i.test(l)) return true;
-  // `of` dropped from the alternation: "3 of them" is not a measured result. "93 of 93
-  // passed" still matches on `passed`, so nothing honest is lost.
-  if (/\b\d+\s*(passed|pass|ok)\b/i.test(l)) return true;
+  // `of` dropped ("3 of them" is not a measured result), and intervening words allowed,
+  // because the natural way to report a real run is "93 tests passed" -- which `\d+\s*`
+  // did NOT match, since " tests " is not whitespace. Tightening the cheat without widening
+  // this would have silently failed honest unbackticked evidence.
+  if (/\b\d+\s+(?:[a-z]+\s+){0,3}(passed|passing|pass|ok)\b/i.test(l)) return true;
   if (/exit\s+\d+/i.test(l)) return true;
   return false;
 }
@@ -200,7 +204,10 @@ const evidenceBlocks = new Map();
 {
   let current = null;
   for (const line of evidenceText.split("\n")) {
-    const m = /^\*\*Unit\s+([0-9]+)\b/.exec(line);
+    // Case-insensitive: `**unit 1 —**` is the same header a human meant to write, and
+    // matching it case-sensitively would silently yield an empty block and report the row
+    // UNBACKED for a reason no message names.
+    const m = /^\*\*unit\s+([0-9]+)\b/i.exec(line);
     if (m) current = m[1];
     if (current) evidenceBlocks.set(current, (evidenceBlocks.get(current) ?? "") + line + "\n");
   }
@@ -295,18 +302,46 @@ for (let d = runCwd; ; d = nodePath.dirname(d)) {
   if (d === nodePath.dirname(d)) break;
 }
 
-// WHOLE-COMMAND anchored, mirroring gate-lint.mjs:112's FIXED_OUTPUT_COMMAND. The prefix
-// form this replaced (`/^(?:true|:|echo|...)\b/`) was wrong in both directions, measured:
-//   MISSED  `:`  `exit 0`  `/bin/true`  `[ -f x ]`
-//           -- `:` and `[` are non-word characters, so the trailing \b needed a word char
-//              that is not there; `exit 0` and an absolute path were not in the list at all.
-//   REJECTED `echo ok && pytest -q`
-//           -- a legitimate chained verifier, failed on its first word. A check that reddens
-//              honest ledgers is a check someone eventually deletes.
-// `[^&|;]*` is what buys both: the argument tail cannot cross a shell operator, so `echo ok`
-// is a no-op and `echo ok && <real check>` is not. Anchoring at $ is what makes that hold.
-const NOOP_ACCEPTANCE =
-  /^\s*(?:(?:echo|printf|ls|pwd|cat|sleep)(?:\s+[^&|;]*)?|(?:\/(?:usr\/)?bin\/)?true|command\s+true|:|exit\s+0|(?:test|\[)\s[^&|;]*)\s*$/i;
+// A no-op acceptance is one that exits 0 NO MATTER WHAT, so writing one is an attempt to
+// satisfy the re-run without testing anything. The bar is UNCONDITIONAL success, and getting
+// that bar wrong is what broke both previous attempts, in opposite directions:
+//
+//   FALSE POSITIVES. `test -f x`, `[ -f x ]`, `ls dist/*.js` and `cat f` all EXIT 1 when the
+//   thing is missing. They are WEAK checks, not tautologies. The original prefix form flagged
+//   `test`/`ls`/`cat`, and the whole-command form that replaced it added `[ ... ]` on the
+//   claim that it was a "missed cheat" -- it is not. Rejecting these reddens honest ledgers,
+//   and a check that reddens honest ledgers is a check someone eventually deletes.
+//
+//   ESCAPES. `pytest -q || true` exits 0 unconditionally and is the canonical always-pass
+//   idiom. NO whole-command regex can see it, because the cheat lives in the OPERATOR, not
+//   in any one word -- and `pipefail` does not help, since `||` is not a pipe. Same for a
+//   trailing `;`, a `( ... )` wrapper, and a `/bin/` prefix wired to only one verb.
+//
+// So this is a small parser rather than a bigger regex. Measured truth table in the tests.
+const ALWAYS_TRUE =
+  /^(?:(?:\/(?:usr\/)?bin\/)?(?:true|echo|printf|pwd|sleep)(?:\s+[^&|;]*)?|:|command\s+true|exit\s+0)$/i;
+
+function isNoopAcceptance(raw) {
+  let s = String(raw).trim();
+  // `( exit 0 )`, `{ true; }` and a trailing `;` are pure syntax around the same command.
+  // Bounded rather than `while`: peeling is driven by untrusted ledger text.
+  for (let i = 0; i < 4; i++) {
+    const before = s;
+    s = s.replace(/;+\s*$/, "").trim();
+    s = s.replace(/^\(\s*([\s\S]*?)\s*\)$/, "$1").trim();
+    s = s.replace(/^\{\s*([\s\S]*?)\s*\}$/, "$1").trim();
+    if (s === before) break;
+  }
+  if (!s) return false;
+  // `X || true` exits 0 whatever X does, so the guarantee comes from the RIGHT side. This
+  // must be tested BEFORE any every-link rule: `pytest -q || true` has a real left half and
+  // would otherwise look like an honest command.
+  const orParts = s.split("||").map((p) => p.trim());
+  if (orParts.length > 1 && orParts.slice(1).some((p) => ALWAYS_TRUE.test(p))) return true;
+  // Otherwise it is a no-op only when EVERY link is one. `echo ok && pytest -q` propagates
+  // pytest's exit status, so it is a legitimate chained verifier and must pass.
+  return s.split(/&&|;/).map((p) => p.trim()).filter(Boolean).every((p) => ALWAYS_TRUE.test(p));
+}
 
 const reran = [];
 const reproFailed = [];
@@ -315,9 +350,15 @@ const unbacked = [];
 const rerunSkipped = Boolean(process.env.AGENTS_DISCIPLINE_SKIP_RERUN);
 // One budget for the whole re-run, not one per row. An env var rather than a flag because
 // argv[2] is the ledger path and every other knob here is already AGENTS_DISCIPLINE_*.
-const rerunBudgetMs = Number(process.env.AGENTS_DISCIPLINE_RERUN_BUDGET_MS ?? 600000);
-if (!Number.isFinite(rerunBudgetMs) || rerunBudgetMs < 1) {
-  fail(2, `agents-discipline: AGENTS_DISCIPLINE_RERUN_BUDGET_MS must be a positive number of milliseconds`);
+// `?? 600000` alone was wrong: an EMPTY string is not nullish, so `Number("")` is 0 and an
+// exported-but-blank var hard-failed the run -- while the sibling SKIP_RERUN treats "" as
+// simply off. Two env vars in one file with opposite empty-string semantics is a trap, so
+// blank is treated as unset here too. The validation also only runs when a re-run will
+// actually happen: a structure-only check has no budget to misconfigure.
+const rerunBudgetRaw = (process.env.AGENTS_DISCIPLINE_RERUN_BUDGET_MS ?? "").trim();
+const rerunBudgetMs = rerunBudgetRaw === "" ? 600000 : Number(rerunBudgetRaw);
+if (!rerunSkipped && (!Number.isFinite(rerunBudgetMs) || rerunBudgetMs < 1)) {
+  fail(2, `agents-discipline: AGENTS_DISCIPLINE_RERUN_BUDGET_MS must be a positive number of milliseconds, got ${JSON.stringify(rerunBudgetRaw)}`);
 }
 const rerunDeadline = Date.now() + rerunBudgetMs;
 if (!rerunSkipped) {
@@ -328,7 +369,7 @@ if (!rerunSkipped) {
     // one word, and the row passes. Scan first, then extract.
     const noop = (r.acceptance.match(/`[^`]+`/g) ?? [])
       .map((s) => s.slice(1, -1).trim())
-      .find((s) => NOOP_ACCEPTANCE.test(s));
+      .find((s) => isNoopAcceptance(s));
     if (noop) {
       reproFailed.push({ unit: r.unit, cmd: noop, code: "no-op acceptance — exits 0 by construction, tests nothing" });
       continue;

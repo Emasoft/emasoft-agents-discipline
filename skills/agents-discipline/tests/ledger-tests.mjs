@@ -56,8 +56,10 @@ const cases = [
     ],
   },
   {
-    // Every one of these exits 0 by construction, so each is an attempt to satisfy the
-    // re-run without testing anything. #5 (`ls`) was already caught; #1-#4 were not.
+    // Every one of these exits 0 UNCONDITIONALLY, which is the actual bar. #4 is the one
+    // that matters most: `pytest -q || true` is the canonical always-pass idiom, it has a
+    // real left half, and no whole-command regex can see it because the cheat lives in the
+    // operator. `pipefail` does not help either -- `||` is not a pipe.
     name: "no-op acceptances are rejected",
     file: "tests/fixtures/noop-acceptance.md",
     want: 1,
@@ -67,9 +69,28 @@ const cases = [
       "#1 $ : -> no-op acceptance",
       "#2 $ exit 0 -> no-op acceptance",
       "#3 $ /bin/true -> no-op acceptance",
-      "#4 $ [ -f package.json ] -> no-op acceptance",
-      "#5 $ ls -> no-op acceptance",
+      "#4 $ pytest -q || true -> no-op acceptance",
+      "#5 $ ( exit 0 ) -> no-op acceptance",
     ],
+  },
+  {
+    // The other half of the same predicate, and the reason it is a parser rather than a
+    // word list. `test -f x`, `[ -f x ]` and `ls x` all EXIT 1 when the thing is missing --
+    // weak checks, not tautologies. Two successive versions of this scan flagged them, the
+    // second one commit after the first was justified with "a check that reddens honest
+    // ledgers is a check someone eventually deletes". Paths are absolute so the verdict does
+    // not depend on where the runner resolved its working directory.
+    name: "weak-but-real checks are not no-ops",
+    file: "tests/fixtures/weak-but-real-acceptance.md",
+    want: 0,
+    rerun: true,
+    artifacts: ["reports/weak-1.txt", "reports/weak-2.txt", "reports/weak-3.txt"],
+    // `reject`, not `expect`: the property under test is an ABSENCE -- none of these three
+    // is flagged a no-op. Asserting a re-ran COUNT instead would test something else and
+    // did: `[ -f x ]` is not extracted as a runnable command at all (a separate, pre-existing
+    // limitation of acceptanceCommand), so only two of the three ever execute.
+    expect: ["re-ran:      2 acceptance command(s), all passed"],
+    reject: ["no-op acceptance"],
   },
   {
     // Positive control for the case above. A no-op scan strict enough to catch `echo ok`
@@ -227,6 +248,8 @@ for (const c of cases) {
   // An exit code is a one-bit answer, and several distinct wrongnesses produce the same
   // bit. A case may pin the actual verdict text when the bit cannot tell them apart.
   for (const want of c.expect ?? []) report(out.includes(want), `${c.name} -> ${want}`);
+  // A negative assertion, for cases whose property is an ABSENCE.
+  for (const no of c.reject ?? []) report(!out.includes(no), `${c.name} -/-> ${no}`);
 }
 
 // Frontmatter regression guard: the skills CLI parses the description as YAML,

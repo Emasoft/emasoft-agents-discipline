@@ -8,8 +8,8 @@ Created: 2020-01-01T00:00:00+0000
 | 1 | colon | app/a.py | worker-1 | `:` | verified |
 | 2 | exit-zero | app/b.py | worker-2 | `exit 0` | verified |
 | 3 | abs-true | app/c.py | worker-3 | `/bin/true` | verified |
-| 4 | test-expr | app/d.py | worker-4 | `[ -f package.json ]` | verified |
-| 5 | listing | app/e.py | worker-5 | `ls` | verified |
+| 4 | or-true | app/d.py | worker-4 | `pytest -q \|\| true` | verified |
+| 5 | subshell | app/e.py | worker-5 | `( exit 0 )` | verified |
 
 ## Evidence
 
