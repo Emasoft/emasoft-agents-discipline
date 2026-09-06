@@ -150,6 +150,17 @@ const cases = [
     expect: ["evidence:    MISSING", "UNBACKED verified rows"],
   },
   {
+    // T13. The placeholder filter dropped any line CONTAINING angle brackets, so real
+    // evidence in every language with generics vanished -- header and all, since the drop
+    // takes the whole line. The row then reported UNBACKED with nothing explaining why.
+    // `evidence: present` is the discriminator: pre-fix both blocks were gone entirely.
+    name: "generics in evidence are not mistaken for placeholders",
+    file: "tests/fixtures/evidence-generics.md",
+    want: 0,
+    expect: ["evidence:    present", "verified:    2"],
+    reject: ["MISSING"],
+  },
+  {
     // A trailing `|` is OPTIONAL in GitHub-flavoured markdown. Dropping the last field
     // unconditionally made such a header count one column short, which made EVERY row
     // malformed, emptied `rows`, and tripped the "no unit rows" bail -- so a ledger that

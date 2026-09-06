@@ -25,6 +25,10 @@ Strict format:
 - Use a unique explicit id for every gate.
 - Indent CHECK, EXPECT, CWD, and EVIDENCE.
 - Give a runnable gate both CHECK and EXPECT; give a manual gate neither.
+- Write CHECK plain. `gate-check.mjs` runs it under its own 120s bound, output cap and
+  process-group kill, so a `timeout`/`gtimeout` wrapper adds nothing here and hard-codes a
+  tool a stock macOS does not have. A worker bounding its own local run is a separate thing,
+  covered in the worker brief.
 - Success requires process exit 0 and EXPECT.
 - Make EXPECT a success-only marker produced after every assertion passes.
 - For an absence or negative assertion, test the same checker against a known
