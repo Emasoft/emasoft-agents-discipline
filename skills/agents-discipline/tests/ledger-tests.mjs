@@ -97,13 +97,18 @@ const cases = [
     // LEGAL. It cannot hide a failure (every link must succeed), and forbidding it would
     // also forbid `cd packages/x && pytest -q`, which is honest and common. If someone
     // later widens CHAIN_OPERATORS to include `&&`, this row fails.
-    artifacts: ["reports/weak-1.txt", "reports/weak-2.txt", "reports/weak-3.txt", "reports/weak-4.txt"],
+    // Rows 5 and 6 are the quote guard. `python3 -c "import sys; sys.exit(0)"` is the
+    // canonical checkable one-liner in a Python repo and `awk '{print;}' f` is an ordinary
+    // program body -- their `;` is an ARGUMENT, not a chain. The first version of the
+    // refusal tested the raw span and rejected both, with advice ("chain with `&&`") that
+    // does not even apply. Same false-positive class as flagging `[ -f x ]`.
+    artifacts: ["reports/weak-1.txt", "reports/weak-2.txt", "reports/weak-3.txt", "reports/weak-4.txt", "reports/weak-5.txt", "reports/weak-6.txt"],
     // `reject`, not `expect`: the property under test is an ABSENCE -- none of these three
     // is flagged a no-op. Asserting a re-ran COUNT instead would test something else and
     // did: `[ -f x ]` is not extracted as a runnable command at all (a separate, pre-existing
     // limitation of acceptanceCommand), so only two of the three ever execute.
-    expect: ["re-ran:      3 acceptance command(s), all passed"],
-    reject: ["no-op acceptance"],
+    expect: ["re-ran:      5 acceptance command(s), all passed"],
+    reject: ["no-op acceptance", "acceptance uses"],
   },
   {
     // Positive control for the case above. A no-op scan strict enough to catch `echo ok`

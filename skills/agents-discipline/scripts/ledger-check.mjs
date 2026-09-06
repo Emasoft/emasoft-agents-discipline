@@ -344,20 +344,55 @@ const ALWAYS_TRUE =
 // job to take on. USER decision, 2026-09-06.
 const CHAIN_OPERATORS = /\|\||;/;
 
+// Operators only count OUTSIDE quotes. `python3 -c "import sys; sys.exit(0)"` and
+// `awk '{print;}' f` are honest commands whose `;` is an ARGUMENT, not a chain -- refusing
+// them would be the same false-positive class that already flagged `[ -f x ]` and `test -f x`
+// as cheats. Masking the quoted regions (keeping the delimiters, so the shape survives) is
+// what tells an operator from a character inside a string.
+//
+// It also tightens the other direction for free: `echo "$(pytest)"` masks to `echo ""`, which
+// ALWAYS_TRUE then recognises -- and it IS always-green, because echo's status is the one that
+// survives, never pytest's.
+//
+// Unbalanced quotes simply do not match, leaving the text as-is, which errs toward treating a
+// character as an operator -- the conservative direction for a refusal that a human can read
+// and rewrite, rather than a silent pass.
+function maskQuoted(s) {
+  return s.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
+}
+
 // A no-op acceptance exits 0 no matter what. With `||` and `;` refused upstream, the only
 // remaining shape is an `&&` chain, and it is always-green exactly when EVERY link is.
+// True when the leading bracket closes only at the very end -- i.e. the pair really does
+// enclose the whole string, rather than being the first of several groups.
+function wrapsWhole(s, open, close) {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === open) depth++;
+    else if (s[i] === close && --depth === 0) return i === s.length - 1;
+  }
+  return false;
+}
+
 function isNoopAcceptance(raw) {
   let s = String(raw).trim();
-  // `( true )` and `{ true }` wrap the same command. No balance check is needed now that `;`
-  // cannot appear: there is no `(false) ; (true)` to mistake for one enclosing group.
+  // `( true )` and `{ true }` wrap the same command. The balance check stays: I removed it
+  // once on the rationale that `;` can no longer appear, and that reasoning was wrong --
+  // `(echo a) && (echo b)` still mangles to `echo a) && (echo b` under an anchored
+  // `^\(...\)$`. It happened to fail SAFE (the fragments fail ALWAYS_TRUE, so nothing is
+  // falsely flagged), but it silently stopped catching two always-green forms.
   for (let i = 0; i < 4; i++) {
     const before = s;
-    s = s.replace(/^\(\s*([\s\S]*?)\s*\)$/, "$1").trim();
-    s = s.replace(/^\{\s*([\s\S]*?)\s*\}$/, "$1").trim();
+    for (const [open, close] of [["(", ")"], ["{", "}"]]) {
+      if (s.startsWith(open) && s.endsWith(close) && wrapsWhole(s, open, close)) {
+        s = s.slice(1, -1).trim();
+      }
+    }
     if (s === before) break;
   }
   if (!s) return false;
-  return s.split("&&").map((p) => p.trim()).filter(Boolean).every((p) => ALWAYS_TRUE.test(p));
+  // Judged on the MASKED text: a quoted `&&` is an argument, not a link.
+  return maskQuoted(s).split("&&").map((p) => p.trim()).filter(Boolean).every((p) => ALWAYS_TRUE.test(p));
 }
 
 const reran = [];
@@ -388,7 +423,7 @@ if (!rerunSkipped) {
     // Refuse the operators before judging the command. `||` and `;` both decouple a chain's
     // exit status from its work, so there is no version of them worth re-running, and saying
     // so is stronger than trying to out-parse the next always-green idiom.
-    const chained = spans.find((s) => CHAIN_OPERATORS.test(s));
+    const chained = spans.find((s) => CHAIN_OPERATORS.test(maskQuoted(s)));
     if (chained) {
       reproFailed.push({
         unit: r.unit, cmd: chained,

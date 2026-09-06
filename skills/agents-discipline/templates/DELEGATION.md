@@ -16,11 +16,12 @@ Created: <ISO 8601, e.g. 2026-08-29T22:50:00+0200 — the checker dates artifact
 - **Acceptance must be a runnable command inside a code span** — `pytest -q tests/stats.py`, not
   "tests pass". The checker extracts and re-runs only backticked commands containing whitespace;
   bare prose is never re-run, so a row backed by prose alone is unverified by construction.
-- **No `||` and no `;` in an acceptance.** Both let a chain report success whatever the code
-  did — `pytest -q || true` and `false; true` are green always — so the checker refuses them
-  outright rather than guessing which are honest. `&&` is fine: every link has to succeed, so
-  `cd packages/x && pytest -q` is exactly as strong as `pytest -q`. Need real sequencing? Put
-  it in a script and name the script.
+- **Do not chain an acceptance with `||` or `;`.** Both let a chain report success whatever the
+  code did — `pytest -q || true` and `false; true` are green always — so the checker refuses
+  them outright rather than guessing which are honest. `&&` is fine: every link has to succeed,
+  so `cd packages/x && pytest -q` is exactly as strong as `pytest -q`. Need real sequencing? Put
+  it in a script and name the script. Operators inside quotes are arguments, not chains, so
+  `python3 -c "import sys; sys.exit(0)"` is fine.
 - Escape any literal `\|` inside a cell. An unescaped pipe adds a column and shifts every later
   cell, so `Status` would be read from the wrong place.
 - Status: `pending` → `done` (worker reported) → `verified` (coordinator checked it themselves).
