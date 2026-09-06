@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T00:24:55+0200
+updated: 2026-09-07T00:35:07+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -41,15 +41,28 @@ revert. If no mutation isolates a row, that row does not earn its place.
   divergence has no site here. The measured `OWNS:` placeholder disjointness is PINNED as a
   row, so the port reproduces the defect rather than quietly diverging from the oracle.
 
+- `gates.py`: `list_scopes`, `scope_files`, `legacy_files`, `resolve_target`,
+  `same_file_identity`, and the private `_named_entry` / `_real_directory_inside` /
+  `_markdown_discovery` / `_scope_discovery` / `_legacy_discovery`. Eight tree shapes
+  (`tests/discovery-diff.sh` + `build-discovery-tree.py`), nine mutation controls, six redden.
+  **Found a real defect on the first run**: JS `Array.sort()` orders by UTF-16 code UNITS and
+  Python `sorted()` by code POINTS, so a `gates/` directory holding U+1F600 and U+FFFD came
+  back reversed — `markdownDiscovery` sorts filenames with NO id filter, so nothing upstream
+  prevents it. Fixed with `jsapi.js_sort_key` (UTF-16-BE bytes; big-endian is the property
+  that makes byte order equal unit order) at both sort sites.
+
 ### NEXT ACTION
-1. **The 7 remaining `gates.mjs` exports**, in dependency order: `sameFileIdentity`,
-   `statCurrentNamedFile`, `listScopes`, `scopeFiles`, `legacyFiles`, `resolveTarget`,
-   `readLeases`. All are FILESYSTEM-facing, so the differential needs a built tree, not a
-   string corpus — and the divergence classes shift accordingly: `errno` names vs `strerror`,
-   `readdir` order vs `os.scandir` order (neither sorted; `listScopes` sorts, the others may
-   not), symlink and `realpath` behaviour, and `existsSync` swallowing every error where
-   `os.path.exists` does the same but `os.stat` does not.
+1. **`statCurrentNamedFile`** — the last non-dead `gates.mjs` export, consumed by
+   `gate-check.mjs:422,435`. Its logic is already INLINE inside the ported
+   `read_stable_regular_file`; the work is extracting it as a public name with the oracle's
+   own option surface (`maxBytes`, `openFlags`, `label`, `stableSnapshot`) and its
+   non-creating/non-truncating flag assertion. The Windows fstat-bracketing branch is
+   unreachable on this machine — port it, mark it UNWITNESSED, do not pretend otherwise.
 2. **`gate-check.mjs`** (950 lines) — last, because it consumes all of the above.
+
+`readLeases` needs `releaseLeases`/`claimLeases` context and is dumped by no driver yet;
+`scopeFiles`/`legacyFiles` have ZERO callers in `scripts/` or `tests/` (verified) — ported
+because they are exported and would ship, not because anything exercises them.
 
 ### GOTCHAS THAT HAVE ALREADY COST TIME — do not rediscover these
 - **Stale `.pyc` makes two measurements of the same code disagree.** A `.pyc` validates on
@@ -79,6 +92,16 @@ revert. If no mutation isolates a row, that row does not earn its place.
 - `with_file_lock` CONTENTION has zero coverage (needs two processes).
 - `re.ASCII` on `_MD_SUFFIX_RE` is defensive and UNWITNESSED — measured, no character folds onto
   "m" or "d", so no row can distinguish its presence.
+- Three spellings in the discovery port are DEFENCE IN DEPTH, not verified behaviour, and a
+  green `discovery-diff.sh` must not be read as covering them: `is_dir(follow_symlinks=False)`,
+  `realpath(..., strict=True)`, and `os.path.exists` (vs `lexists`). All three mutations
+  survive every variant, for ONE cause — `_real_directory_inside` lstats and rejects symlinks
+  itself, subsuming each guard ahead of it. The ORACLE carries the same redundancy, so the
+  port is faithful; the gap is in what any test can witness, not in the code.
+- A mutation probe must CHECK ITS EDIT LANDED. One reported "NOTHING REDDENED" for an anchor
+  that appeared 3 times, so the assert fired, the file was never mutated, and the suite ran
+  clean against unmutated code — a green that meant nothing. Compare the file before and after
+  the edit, not just the exit status of the probe.
 
 ## Why this TRDD exists
 
