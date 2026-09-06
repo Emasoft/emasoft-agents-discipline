@@ -171,6 +171,12 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
         # TypeError. Python has no second empty value to map that onto -- None IS how a
         # keyword argument says "not supplied" -- so there is no caller that can express the
         # throwing case, and making None throw would break the default path instead.
+        #
+        # CALLER OBLIGATION, because the argument above stops holding the moment a root comes
+        # from anywhere but a literal: JSON `null` decodes to None, so a root read out of parsed
+        # JSON would silently DISABLE containment here where the oracle throws. Every caller
+        # must pass a root from argv or a computed path, never from a parsed document. Today's
+        # do (dispatch takes --root from the CLI); dispatch.py must keep it that way.
         canonical_root = None if root is None else os.path.realpath(os.path.abspath(root), strict=True)
         canonical_before = os.path.realpath(target, strict=True)
         if canonical_root is not None and not _path_is_inside(canonical_root, canonical_before):
