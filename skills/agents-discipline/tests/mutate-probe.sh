@@ -36,7 +36,10 @@ cp "$target" "$backup"
 # PRINTED, because a SIGKILL skips the trap and leaves the mutant in place; without this the
 # only copy of the original is at an unknown temp path and recovery needs a gated git checkout.
 echo "$label -> backup: $backup" >&2   # stderr: stdout carries the VERDICT
-trap 'cp "$backup" "$target"' EXIT INT TERM
+# The restore is CHECKED: an unchecked cp that fails (read-only target, full disk) leaves the
+# mutant in the working tree while the script still prints a normal verdict, and the next
+# probe's baseline guard would report it as somebody else's problem.
+trap 'cp "$backup" "$target" || echo "RESTORE FAILED -- $target may still be MUTATED; original at $backup" >&2' EXIT INT TERM
 
 # Guard 0. A pre-existing divergence makes every subsequent probe a false positive, so the
 # harness must establish its own baseline rather than assume one.
@@ -45,14 +48,14 @@ if ! "$@" >/tmp/mutate-baseline.out 2>&1; then
   tail -3 /tmp/mutate-baseline.out
   exit 1
 fi
-# Exiting 0 is NOT proof the runner observes anything -- a script that prints nothing and
-# exits 0 would sail through and then report NOTHING REDDENED for every mutation. Require the
-# runner's own success marker. This is still not a full positive control (that needs a canary
-# mutation known to diverge); it closes the silent-runner case only, and says so.
-if ! grep -q -- "--- all identical ---" /tmp/mutate-baseline.out; then
-  echo "$label -> PROBE FAILED (runner produced no success marker; is it a differential runner?)"
-  exit 1
-fi
+# A success-marker grep ("--- all identical ---") sat here and was REMOVED. Both runners print
+# that banner IFF they exit 0, so it was exactly redundant with the check above; its only
+# effect that was not redundant was rejecting any OTHER differential runner, and the realistic
+# case it shared -- a dropped runner argument -- is caught by the guard at the top.
+# NOTE THE REMAINING LIMIT: a baseline that merely exits 0 is not proof the runner can OBSERVE
+# anything. A true positive control needs a canary mutation known to diverge, run once per
+# batch. That does not exist yet; do not read a NOTHING REDDENED as proof of no coverage
+# without one.
 
 if ! OLD="$old" NEW="$new" python3 -B -c '
 import os, pathlib, sys
@@ -87,11 +90,14 @@ output=$("$@" 2>&1)
 # rows is how "reddens 9" got quoted forward as nine independent catches.
 diverged=$(printf '%s\n' "$output" | grep -cE '^DIVERGE')
 crashed=$(printf '%s\n' "$output" | grep -cE '^(CRASH|BUILD-FAILED|VACUOUS)')
-# EXIT CODES, so a batch can assert "every probe must redden". Previously all three outcomes
-# exited 0 and the distinction lived only in prose for a human to read -- and an invocation
-# that piped this through `grep` discarded even the PROBE FAILED status, since a pipeline
-# returns its LAST command's.
-#   0 REDDENS   1 PROBE FAILED   2 NOTHING REDDENED   3 INCONCLUSIVE
+# NO exit-code protocol for the verdicts. A 0/1/2/3 scheme was added here and then REMOVED:
+# nothing in this repo invokes this script, so the codes had no reader -- and the DIFFERS
+# branch shared exit 0 with REDDENS, reinstating the very "distinction lives only in prose"
+# flaw the codes were meant to remove. If a batch runner is ever wanted, write THAT and let it
+# define the codes. `PROBE FAILED` keeps exit 1, which is useful for `||` today.
+#
+# Read the verdict from stdout, and do NOT pipe this script through a filter: a pipeline
+# returns its LAST command's status, which discards even the PROBE FAILED code.
 if [ "$diverged" -gt 0 ]; then
   # For a target under tests/, DIVERGE may mean the DRIVERS were unpaired rather than that the
   # implementation fix is load-bearing -- the harness cannot tell those apart, so it refuses to
@@ -100,12 +106,9 @@ if [ "$diverged" -gt 0 ]; then
     */tests/*|tests/*) echo "$label -> DIFFERS ($diverged variant(s)) -- target is a DRIVER, so this may only mean the two drivers no longer match" ;;
     *) echo "$label -> REDDENS ($diverged diverging variant(s)$([ "$crashed" -gt 0 ] && echo ", $crashed crash(es)"))" ;;
   esac
-  exit 0
 elif [ "$crashed" -gt 0 ]; then
   # A crash is NOT a catch: the mutant broke the harness, so the probe proved nothing.
   echo "$label -> INCONCLUSIVE (only crashes, $crashed) -- the mutant broke the runner"
-  exit 3
 else
   echo "$label -> NOTHING REDDENED"
-  exit 2
 fi

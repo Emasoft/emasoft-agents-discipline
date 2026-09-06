@@ -12,8 +12,17 @@ if [ $jrc != 0 ] || [ $prc != 0 ]; then
   head -3 /tmp/lease-js.err; tail -3 /tmp/lease-py.err   # node message first, Python's last
   exit 1
 fi
-# NON-VACUITY: the sequence must actually claim, conflict and release. A port that refused
-# every claim would produce two identical all-refused runs and pass a bare diff.
+# NON-VACUITY: the sequence must actually claim, conflict and release.
+#
+# WHAT THIS GATE COVERS, and what it does NOT -- the earlier comment here had it BACKWARDS,
+# and this is the sentence a future reader would trust. The counts are read from the ORACLE's
+# output (/tmp/lease-js.json), so no change to gates.py can move them:
+#   * a degraded PORT (claim_leases always refusing) leaves the counts untouched, so this gate
+#     PASSES and the DIFF is what catches it. MEASURED: forcing the no-globs branch produced
+#     `DIVERGE lease sequence`, never VACUOUS.
+#   * a degraded SEQUENCE (a claim step deleted from BOTH drivers) makes the diff pass, since
+#     both sides agree, and this gate is then the ONLY thing that fires.
+# The two are complements; neither subsumes the other.
 node -e '
 const steps = JSON.parse(require("node:fs").readFileSync("/tmp/lease-js.json", "utf8"));
 const ok = steps.filter((s) => s.outcome && s.outcome.ok === true).length;
@@ -30,7 +39,7 @@ if (ok !== 4 || conflicted !== 8 || released !== 2) {
   process.exit(1);
 }' || { echo "VACUOUS lease sequence"; exit 1; }
 if diff -q /tmp/lease-js.json /tmp/lease-py.json >/dev/null; then
-  echo "OK      lease sequence (20+ steps)"; echo "--- all identical ---"; exit 0
+  echo "OK      lease sequence (22 steps)"; echo "--- all identical ---"; exit 0
 fi
 echo "DIVERGE lease sequence"; diff /tmp/lease-js.json /tmp/lease-py.json | head -20
 echo "--- DIVERGENCES ABOVE ---"; exit 1
