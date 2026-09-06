@@ -98,4 +98,18 @@ for (const cp of TRIM_PROBE) {
   const c = String.fromCodePoint(cp);
   out.push(["trim U+" + cp.toString(16).padStart(4, "0"), (c + "a" + c).trim() === "a"]);
 }
+// String(<number>) -- Number::toString, which str() matches only in the middle. Each of these
+// was measured wrong at some point: inf CRASHED (int(inf) raises), 1e-5/1e-6 use plain decimal
+// in JS and exponent in Python, 1e-7 differs only by a ZERO-PADDED exponent, and an integral
+// float above 2**53 prints the shortest round-tripping decimal in JS and the exact binary
+// expansion via int(). Exact powers of ten agree either way, which is what hid the last one.
+const NUMS = [1.0, 0.5, 1e21, 1.5e21, 1e22, 1e-7, 1e-6, 1e-5, 1 / 3, -0.0, Infinity, -Infinity,
+  NaN, 1e25, 1e-21, 123.456, 5e-324, 1.7976931348623157e308, 5, -5, 0, 10 ** 21, 10 ** 25,
+  2 ** 53, 2 ** 53 + 2, 1.2345678901234567e20, 9.999999999999999e20, 2 ** 60, 1e20, 1e16, 1e17];
+for (const n of NUMS) out.push(["String(number) " + JSON.stringify(String(n)), String(n)]);
+for (const [label, v] of [["null", null], ["true", true], ["false", false], ["empty array", []],
+  ["array one", ["pending"]], ["array null", [null, 1]], ["nested", [[1, 2], [3]]],
+  ["object", {}], ["array of object", [{}]]]) {
+  out.push(["String(other) " + label, String(v)]);
+}
 process.stdout.write(JSON.stringify(out, null, 2) + "\n");

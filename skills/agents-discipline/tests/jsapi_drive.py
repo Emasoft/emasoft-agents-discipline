@@ -8,7 +8,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts", "lib"))
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
-    js_json_object, js_length, js_object_key_order, js_slice, js_trim, locale_compare_key,
+    js_json_object, js_length, js_object_key_order, js_slice, js_string, js_trim, locale_compare_key,
     parse_date,
 )
 
@@ -95,6 +95,17 @@ for _cp in (
 ):
     _c = chr(_cp)
     out.append(["trim U+" + format(_cp, "04x"), js_trim(_c + "a" + _c) == "a"])
+
+_NUMS = [1.0, 0.5, 1e21, 1.5e21, 1e22, 1e-7, 1e-6, 1e-5, 1 / 3, -0.0, float("inf"),
+         float("-inf"), float("nan"), 1e25, 1e-21, 123.456, 5e-324, 1.7976931348623157e308,
+         5, -5, 0, 10 ** 21, 10 ** 25, 2 ** 53, 2 ** 53 + 2, 1.2345678901234567e20,
+         9.999999999999999e20, float(2 ** 60), 1e20, 1e16, 1e17]
+for _n in _NUMS:
+    out.append(["String(number) " + json.dumps(js_string(_n)), js_string(_n)])
+for _label, _v in [["null", None], ["true", True], ["false", False], ["empty array", []],
+                   ["array one", ["pending"]], ["array null", [None, 1]],
+                   ["nested", [[1, 2], [3]]], ["object", {}], ["array of object", [{}]]]:
+    out.append(["String(other) " + _label, js_string(_v)])
 
 json.dump(out, sys.stdout, indent=2, ensure_ascii=False)
 sys.stdout.write("\n")

@@ -20,6 +20,7 @@ that includes every case measured above.
 """
 
 import datetime
+import decimal
 import re
 
 # ---------------------------------------------------------------------------------------------
@@ -77,9 +78,59 @@ def js_truthy(value):
     """`!!value` -- JS truthiness, which is not `bool(value)`."""
     if isinstance(value, float) and value != value:      # NaN: falsy in JS, truthy in Python
         return False
-    if isinstance(value, (list, dict, tuple, set)):      # any object is truthy in JS, even empty
+    # list/dict/tuple only -- NOT set. js_string cannot render a set (str(set()) is "set()"
+    # where String(new Set()) is "[object Set]"), so claiming it truthy here would feed
+    # js_string a value it renders wrongly. The two must model the same type domain.
+    if isinstance(value, (list, dict, tuple)):           # any object is truthy in JS, even empty
         return True
     return bool(value)
+
+
+def _js_number(value):
+    """`String(<number>)` -- Number::toString, which `str()` matches only in the middle.
+
+    MEASURED against Node, and every one of these was wrong before:
+      float("inf")  -- `int(value)` raised OverflowError. A CRASH where JS prints "Infinity".
+      1e-7          -- JS "1e-7", Python "1e-07": Python zero-pads the exponent to two digits.
+      0.000001      -- JS "0.000001", Python "1e-06": the two switch to exponential notation at
+                       DIFFERENT thresholds. JS uses plain decimal over [1e-6, 1e21) and Python's
+                       repr leaves it at 1e-4, so the whole band between them is mis-rendered.
+      -0.0          -- JS "0" (String, unlike Object.is, does not preserve the sign).
+    """
+    if value != value:
+        return "NaN"
+    if value == float("inf"):
+        return "Infinity"
+    if value == float("-inf"):
+        return "-Infinity"
+    if value == 0:
+        return "0"                                  # covers -0.0, which JS prints unsigned
+    magnitude = abs(value)
+    if magnitude < 1e21 and float(value).is_integer():
+        # Decimal(repr(...)), NOT int(value). Above 2**53 a float names a value whose EXACT
+        # binary expansion is not what JS prints: the engine prints the SHORTEST decimal that
+        # round-trips, zero-padded. Measured -- String(1.2345678901234567e20) is
+        # "123456789012345670000" and str(int(...)) gives "123456789012345667584", the true
+        # binary value. repr() is Python's shortest-round-trip form, so converting THAT to an
+        # integer reproduces the engine's answer. Exact powers of ten agree either way, which is
+        # why my first 26-value corpus missed this entirely.
+        return str(int(decimal.Decimal(repr(float(value)))))
+    if 1e-6 <= magnitude < 1e21:
+        # Plain decimal, at the SHORTEST precision that still round-trips -- which is what both
+        # engines print, but Python's repr may hand back an exponent form inside this band.
+        for places in range(1, 18):
+            candidate = f"{value:.{places}f}".rstrip("0").rstrip(".")
+            if float(candidate) == value:
+                return candidate
+        return repr(value)
+    # Exponential. Python writes e-07/e+21, JS writes e-7/e+21: strip the zero padding, keep the
+    # sign, and drop a mantissa that is a bare integer down to its digits (1e+21, never 1.0e+21).
+    mantissa, _, exponent = repr(value).partition("e")
+    if not exponent:
+        mantissa, _, exponent = f"{value:e}".partition("e")
+    mantissa = mantissa.rstrip("0").rstrip(".") if "." in mantissa else mantissa
+    sign = "-" if exponent.startswith("-") else "+"
+    return mantissa + "e" + sign + str(int(exponent.lstrip("+-")))
 
 
 def js_string(value):
@@ -99,11 +150,21 @@ def js_string(value):
         return "true"
     if value is False:
         return "false"
-    if isinstance(value, float):
-        if value != value:
-            return "NaN"
-        if value == int(value) and abs(value) < 1e21:
-            return str(int(value))                        # JS prints 1.0 as "1"
+    # int too, NOT just float: a Python int is a JS NUMBER, and Number stringifies in exponential
+    # form from 1e21 up. Measured: String(10**21) is "1e+21" and str() gives the 22 digits. They
+    # agree for every int below that, which is why falling through to str() looked correct.
+    # (A JS BigInt would print the digits -- but nothing in this port produces one, and a value
+    # arriving from JSON.parse is a Number.)
+    if isinstance(value, (int, float)) and value is not True and value is not False:
+        if isinstance(value, int) and abs(value) >= 10 ** 21:
+            try:
+                return _js_number(float(value))
+            except OverflowError:
+                # A Python int has unbounded range; a JS Number does not. 10**309 exceeds the
+                # double maximum, where JS prints "Infinity" -- float() RAISES instead, so the
+                # conversion itself has to produce the same answer the engine would.
+                return "-Infinity" if value < 0 else "Infinity"
+        return _js_number(value)
     if isinstance(value, dict):
         return "[object Object]"
     if isinstance(value, (list, tuple)):
