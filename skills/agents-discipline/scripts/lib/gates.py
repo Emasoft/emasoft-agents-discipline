@@ -17,7 +17,9 @@ import time
 # `.trim()` is NOT `str.strip()`: the sets differ in both directions (U+FEFF one way, the five
 # separators U+001C-U+001F and U+0085 the other). Every `.trim()` in the gates.mjs half is ported
 # through this helper rather than str.strip(); see jsapi.js_trim for the measured sets.
-from jsapi import js_length, js_slice, js_trim  # noqa: E402  # type: ignore[import-not-found]
+from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
+    js_length, js_slice, js_string, js_trim, js_truthy,
+)
 
 AGENTS_DISCIPLINE_DIR = ".agents-discipline"
 LOCK_DIR = os.path.join(AGENTS_DISCIPLINE_DIR, "locks")
@@ -576,9 +578,14 @@ _AUTOMATIC_SUCCESS_RE = re.compile(
 def classify_gate_evidence(gate):
     """Port of classifyGateEvidence: pending | automatic-current | automatic-stale | human."""
     raw = gate.get("evidence") if isinstance(gate, dict) else None
-    # `String((gate && gate.evidence) || "")` coerces every FALSY value to "" -- 0 and False
-    # included -- while an explicit null is handled by the branch before it. Both land on "".
-    evidence = "" if raw is None or not raw else str(raw)
+    # js_truthy/js_string, NOT `not raw` and `str(raw)`. `String((gate && gate.evidence) || "")`
+    # coerces on JS rules, and Python's disagree in both directions -- MEASURED against the
+    # oracle: evidence=NaN is "pending" there and was "human" here (NaN is falsy in JS, truthy in
+    # Python); evidence={} is "human" there and was "pending" here (an empty object is truthy in
+    # JS, falsy in Python). Both flip a gate's met/unmet verdict. Unreachable from parse_gates,
+    # which only ever stores a str or None; reachable from a hand-built gate, which is how
+    # hardening-tests.mjs calls this.
+    evidence = "" if raw is None or not js_truthy(raw) else js_string(raw)
     if evidence == "" or _PENDING_RE.match(evidence):
         return "pending"
     definition_digest = gate_definition_digest(gate)
@@ -601,7 +608,11 @@ def classify_gate_evidence(gate):
 
 def gate_state(gate, abandoned):
     """Port of gateState. `abandoned` is a dict here and a Map in the oracle; both are `in`."""
-    if gate["id"] in abandoned:
+    # .get(), not ["id"]: the oracle does `abandoned.has(gate.id)`, and a gate with no id gives
+    # `has(undefined)` -> false, so it carries on. `gate["id"]` RAISES KeyError instead -- a crash
+    # where the oracle returns a verdict. Measured on a hand-built gate: oracle stale-unmet, port
+    # KeyError. None is not a legal id, so it can never collide with a real abandoned key.
+    if gate.get("id") in abandoned:
         return "abandoned"
     if not gate.get("checked"):
         return "unmet"

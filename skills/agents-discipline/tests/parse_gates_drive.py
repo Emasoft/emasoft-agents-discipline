@@ -48,6 +48,12 @@ for _name, _evidence in [
     ["human", "I ran it and it worked"],
     ["long astral over cap", _OK_PREFIX + _BODY + "x" + chr(0x1F600) * 451],
     ["long ascii over cap", _OK_PREFIX + _BODY + "x" * 900],
+    ["coerce NaN", float("nan")], ["coerce empty object", {}], ["coerce empty array", []],
+    ["coerce array of one", [1]], ["coerce true", True], ["coerce float", 1.0],
+    ["coerce zero", 0], ["coerce false", False], ["coerce str zero", "0"],
+    ["coerce list pending", ["pending"]],
+    ["coerce list stale", ["automatic-evidence=v1; x"]],
+    ["coerce list nested", [["a"], None, 2]],
 ]:
     _gate = dict(_RUNNABLE, evidence=_evidence)
     _SYNTHETIC.append([_name, {
@@ -70,6 +76,9 @@ for _name, _value in [
     ["nel padded line", "a" + chr(0x85) + "\nb"],
 ]:
     _SYNTHETIC.append(["tail " + _name, tail(_value)])
+_SYNTHETIC.append(["state no id", gate_state(
+    {"checked": True, "check": "echo ok", "expect": "ok", "cwd": None,
+     "evidence": "pending"}, {})])
 
 gates = doc["gates"]
 

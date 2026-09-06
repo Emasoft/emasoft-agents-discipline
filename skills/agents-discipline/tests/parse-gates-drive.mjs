@@ -48,6 +48,17 @@ for (const [name, evidence] of [
   // oracle REJECTS. Both sit around the cap with an otherwise-valid body.
   ["long astral over cap", OK_PREFIX + BODY + "x" + "\u{1F600}".repeat(451)],
   ["long ascii over cap", OK_PREFIX + BODY + "x".repeat(900)],
+  // COERCION. `String((gate && gate.evidence) || "")` is JS truthiness + JS String(),
+  // and Python disagrees in BOTH directions -- measured: NaN is falsy here and truthy
+  // there; {} is truthy here and falsy there. Each flips the met/unmet verdict.
+  ["coerce NaN", NaN], ["coerce empty object", {}], ["coerce empty array", []],
+  ["coerce array of one", [1]], ["coerce true", true], ["coerce float", 1.0],
+  ["coerce zero", 0], ["coerce false", false], ["coerce str zero", "0"],
+  // Array.prototype.toString: comma-joined, null/undefined render EMPTY. String(["pending"])
+  // is "pending", so a LIST can carry a real verdict -- str() would give "['pending']".
+  ["coerce list pending", ["pending"]],
+  ["coerce list stale", ["automatic-evidence=v1; x"]],
+  ["coerce list nested", [["a"], null, 2]],
 ]) {
   const gate = { ...RUNNABLE, evidence };
   SYNTHETIC.push([name, {
@@ -78,6 +89,11 @@ for (const [name, value] of [
 ]) {
   SYNTHETIC.push(["tail " + name, tail(value)]);
 }
+// A gate with NO id: `abandoned.has(undefined)` is false and the oracle returns a
+// verdict, where `gate["id"]` RAISED KeyError in the port. Measured.
+SYNTHETIC.push(["state no id", gateState(
+  { checked: true, check: "echo ok", expect: "ok", cwd: null, evidence: "pending" },
+  new Map())]);
 
 const doc = parseGates(readFileSync(process.argv[2], "utf8"));
 // The digest is compared as HEX, per gate, over the real fixtures -- so the unicode fixture

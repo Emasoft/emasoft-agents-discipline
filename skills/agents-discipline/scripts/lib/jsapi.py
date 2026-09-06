@@ -60,6 +60,60 @@ def js_trim(value):
 
 
 # ---------------------------------------------------------------------------------------------
+# Truthiness and String() -- the two coercions `x || ""` and `String(x)` perform
+# ---------------------------------------------------------------------------------------------
+
+# JS falsy is EXACTLY: false, 0, -0, 0n, "", null, undefined, NaN. Python's `bool()` disagrees in
+# two directions, and both were MEASURED as live divergences in classify_gate_evidence:
+#   NaN  -- falsy in JS, TRUTHY in Python. `NaN || ""` is "" (pending); `not nan` is False, so a
+#           plain port took str(nan) == "nan" and returned "human".
+#   [] {} -- TRUTHY in JS, falsy in Python. `{} || ""` is the object, String({}) is
+#           "[object Object]" (human); a plain port took "" and returned "pending".
+# Neither is reachable from parse_gates, which only ever sets a str or None -- both are reachable
+# from a hand-built gate, which is exactly how hardening-tests.mjs calls these functions.
+
+
+def js_truthy(value):
+    """`!!value` -- JS truthiness, which is not `bool(value)`."""
+    if isinstance(value, float) and value != value:      # NaN: falsy in JS, truthy in Python
+        return False
+    if isinstance(value, (list, dict, tuple, set)):      # any object is truthy in JS, even empty
+        return True
+    return bool(value)
+
+
+def js_string(value):
+    """`String(value)` -- not `str(value)`.
+
+    Covers the types a gate field can carry. NOT a general ToString: a class instance, a
+    function or a Symbol has no counterpart here, and inventing one would be a guess rather
+    than a port. Anything unlisted falls through to str(), which is what the previous code did
+    for everything.
+    """
+    # None maps to "null". Python has no `undefined`, so a caller that must distinguish a MISSING
+    # key from an explicit null does it at the call site (`"k" in d`), not here -- a sentinel
+    # parameter would be machinery for a distinction this module cannot see.
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, float):
+        if value != value:
+            return "NaN"
+        if value == int(value) and abs(value) < 1e21:
+            return str(int(value))                        # JS prints 1.0 as "1"
+    if isinstance(value, dict):
+        return "[object Object]"
+    if isinstance(value, (list, tuple)):
+        # Array.prototype.toString: comma-joined, with null/undefined rendering as EMPTY.
+        return ",".join("" if v is None else js_string(v) for v in value)
+    return str(value)
+
+
+
+# ---------------------------------------------------------------------------------------------
 # Object key order
 # ---------------------------------------------------------------------------------------------
 
