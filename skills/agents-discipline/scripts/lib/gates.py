@@ -523,6 +523,12 @@ def gate_definition_digest(gate):
         return None
     if not isinstance(expect, str) or expect == "":
         return None
+    # KNOWN GAP, live only for a HAND-BUILT gate. `str(cwd)` is not `String(cwd)` for a non-str:
+    # True -> "True" vs "true", 1.0 -> "1.0" vs "1", [1] -> "[1]" vs "1". Every gate reaching here
+    # from parse_gates carries a str or None, so nothing today can differ -- but
+    # hardening-tests.mjs builds gate objects by hand and calls gateDefinitionDigest on them, so
+    # porting THAT suite is what makes this reachable, and the failure would be a silently
+    # different digest rather than an error. Needs a js_string() helper at that point, not before.
     cwd = gate.get("cwd")
     payload = [
         "agents-discipline.gate-definition",

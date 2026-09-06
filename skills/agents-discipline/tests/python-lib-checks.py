@@ -428,6 +428,22 @@ for _fixture in _fixtures:
     if _probe.returncode == 0:
         _oracle_docs[_fixture.name] = json.loads(_probe.stdout)
 _all = list(_oracle_docs.values())
+# The probe loop stores a doc ONLY on returncode == 0, so a fixture that crashes the oracle
+# silently drops out of _all and weakens every `any(...)` predicate below -- each would then be
+# asking a smaller corpus and could go green by not looking. Nothing reported that until now.
+report(len(_oracle_docs) == len(_fixtures),
+       "parse_gates: the oracle parsed EVERY fixture (none silently dropped)",
+       f"{len(_oracle_docs)} of {len(_fixtures)}")
+_jstrim = _oracle_docs.get("js-trim.md", {})
+
+
+def _digest_of(doc, gate_id):
+    """The gate's definition digest from the ORACLE's own dump, or None."""
+    for row in doc.get("digests", []):
+        if row["id"] == gate_id:
+            return row["digest"]
+    return None
+
 # Each predicate must be satisfiable ONLY by a fixture that exercises the class in its name.
 # Three of these were not, and they had the exact defect they were written to catch:
 #   - "no final newline" was `finalNewline is False`, which a ZERO-BYTE file satisfies — so it
@@ -475,14 +491,27 @@ _classes = {
     # This guards the CORPUS, not the port: _oracle_docs is Node's output, so the second half
     # holds no matter what the port does. Catching a port regression is the differential's job,
     # and it does -- measured, reverting js_trim to str.strip() makes js-trim.md diverge.
+    # THE WITNESSES MUST EXIST. `all()` over an empty sequence is True, so the previous spelling
+    # passed when js-trim.md parsed to NOTHING -- gates [], owns [], abandoned [] -- which is
+    # verbatim the regression the commit before this one repaired (an indented OWNS and a
+    # misspelled ABANDON parsed to nothing and the fixture still looked fine). A predicate that
+    # survives its own subject vanishing asserts nothing. The three non-empty checks below are
+    # exactly the three lists that came back empty then.
     "a value padded with JS-only whitespace": (
         "﻿" in (_PORT_FIXTURES / "js-trim.md").read_text(encoding="utf-8")
+        and bool(_jstrim.get("gates")) and bool(_jstrim.get("owns"))
+        and bool(_jstrim.get("abandoned"))
         and all("﻿" not in str(g.get(_f) or "")
-                for g in _oracle_docs.get("js-trim.md", {}).get("gates", [])
-                for _f in ("check", "expect", "title"))
+                for g in _jstrim["gates"] for _f in ("check", "expect", "title"))
     ),
+    # Joined to the DIGEST, not merely to a gate. gate_definition_digest returns None unless
+    # both check and expect are non-empty strings, and several fixtures carry digest-None gates
+    # (errors.md, attr-association.md). Without the join, moving the non-ASCII onto one of those
+    # keeps this predicate green while ensure_ascii=False goes back to being untested -- the
+    # exact vacuity it was added to close, re-opened one fixture edit later.
     "non-ASCII in a digested field": any(
         isinstance(g.get(_f), str) and not g[_f].isascii()
+        and _digest_of(d, g["id"]) is not None
         for d in _all for g in d["gates"] for _f in ("check", "expect", "cwd")
     ),
     # The shapes the seventh review round named as structurally invisible: a fence closed by a
@@ -689,6 +718,34 @@ print(f"{len(calls)}|{stamp}|{calls}")
     report(_count == "1", "dispatch: _iso_now reads the clock EXACTLY once (not shape — count)",
            (_cp.stdout.strip() or _cp.stderr.strip())[:200])
 completed.append("dispatch")
+
+# automatic_evidence_prefix's REJECT path. Every fixture reaches this function with a digest
+# that is already 64 lowercase hex, so the validation never fires: mutating _DIGEST_HEX_RE to
+# `.*` produced ZERO divergences across all nine fixtures, and the "threw:" branch in both
+# parse-gates drivers is unreachable. The guard was therefore untested wherever it was tested
+# from. These call it directly.
+#
+# The trailing-newline row is the one that matters most: Python's `$` matches BEFORE a final
+# newline and JS's does not, so a `$`-spelled pattern would ACCEPT "…<64 hex>\n" that the oracle
+# REJECTS -- and the accepted value then goes straight into the evidence prefix. That is the
+# `\Z` this port spells everywhere, asserted here rather than assumed.
+if True:
+    sys.path.insert(0, LIB)
+    import gates as _g  # noqa: E402  # type: ignore[import-not-found]
+    _hex = "a" * 64
+    for _bad, _why in (
+        ("", "empty"), (None, "None"), ("A" * 64, "uppercase"), ("a" * 63, "63 chars"),
+        ("a" * 65, "65 chars"), (_hex + "\n", "trailing newline (the \\Z case)"),
+        ("g" * 64, "non-hex letter"), (" " + _hex, "leading space"),
+    ):
+        try:
+            _g.automatic_evidence_prefix(_bad)
+            report(False, f"automatic_evidence_prefix rejects {_why}", "it RETURNED instead")
+        except ValueError:
+            report(True, f"automatic_evidence_prefix rejects {_why}")
+    report(_g.automatic_evidence_prefix(_hex) ==
+           "automatic-evidence=v1; definition-sha256=" + _hex + ";",
+           "automatic_evidence_prefix accepts a real digest (positive control)")
 
 # INLINE, before the exit, so a missing section actually FAILS the run. The atexit hook alone
 # was decorative for the case it was written for: a section that returns early WITHOUT raising

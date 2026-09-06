@@ -14,9 +14,11 @@ reverting js_trim to str.strip() and reading which fields moved:
   | an ABANDON reason      | abandon reason      | reason keeps the BOM                |
   | an OWNS item           | OWNS item           | owns keeps the BOM                  |
 
-The sixth, normalize_owns_glob, cannot be reached with padding FROM HERE: the OWNS-item trim
-runs first, so normalize always receives an already-trimmed value. It is covered jointly, not
-independently, and its other caller is gate-check's --claim path.
+The OWNS row is JOINT, not isolated. Under CORRECT code the item trim runs first, so
+normalize_owns_glob never sees padding from a ledger — but under the mutation BOTH are
+`str.strip()`, so the padded item reaches normalize still padded and it fails to strip it too.
+The observed `owns` move therefore does not attribute to either site alone. normalize_owns_glob
+has no independent coverage here; its other caller is gate-check's --claim path.
 
 The first version of this fixture spelled OWNS indented under a gate and ABANDON as
 `ABANDON t2:`. Both are silently unparsed -- `owns` and `abandoned` came back EMPTY and the

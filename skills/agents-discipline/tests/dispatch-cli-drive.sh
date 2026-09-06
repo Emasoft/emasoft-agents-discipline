@@ -14,11 +14,17 @@ run() {                     # run <label> <args...>
   local label="$1"; shift
   local d1 d2 o1 o2 e1 e2
   d1=$(mktemp -d); d2=$(mktemp -d)
-  o1=$(node scripts/dispatch-check.mjs "$@" --root "$d1" 2>/tmp/e1); e1=$?
-  o2=$(python3 scripts/dispatch_check.py "$@" --root "$d2" 2>/tmp/e2); e2=$?
+  # `; printf X` is a SENTINEL, not decoration: $( ) strips ALL trailing newlines, so without it
+  # `console.log(x)` and a port doing `sys.stdout.write(x)` compare EQUAL -- measured, "a\n\n"
+  # and "a\n" are indistinguishable through command substitution. This driver's whole claim is a
+  # byte comparison of the CLI surface, and that class of difference was invisible to it.
+  # `exit $rc` is load-bearing: a bare `cmd; printf X` makes $? the status of PRINTF, so every
+  # exit-code row would silently read 0 and the usage/exit rows would stop asserting anything.
+  o1=$(node scripts/dispatch-check.mjs "$@" --root "$d1" 2>/tmp/e1; rc=$?; printf X; exit $rc); e1=$?
+  o2=$(python3 scripts/dispatch_check.py "$@" --root "$d2" 2>/tmp/e2; rc=$?; printf X; exit $rc); e2=$?
   local s1 s2
-  s1="exit=$e1|out=$o1|err=$(sed "s|$d1|<R>|g" /tmp/e1)"
-  s2="exit=$e2|out=$o2|err=$(sed "s|$d2|<R>|g" /tmp/e2)"
+  s1="exit=$e1|out=$o1|err=$(sed "s|$d1|<R>|g" /tmp/e1; printf X)"
+  s2="exit=$e2|out=$o2|err=$(sed "s|$d2|<R>|g" /tmp/e2; printf X)"
   if [ "$s1" = "$s2" ]; then echo "OK      $label"; else
     fail=1; echo "DIVERGE $label"; echo "  js: ${s1:0:170}"; echo "  py: ${s2:0:170}"
   fi
@@ -29,10 +35,10 @@ run() {                     # run <label> <args...>
 raw() {
   local label="$1"; shift
   local o1 o2 e1 e2 s1 s2
-  o1=$(node scripts/dispatch-check.mjs "$@" 2>/tmp/e1); e1=$?
-  o2=$(python3 scripts/dispatch_check.py "$@" 2>/tmp/e2); e2=$?
-  s1="exit=$e1|out=$o1|err=$(cat /tmp/e1)"
-  s2="exit=$e2|out=$o2|err=$(cat /tmp/e2)"
+  o1=$(node scripts/dispatch-check.mjs "$@" 2>/tmp/e1; rc=$?; printf X; exit $rc); e1=$?
+  o2=$(python3 scripts/dispatch_check.py "$@" 2>/tmp/e2; rc=$?; printf X; exit $rc); e2=$?
+  s1="exit=$e1|out=$o1|err=$(cat /tmp/e1; printf X)"
+  s2="exit=$e2|out=$o2|err=$(cat /tmp/e2; printf X)"
   if [ "$s1" = "$s2" ]; then echo "OK      $label"; else
     fail=1; echo "DIVERGE $label"; echo "  js: ${s1:0:170}"; echo "  py: ${s2:0:170}"
   fi
@@ -65,7 +71,13 @@ raw "RTL override escaped" "$(printf 'a\u202eb')"
 # green, so the branch had no coverage at all.
 raw "C1 control escaped" "$(python3 -c 'print("a" + chr(0x9b) + "b")')"
 raw "DEL escaped" "$(python3 -c 'print("a" + chr(0x7f) + "b")')"
-raw "astral passes through" "$(python3 -c 'print("cmd" + chr(0x1F600))')"
+# NOT a bare emoji: U+1F600 is not in _UNSAFE_TERMINAL and 4 bytes is far under the budget, so
+# a bare-emoji row duplicates the plain unknown-command row and NO mutation of the escape or
+# truncation logic can redden it -- the name claimed more than the row could show. Placed at the
+# byte budget instead, where the surrogate pair straddles the cut and js_slice's UTF-16
+# semantics decide whether a lone surrogate is emitted.
+raw "astral straddling the budget" "$(python3 -c 'print("z"*497 + chr(0x1F600)*4)')"
+raw "astral just under the budget" "$(python3 -c 'print("z"*480 + chr(0x1F600)*4)')"
 raw "over-budget truncates" "$(python3 -c 'print("z"*900)')"
 raw "escape inside the backoff" "$(python3 -c 'print("z"*495 + chr(0x202e)*4)')"
 raw "unknown option echoes value" open --scope api --wave w1 --leaf a "$(printf -- '--o\001pt')"
