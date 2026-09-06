@@ -35,10 +35,13 @@ Your leaf gate ledger: `<path, e.g. .agents-discipline/<scope>/gates/leaf-<id>.m
 Each gate is written out in full below, because you cannot see the coordinator's thread and
 cannot read their approval store.
 
-| Gate | CHECK | EXPECT |
-|------|-------|--------|
-| G1 | `<command, wrapped in a timeout — see below>` | `<the exact string success prints>` |
-| G2 | `<command>` | `<string>` |
+| Gate | CHECK | EXPECT | Who runs it |
+|------|-------|--------|-------------|
+| G1 | `<command, bounded — see below>` | `<the exact string success prints>` | you, then the coordinator |
+| G2 | `<command>` | `<string>` | coordinator only |
+
+`coordinator only` marks a gate you should NOT run — an expensive suite whose double execution
+is not worth it. Every other gate runs twice by design: once by you, once by the coordinator.
 
 **Bound every CHECK yourself.** The 120s limit, the output cap and the process-group kill all
 live inside `gate-check.mjs`; a command you run by hand in a shell inherits none of them, so an

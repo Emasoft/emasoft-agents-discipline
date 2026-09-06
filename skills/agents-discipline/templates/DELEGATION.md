@@ -33,7 +33,10 @@ Created: <ISO 8601, e.g. 2026-08-29T22:50:00+0200 — the checker dates artifact
 - One criterion per row. A disjunction ("either X passes or the card explains why") is
   unfalsifiable and breaks the re-run.
 - `Gates` names the leaf gate ledger for that row; `Attempts` counts re-dispatches against a cap.
-  The cap is advisory — nothing enforces it but you, so do not treat it as a guarantee.
+  **Both cells are advisory.** The checker holds them to the header's column count and reads
+  nothing else: it never opens the gate ledger you name, and never compares the attempt count
+  to its cap. Run `gate-check.mjs` on that ledger yourself — a `Gates` path that does not exist
+  is not an error here.
 - `node <skill-dir>/scripts/ledger-check.mjs <this file>` RUNS each verified row's acceptance
   command and appends a content-bound receipt. No receipt = never checked.
 - No "done" for the task until every row is `verified`.

@@ -139,7 +139,7 @@ Keep check execution sequential by default. Use `--jobs <N>` only for independen
 
 Use rolling dispatch: when a parent-verified leaf's exact lease has been released and that unblocks another, open and launch the next ready wave without waiting for unrelated in-flight work. Keep every leaf's `Owns`, `Needs`, `Tier`, `Planned wave`, and `State` in the one PLAN dispatch table; keep the tree topology-only. Store actual launch state in `.agents-discipline/<scope>/dispatch.json` and append events to the scope status log.
 
-Verification runs in three layers: leaf self-check, parent `--reverify`, and branch integration. Only the parent and branch layers are independent of the leaf. See [references/orchestration.md](references/orchestration.md).
+Verification runs in three layers: leaf self-check, parent `--reverify`, and branch integration. Only the parent and branch layers are independent of the leaf. None of them can stop a turn ending: enforcement is the ledger, the report gate, and an attempt cap nothing but you enforces. A worker's own run buys early failure detection, not trust, so every gate it runs costs twice — mark a gate coordinator-only in the brief when that is too expensive. See [references/orchestration.md](references/orchestration.md).
 
 ### Work each leaf in four passes
 
