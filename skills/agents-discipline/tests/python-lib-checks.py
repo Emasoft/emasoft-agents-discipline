@@ -49,7 +49,7 @@ failed = 0
 # not doing" failure: a documented hole is still a hole. atexit rather than wrapping each
 # section in try/except, because it needs no re-indentation and it reports the same fact.
 SECTIONS = ["regex_worker", "check_supervisor", "windows_taskkill_path", "process_tree",
-            "gates_helpers", "jsapi", "parse_gates", "short_write"]
+            "gates_helpers", "jsapi", "parse_gates", "short_write", "enoent_probe"]
 completed = []
 
 
@@ -533,6 +533,51 @@ report("ALL BYTES" in _lines.get("success", "") or "SKIPPED" in _lines.get("succ
        "short_write: _write_all delivers every byte across multiple short writes",
        _lines.get("success", "MISSING"))
 completed.append("short_write")
+
+# --- enoent_probe: the arm that distinguishes a MISSING file from a SWAPPED one -------------
+# Port-only, and stub-driven because it is a race: os.open must report ENOENT while the name
+# EXISTS. No oracle comparison is possible without the same stub, so what is asserted is the
+# DISTINCTION the oracle draws — and it is load-bearing, not cosmetic: dispatch's readState
+# returns emptyState() on ENOENT, so a port that re-raised the raw error would hand back an
+# empty wave set on exactly the interleaving the oracle refuses.
+_probe_src = r"""
+import errno, os, sys
+sys.path.insert(0, %r)
+import gates
+target = sys.argv[1]
+real_open = os.open
+def enoent_once(path, flags, *a, **k):
+    os.open = real_open                      # only the FIRST open lies
+    raise OSError(errno.ENOENT, "No such file or directory", path)
+os.open = enoent_once
+try:
+    gates.read_stable_regular_file(target, label="dispatch state")
+    print("NO ERROR")
+except OSError as error:
+    print(f"{errno.errorcode.get(error.errno, 'NONE')}|{error}")
+finally:
+    os.open = real_open
+""" % (LIB,)
+_ep_dir = tempfile.mkdtemp()
+try:
+    _present = os.path.join(_ep_dir, "present.json")
+    with open(_present, "w", encoding="utf-8") as _h:
+        _h.write('{"schema":1}\n')
+    _ep = subprocess.run([sys.executable, "-c", _probe_src, _present],
+                         capture_output=True, text=True, timeout=30)
+    _out = _ep.stdout.strip()
+    report("appeared after its open" in _out and _out.startswith("NONE|"),
+           "enoent_probe: a name that reappears is an ERROR, not an absence", _out[:160])
+    # DISCRIMINATING CONTROL: a genuinely missing file must still raise a real ENOENT, or the
+    # arm above would just be swallowing every ENOENT and dispatch could never see an absence.
+    _ep2 = subprocess.run([sys.executable, "-c", _probe_src, os.path.join(_ep_dir, "gone.json")],
+                          capture_output=True, text=True, timeout=30)
+    _out2 = _ep2.stdout.strip()
+    report(_out2.startswith("ENOENT|"),
+           "enoent_probe: a genuinely missing file still raises ENOENT (control)", _out2[:160])
+finally:
+    shutil.rmtree(_ep_dir, ignore_errors=True)
+completed.append("enoent_probe")
 
 # INLINE, before the exit, so a missing section actually FAILS the run. The atexit hook alone
 # was decorative for the case it was written for: a section that returns early WITHOUT raising

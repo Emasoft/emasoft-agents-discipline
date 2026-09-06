@@ -112,10 +112,14 @@ def _success_case():
         _write_all(-1, PAYLOAD)
     finally:
         gates_module.os.write = real_write
-    # Asserted, not assumed: a future edit that moves the restore out of the finally would
-    # otherwise leave every later os.write in this process returning a 4 KiB lie, and the two
-    # RLIMIT cases run AFTER this one.
-    assert os.write is real_write, "os.write was not restored"
+        # INSIDE the finally, and a raise rather than an `assert`. Placement: the check exists
+        # for a future edit that moves the restore out of this block, and in that world a
+        # RAISING _write_all would skip both the restore and a check sitting after the
+        # try/finally -- so the mutation control only ever exercised one of the two
+        # combinations. Raise, because `python -O` and a stray PYTHONOPTIMIZE=1 in a CI image
+        # both strip an assert, and a tripwire that vanishes under an env var is not one.
+        if os.write is not real_write:
+            raise RuntimeError("os.write was not restored")
 
     delivered = b"".join(chunks)
     ok = delivered == PAYLOAD and len(chunks) > 1
@@ -160,7 +164,8 @@ def _atomic_case(tmp):
         raised = error
     finally:
         gates_module.os.write = real_write
-    assert os.write is real_write, "os.write was not restored"
+        if os.write is not real_write:
+            raise RuntimeError("os.write was not restored")
 
     with open(target, "rb") as handle:
         after = handle.read()
@@ -188,7 +193,8 @@ def _no_progress_case():
         raised = error
     finally:
         gates_module.os.write = real_write
-    assert os.write is real_write, "os.write was not restored"
+        if os.write is not real_write:
+            raise RuntimeError("os.write was not restored")
     ok = raised is not None and "no progress" in str(raised)
     print(f"noprogress: a 0-return raised={raised is not None} "
           f"({raised}) -> {'BOUNDED' if ok else 'UNBOUNDED'}")

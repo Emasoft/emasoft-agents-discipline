@@ -128,8 +128,28 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
     try:
         fd = os.open(target, flags)
     except OSError as err:
-        if err.errno == getattr(__import__("errno"), "ELOOP", None):
+        if err.errno == errno.ELOOP:
             raise OSError(f"{label} must be one unchanged regular single-link file: {target}") from err
+        if err.errno == errno.ENOENT:
+            # The oracle's ENOENT PROBE, which this port shipped without. If the name is back by
+            # the time we look, the file was swapped between the open and now, and that is an
+            # error rather than an absence -- so it must NOT surface as ENOENT.
+            #
+            # The distinction is load-bearing downstream, not cosmetic: dispatch's readState does
+            # `if (error.code === "ENOENT") return emptyState()`. Re-raising the raw ENOENT here
+            # makes a Python readState return an EMPTY WAVE SET on the very interleaving the
+            # oracle refuses — opposite outcomes on the same race, in the function dispatch.py is
+            # about to be built on.
+            try:
+                named = os.lstat(target)
+            except OSError as probe_error:
+                if probe_error.errno == errno.ENOENT:
+                    raise err from None          # a genuine absence: the oracle's `throw error`
+                raise
+            _assert_regular_single_link(named, target, label, limit)
+            raise OSError(f"{label} appeared after its open reported it missing: {target}") from err
+        # ENOENT is deliberately the ONLY errno exposed unchanged, and only above: callers that
+        # permit a missing file can tell absence at open from a later race.
         raise
 
     try:
@@ -146,6 +166,11 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
         # path for a target that no longer exists. Without strict, a name unlinked mid-read
         # resolves to the same string before and after, so the "changed canonical location"
         # check below passes on a file whose name the oracle would have errored on.
+        # `root is None` is the oracle's `root === undefined`, NOT its `null`. Measured: an
+        # explicit null makes the oracle take the non-null branch and resolve(null) throws a
+        # TypeError. Python has no second empty value to map that onto -- None IS how a
+        # keyword argument says "not supplied" -- so there is no caller that can express the
+        # throwing case, and making None throw would break the default path instead.
         canonical_root = None if root is None else os.path.realpath(os.path.abspath(root), strict=True)
         canonical_before = os.path.realpath(target, strict=True)
         if canonical_root is not None and not _path_is_inside(canonical_root, canonical_before):
@@ -185,7 +210,12 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
 # `$` in JS does not match before a trailing newline; Python's does -- every line-anchor
 # below uses `\Z` instead of `$` so a line ending in whitespace-that-looks-like-a-newline
 # cannot silently match one extra position. None of these patterns mix `\d`/`\b` with `\s`,
-# so no ASCII-vs-Unicode divergence applies here (see gate_lint.py for one that does).
+# so the re.ASCII trap does not apply here (see gate_lint.py for one that does). That is a
+# narrower statement than "no ASCII-vs-Unicode divergence": JS `\s` and Python `\s` are
+# DIFFERENT SETS independently of any flag -- `\ufeff` is whitespace to JS and not to Python,
+# `\x1c`-`\x1f` are whitespace to Python and not to JS. Both reach `_ATTR_RE`'s `^(\s+)`
+# indent test and, by complement, `_ID_MATCH_RE`'s `^(\S+?):`, where a `\ufeff` inside an id
+# lands IN the id here and TERMINATES it there. Low likelihood, real mechanism, not covered.
 _GATE_RE = re.compile(r"^- \[( |x|X)\] (.*)\Z")
 _ATTR_RE = re.compile(r"^(\s+)(CHECK|EXPECT|EVIDENCE|CWD):\s?(.*)\Z")
 _UNINDENTED_ATTR_RE = re.compile(r"^(CHECK|EXPECT|EVIDENCE|CWD):\s?(.*)\Z")
