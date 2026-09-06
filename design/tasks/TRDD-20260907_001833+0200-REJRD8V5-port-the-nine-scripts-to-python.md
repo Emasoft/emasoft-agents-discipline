@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T01:35:15+0200
+updated: 2026-09-07T01:35:41+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -58,7 +58,7 @@ revert. If no mutation isolates a row, that row does not earn its place.
   prevents it. Fixed with `jsapi.js_sort_key` (UTF-16-BE bytes; big-endian is the property
   that makes byte order equal unit order) at both sort sites.
 
-### ROUNDS 5-7 — the reviews moved off the PORT and onto the TEST HARNESS
+### ROUNDS 5-8 — the reviews moved off the PORT and onto the TEST HARNESS
 Rounds **5-8** all fixed `tests/mutate-probe.sh`, not the port — the harness round 4 CREATED
 alongside the lease port. (An earlier version of this line said "rounds 4-7", which was wrong
 twice: round 4 ported four functions into `gates.py`, and it created the harness rather than
@@ -90,6 +90,15 @@ whose REVIEW found the defect; R7/R8 describe what that round's commit DID.
   codes were added to remove. **I implemented a review's PREMISE ("nothing can gate on this")
   instead of a need.** Deleted, along with a success-marker guard that was exactly redundant
   with the exit-status check. `PROBE FAILED` keeps exit 1.
+- **R8** (`3d85eaa`) — Ctrl-C made the probe print a verdict about UNMUTATED source: the EXIT
+  trap restored the file, then execution fell through to the verdict block. INT/TERM now exit
+  130. Two lessons beyond the fix. First, my initial "it works" reading was wrong — a
+  background job from a non-interactive shell has SIGINT ignored, so the absent verdict proved
+  nothing; SIGTERM is the valid test. Second, verifying it exposed a defect introduced in the
+  SAME edit: EXIT still runs after the signal handler, so `restore()` ran twice and the backup
+  cleanup added beside it made the second call fail and falsely report "may still be MUTATED".
+  `restore()` is now idempotent. **A fix and its own verification landing together is how a
+  two-part edit hides its second half.**
 
 **Standing limit, stated rather than papered over:** a baseline that merely exits 0 is not
 proof the runner can OBSERVE anything. A true positive control needs a canary mutation known
