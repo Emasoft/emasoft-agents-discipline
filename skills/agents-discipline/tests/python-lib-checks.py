@@ -22,6 +22,7 @@ import atexit
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -55,6 +56,12 @@ def _missing_sections():
     return [s for s in SECTIONS if s not in completed]
 
 
+# Bound BEFORE the decorator runs. Globals resolve at call time so the order is not a bug
+# today, but anything raising between the two lines would fire the hook against an unbound
+# name and die inside atexit — noise that changes nothing, for one line of ordering.
+_checked_completeness = False
+
+
 @atexit.register
 def _report_truncation():
     # CRASH path only. On a normal end the check below has already run and fed `failed`;
@@ -64,9 +71,6 @@ def _report_truncation():
     missing = _missing_sections()
     if missing and not _checked_completeness:
         print(f"FAIL  suite TRUNCATED — these sections never completed: {', '.join(missing)}")
-
-
-_checked_completeness = False
 
 
 def report(ok, name, detail=""):
@@ -150,10 +154,16 @@ else:
     # A second spawn failure with a DIFFERENT errno, because one sample cannot tell a
     # faithful port from a fitted one: `spawn <file> ENOENT` could have been hardcoded and
     # still pass. Measured, both runtimes print `spawn <file> EACCES` here.
-    noexec = os.path.join(tempfile.mkdtemp(), "noexec.sh")
+    noexec_dir = tempfile.mkdtemp()
+    noexec = os.path.join(noexec_dir, "noexec.sh")
     with open(noexec, "w") as fh:
         fh.write("#!/bin/sh\necho hi\n")
     os.chmod(noexec, 0)
+    # Removed at the end of the section, because a suite that leaks a temp dir on every run
+    # is the same defect this file has now fixed twice (the self-check's stranded sleeps, the
+    # oracle driver's missing finally) — and it would be the third, introduced by a case
+    # written to prove rigour. chmod 000 does not stop the OWNER unlinking it.
+    atexit.register(lambda: shutil.rmtree(noexec_dir, ignore_errors=True))
 
     for shell, name, script in (
         ("/bin/bash", "propagates exit code and pumps stdout", "echo hi; exit 3"),
@@ -166,11 +176,28 @@ else:
         report(js == py, f"check_supervisor: {name} — port matches oracle",
                "" if js == py else f"js={js} py={py}")
         seen[script] = (js, py)
+        # Agreement alone is not enough for the spawn-failure cases: if chmod 000 did not
+        # actually deny (running as root, or a filesystem that ignores the mode), both
+        # runtimes would spawn SUCCESSFULLY and agree just as well. Assert the errno the case
+        # is named for actually appeared.
+        for want_code in (["ENOENT"] if shell == "/nonexistent/sh" else
+                          ["EACCES"] if shell == noexec else []):
+            report(want_code in js[2] and want_code in py[2],
+                   f"check_supervisor: {name} really failed with {want_code} (vacuity control)",
+                   js[2][:80])
     # Vacuity control: a supervisor that ignored its CHECK entirely would give identical
     # (0, "", "") on both scripts. These two must differ from each other, in BOTH runtimes —
     # the results are reused from the loop rather than re-run, which also stops the two
     # adjacent controls in this file from checking opposite sides (this one used to sample the
     # oracle while the regex one sampled the port).
+    # Argv validation: the supervisor's other refusal, and the last uncovered branch here.
+    js_argv, py_argv = both(["check-supervisor.mjs"], ["check_supervisor.py"])
+    report(js_argv == py_argv, "check_supervisor: missing argv — port matches oracle",
+           "" if js_argv == py_argv else f"js={js_argv} py={py_argv}")
+    report(js_argv[0] == 2 and "expected resolved shell" in js_argv[2],
+           "check_supervisor: missing argv really refused with exit 2 (vacuity control)",
+           f"exit {js_argv[0]}")
+
     (ja, pa), (jb, pb) = seen["echo hi; exit 3"], seen["kill -9 $$"]
     report(ja != jb and pa != pb,
            "check_supervisor: the two CHECKs differ, in BOTH runtimes (vacuity control)",

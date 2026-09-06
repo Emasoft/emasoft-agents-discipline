@@ -260,6 +260,19 @@ const cases = [
     expect: ["must be one unchanged regular single-link file"],
   },
   {
+    // The CONTROL that makes the refusal ATTRIBUTABLE to the link. Same bytes, reached
+    // directly instead of through a symlink: exit 0. Without it, "following it would
+    // succeed" is a counterfactual nobody runs, and a future change that made this content
+    // fail for an unrelated reason would leave the symlink case passing for the wrong
+    // reason — silently, on the one bound here that is a security property.
+    // I built exactly this remedy for the T24 case two commits earlier and did not apply it
+    // here, which is why the pattern is worth naming rather than just fixing.
+    name: "the same ledger reached directly is accepted (control for the symlink case)",
+    symlink: "target",
+    want: 0,
+    reject: ["must be one unchanged regular single-link file"],
+  },
+  {
     // A ledger is prose a human pasted into, so ONE byte of it is routinely not UTF-8: a
     // latin-1 accent, a smart quote out of a word processor, a name copied from a terminal in
     // another encoding. Node decodes those lossily (U+FFFD) and checks the ledger anyway.
@@ -350,6 +363,20 @@ const cases = [
     reject: ["must be a positive number of milliseconds"],
   },
   {
+    // The other two JavaScript numeric prefixes. `_js_number` exists ONLY because Number()
+    // accepts these and float() does not; nothing else tests the octal and binary rungs, so
+    // deleting them would go unnoticed. Same shape as the 0x10 case above: 15 and 5 ms are
+    // both under a node startup, so row 1 dies on its own timeout and row 2 on the budget.
+    name: "octal and binary budgets JavaScript accepts are accepted by every runtime",
+    file: "tests/fixtures/budget-two-rows.md",
+    rerun: true,
+    artifacts: ["reports/budget-1.txt", "reports/budget-2.txt"],
+    envExtra: { AGENTS_DISCIPLINE_RERUN_BUDGET_MS: "0o17" },
+    want: 1,
+    expect: ["budget exhausted before this row ran"],
+    reject: ["must be a positive number of milliseconds"],
+  },
+  {
     // `T24:00:00` is legal ISO 8601 for next-day midnight and Date.parse returns it;
     // datetime.fromisoformat raises ("hour must be in 0..23"). Swallowed, that ValueError
     // leaves `Created:` unparsed and the STALENESS RULE SILENTLY SKIPPED — a gate that stops
@@ -414,7 +441,9 @@ for (const c of cases) {
   // and a 9 MiB file should not be.
   if (c.fifo || c.oversized || c.rawBytes || c.symlink) {
     if ((c.fifo || c.symlink) && process.platform === "win32") {
-      report(true, `${c.name} (skipped: no mkfifo/symlink on win32)`);
+      // Windows HAS symlinks — what it lacks is O_NOFOLLOW, which is why the guarantee
+      // cannot hold there and the case is skipped rather than expected to pass.
+      report(true, `${c.name} (skipped on win32: no mkfifo, no O_NOFOLLOW)`);
       continue;
     }
     const dir = mkdtempSync(join(tmpdir(), "ledger-bounds-"));
@@ -429,7 +458,8 @@ for (const c of cases) {
       // the oracle's `fsConstants.O_NOFOLLOW || 0` does; the case skips on win32 anyway.)
       const real = join(dir, "real.md");
       writeFileSync(real, readFileSync(resolve(root, "tests/fixtures/complete.md"), "utf8"));
-      symlinkSync(real, target);
+      if (c.symlink === "target") writeFileSync(target, readFileSync(real, "utf8"));
+      else symlinkSync(real, target);
     } else if (c.rawBytes) writeFileSync(target, c.rawBytes);
     else writeFileSync(target, "x".repeat(9 * 1024 * 1024));
     let out = "";

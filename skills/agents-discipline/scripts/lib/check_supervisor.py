@@ -48,7 +48,13 @@ def main():
         # "[Errno 2] No such file or directory: '/nonexistent/sh'" — a different sentence for
         # the same event, in the branch that decides whether a broken CHECK reads as a
         # failure or as a crash. Exit code already agreed (127); only the text did not.
-        code = errno.errorcode.get(error.errno or -1) or str(error.errno)
+        # Same ladder as process_tree._err_code (code -> strerror -> str), not a second,
+        # sloppier one: `.get(errno or -1) or str(errno)` printed the literal "None" when
+        # errno was absent and conflated errno 0 with None. Two error formatters in one port
+        # with different fallbacks is how the [Errno N] divergence got in the first time.
+        number = error.errno
+        code = ((errno.errorcode.get(number) if number is not None else None)
+                or error.strerror or str(error))
         print(f"agents-discipline-check-supervisor: CHECK spawn failed: spawn {shell} {code}",
               file=sys.stderr)
         sys.exit(127)
