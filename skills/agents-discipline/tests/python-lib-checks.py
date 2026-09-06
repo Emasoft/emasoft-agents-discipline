@@ -49,7 +49,7 @@ failed = 0
 # not doing" failure: a documented hole is still a hole. atexit rather than wrapping each
 # section in try/except, because it needs no re-indentation and it reports the same fact.
 SECTIONS = ["regex_worker", "check_supervisor", "windows_taskkill_path", "process_tree",
-            "gates_helpers", "jsapi", "parse_gates", "short_write", "enoent_probe"]
+            "gates_helpers", "jsapi", "parse_gates", "short_write", "enoent_probe", "dispatch"]
 completed = []
 
 
@@ -585,6 +585,41 @@ try:
 finally:
     shutil.rmtree(_ep_dir, ignore_errors=True)
 completed.append("enoent_probe")
+
+# --- dispatch: the wave state machine, end to end ------------------------------------------
+# The whole lifecycle plus every refusal, driven with a FIXED `now` so the two runtimes produce
+# byte-identical state files. Each runtime gets its own root.
+_dj, _dp = tempfile.mkdtemp(), tempfile.mkdtemp()
+try:
+    _o = subprocess.run(["node", os.path.join(TESTS, "dispatch-drive.mjs"), _dj],
+                        capture_output=True, text=True, timeout=60)
+    _p = subprocess.run([sys.executable, os.path.join(TESTS, "dispatch_drive.py"), _dp],
+                        capture_output=True, text=True, timeout=60)
+    report(_o.returncode == 0 and _p.returncode == 0, "dispatch: both drivers ran",
+           (_o.stderr + _p.stderr).strip()[-250:])
+    _or = json.loads(_o.stdout) if _o.returncode == 0 else []
+    _pr = json.loads(_p.stdout) if _p.returncode == 0 else []
+    _first = next((f"{k}: {a!r} != {b!r}" for (k, a), (_k, b) in zip(_or, _pr) if a != b), "")
+    report(bool(_or) and _or == _pr, "dispatch: port matches the oracle on every effect",
+           _first[:400] or f"lengths {len(_or)}/{len(_pr)}")
+
+    # VACUITY CONTROLS, one per JS-semantics mechanism, each mutation-verified: reverting
+    # js_length, js_entries or js_json_object reddens exactly one of these rows.
+    _by = dict(_or)
+    report("at most 256 characters" in str(_by.get("emoji handle")),
+           "dispatch: a 400-code-unit handle is REJECTED (the UTF-16 bound, not len())",
+           str(_by.get("emoji handle"))[:150])
+    report("wave 1 has an invalid shape" in str(_by.get("validateState two problems, digit key first")),
+           "dispatch: the DIGIT key is validated first (JS enumeration order)",
+           str(_by.get("validateState two problems, digit key first"))[:150])
+    _ord = str(_by.get("ord state file", ""))
+    report(_ord.find('"7"') < _ord.find('"zz"') and '"7"' in _ord,
+           "dispatch: the serialized file hoists the digit wave above the letter one",
+           _ord[:90])
+finally:
+    shutil.rmtree(_dj, ignore_errors=True)
+    shutil.rmtree(_dp, ignore_errors=True)
+completed.append("dispatch")
 
 # INLINE, before the exit, so a missing section actually FAILS the run. The atexit hook alone
 # was decorative for the case it was written for: a section that returns early WITHOUT raising
