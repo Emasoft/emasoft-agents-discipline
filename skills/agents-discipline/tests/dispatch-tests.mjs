@@ -11,7 +11,11 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DISPATCH_CHECK = join(HERE, "..", "scripts", "dispatch-check.mjs");
+// `AD_RUNTIME=python node tests/dispatch-tests.mjs` selects the port. The suite is held FIXED
+// as the oracle and only the implementation varies, so a divergence is a porting defect and
+// never a re-specified test.
+const PY = process.env.AD_RUNTIME === "python";
+const DISPATCH_CHECK = join(HERE, "..", "scripts", PY ? "dispatch_check.py" : "dispatch-check.mjs");
 const GATE_CHECK = join(HERE, "..", "scripts", "gate-check.mjs");
 const filter = process.argv[2] || "";
 const tests = [];
@@ -41,7 +45,12 @@ function sandbox() {
 
 function runScript(script, args, options = {}) {
   return new Promise((resolveResult) => {
-    const child = execFile(process.execPath, [...(options.nodeArgs || []), script, ...args], {
+    // nodeArgs are Node-only flags (--max-old-space-size and the like); under the Python
+    // runtime they are dropped rather than passed to an interpreter that would reject them.
+    const isPy = script.endsWith(".py");
+    const exe = isPy ? (process.env.PYTHON || "python3") : process.execPath;
+    const lead = isPy ? [] : (options.nodeArgs || []);
+    const child = execFile(exe, [...lead, script, ...args], {
       cwd: options.cwd,
       encoding: "utf8",
       env: options.env ? { ...process.env, ...options.env } : process.env,
@@ -286,6 +295,14 @@ test("state file: oversized input is rejected before JSON parsing", async () => 
 
 test("state file: replacement during the read is rejected as unstable", async () => {
   if (process.platform === "win32") return;
+  // NODE-ONLY INJECTION. This case swaps the file mid-read by preloading a .cjs that
+  // monkeypatches fs.lstatSync -- a mechanism that cannot drive a Python process at all, and
+  // runScript drops nodeArgs for it. Without the swap the read simply succeeds on the empty
+  // state and the CLI correctly reports "unknown wave", which is not a divergence but also not
+  // this test. Skipped rather than left to fail, and the gap is stated: under AD_RUNTIME=python
+  // the mid-read replacement guard in read_stable_regular_file is NOT covered here. It needs an
+  // equivalent Python-side hook, which the port does not yet have.
+  if (PY) { console.log("skip AD_RUNTIME=python: mid-read swap needs a Node preload"); return; }
   const s = sandbox();
   try {
     const state = join(s.dir, ".agents-discipline", "api", "dispatch.json");
