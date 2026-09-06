@@ -176,7 +176,14 @@ def _node_message_error(error, syscall):
     base = type(error)
     subclass = _NODE_MESSAGE_TYPES.get(base)
     if subclass is None:
-        subclass = type("Node" + base.__name__, (base,), {"__str__": lambda self: self._node_message})
+        # base.__name__, NOT "Node"+name: an invented name leaks into tracebacks as
+        # `gates.NodeFileNotFoundError`, which a reader then greps for and finds only a
+        # type() call. getattr with a fallback, NOT self._node_message: the attribute is
+        # assigned AFTER construction, so copy.copy(e) -- which calls subclass(*e.args) --
+        # would build an instance whose __str__ raises AttributeError. An exception whose
+        # str() raises is the worst possible failure in a logging path.
+        subclass = type(base.__name__, (base,), {
+            "__str__": lambda self: getattr(self, "_node_message", None) or base.__str__(self)})
         _NODE_MESSAGE_TYPES[base] = subclass
     rebuilt = subclass(error.errno, error.strerror)
     rebuilt.filename = error.filename
@@ -956,15 +963,20 @@ def _js_join(*parts):
     # built on os.path.join was wrong before it ever normalized anything. Node's algorithm is
     # instead: drop ZERO-LENGTH segments, concatenate with the separator, normalize, and
     # answer "." for an empty result.
-    for part in parts:
-        # node VALIDATES every argument -- path.join("a", 7) throws ERR_INVALID_ARG_TYPE. A
-        # str() coercion here answered "a/7", and for None it answered "a/None": a PLAUSIBLE
-        # path that then lstats ENOENT and reports as an ordinary missing file instead of the
-        # programming error it is. Same class as the js_sort_key str() finding -- a str()
-        # inserted for convenience where the oracle has semantics.
-        if not isinstance(part, str):
-            raise TypeError("Path must be a string. Received " + js_string(part))
-    kept = [part for part in parts if part != ""]
+    # os.fspath, NOT str(). node VALIDATES every argument -- path.join("a", 7) throws
+    # ERR_INVALID_ARG_TYPE -- where a str() coercion answered "a/7", and for None "a/None":
+    # a PLAUSIBLE path that then lstats ENOENT and reports as an ordinary missing file rather
+    # than the programming error it is. os.fspath raises TypeError for an int, None or bool
+    # (and bytes then fails at the join), which is node's outcome, while still accepting a
+    # pathlib.Path -- the idiomatic Python path type, with no node counterpart, which worked
+    # under the previous os.path.join and must keep working.
+    #
+    # An explicit isinstance guard raising a hand-written "Path must be a string" sat here
+    # briefly and was REMOVED: os.fspath already rejects exactly the same values, so the guard
+    # changed no outcome any test could observe, and its message was INVENTED -- node's real
+    # text is `The "path" argument must be of type string. Received type number (7)`. A guard
+    # that adds an unmeasured message and no witnessed behaviour is worse than none.
+    kept = [os.fspath(part) for part in parts if part != ""]
     if not kept:
         return os.curdir                      # path.join() and path.join("") are both "."
     joined = os.sep.join(kept).replace("/", os.sep) if os.sep != "/" else "/".join(kept)
@@ -1516,3 +1528,134 @@ def append_status(root, scope, line):
                 os.close(fd)
             except OSError:
                 pass
+
+
+LEASE_MAX_BYTES = 64 * 1024
+
+
+def _read_leases_unlocked(root):
+    """Every lease record under the lock directory, with malformed ones surfaced, not dropped.
+
+    The `(invalid)` placeholder is load-bearing: it carries `globs: ["**"]`, which overlaps
+    EVERYTHING, so an unreadable or tampered lease blocks every claim instead of silently
+    permitting one. Failing closed is the whole point -- a lease is a write-permission record.
+    """
+    directory = _js_join(os.path.abspath(root), LOCK_DIR)
+    invalid_dir = [{"scope": "(invalid)", "leaf": "locks", "globs": ["**"],
+                    "file": directory, "invalid": True}]
+    try:
+        os.lstat(directory)
+    except OSError as error:
+        return [] if error.errno == errno.ENOENT else invalid_dir
+    if not _real_directory_inside(root, directory):
+        return invalid_dir
+
+    leases = []
+    for name in sorted(os.listdir(directory), key=js_sort_key):
+        if not name.endswith(".lease"):
+            continue
+        file = _js_join(directory, name)
+        try:
+            value = json.loads(read_stable_regular_file(
+                file, max_bytes=LEASE_MAX_BYTES, label="lease record", root=root))
+            # The filename IS the identity: it must be the digest of scope::leaf, so a record
+            # cannot be renamed to impersonate another owner's lease.
+            if (not js_truthy(value) or not isinstance(value.get("scope"), str)
+                    or validate_scope_id(value["scope"])
+                    or not isinstance(value.get("leaf"), str)
+                    or validate_scope_id(value["leaf"], "leaf")
+                    or not isinstance(value.get("globs"), list) or not value["globs"]
+                    or name != sha256(value["scope"] + "::" + value["leaf"])[:24] + ".lease"):
+                raise ValueError("invalid lease record shape or identity")
+            normalized = [normalize_owns_glob(glob) for glob in value["globs"]]
+            # Rejecting a glob that merely NORMALIZES to something else, not just an invalid
+            # one: a record storing "a/../b" would otherwise be compared in its normalized
+            # form while a reader sees the stored text.
+            if (any("error" in item for item in normalized)
+                    or any(item.get("value") != stored
+                           for item, stored in zip(normalized, value["globs"]))):
+                raise ValueError("invalid lease record OWNS paths")
+            leases.append({**value, "globs": [item["value"] for item in normalized],
+                           "file": file})
+        except Exception:
+            # Bare catch, faithfully: ANY failure to read or validate a record must degrade to
+            # the everything-overlapping placeholder rather than skip the file.
+            leases.append({"scope": "(invalid)", "leaf": name, "globs": ["**"],
+                           "file": file, "invalid": True})
+    return leases
+
+
+def read_leases(root):
+    return _read_leases_unlocked(root)
+
+
+def _lease_registry(root):
+    return _js_join(os.path.abspath(root), LOCK_DIR, "lease-registry")
+
+
+def claim_leases(root, spec):
+    """Claim write ownership of globs for one scope/leaf, refusing any overlap."""
+    def claim():
+        scope_error = validate_scope_id(spec.get("scope"))
+        leaf_error = validate_scope_id(spec.get("leaf"), "leaf")
+        if scope_error or leaf_error:
+            return {"ok": False, "conflicts": [], "error": scope_error or leaf_error}
+        normalized = []
+        for glob in spec.get("globs") or []:
+            result = normalize_owns_glob(glob)
+            if "error" in result:
+                return {"ok": False, "conflicts": [], "error": result["error"]}
+            normalized.append(result["value"])
+        if not normalized:
+            return {"ok": False, "conflicts": [], "error": "no OWNS paths to claim"}
+
+        held_leases = _read_leases_unlocked(root)
+        same_owner = next((held for held in held_leases
+                           if held["scope"] == spec["scope"] and held["leaf"] == spec["leaf"]),
+                          None)
+        if same_owner:
+            return {"ok": False, "conflicts": [
+                {"identity": True, "with": spec["scope"] + "/" + spec["leaf"],
+                 "heldGlobs": same_owner["globs"]}]}
+
+        conflicts = []
+        for glob in normalized:
+            for held in held_leases:
+                their_glob = next((other for other in held["globs"]
+                                   if globs_overlap(glob, other)), None)
+                if their_glob:
+                    conflicts.append({"glob": glob,
+                                      "with": held["scope"] + "/" + held["leaf"],
+                                      "theirGlob": their_glob})
+        if conflicts:
+            return {"ok": False, "conflicts": conflicts}
+        file = _js_join(_lock_directory(root),
+                        sha256(spec["scope"] + "::" + spec["leaf"])[:24] + ".lease")
+        write_atomic(file, json.dumps({"scope": spec["scope"], "leaf": spec["leaf"],
+                                       "globs": normalized, "pid": os.getpid()},
+                                      indent=2) + "\n", root=root)
+        return {"ok": True, "file": file, "conflicts": [], "globs": normalized}
+
+    return with_file_lock(root, _lease_registry(root), claim)
+
+
+def release_leases(root, spec):
+    def release():
+        count = 0
+        for lease in _read_leases_unlocked(root):
+            if lease["scope"] != spec.get("scope"):
+                continue
+            if spec.get("leaf") and lease["leaf"] != spec["leaf"]:
+                continue
+            try:
+                os.unlink(lease["file"])
+                count += 1
+            except OSError:
+                pass          # raced or already absent
+        return count
+
+    return with_file_lock(root, _lease_registry(root), release)
+
+
+def sleep(ms):
+    time.sleep(ms / 1000)
