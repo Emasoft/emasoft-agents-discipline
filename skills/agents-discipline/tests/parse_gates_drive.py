@@ -14,10 +14,12 @@ from gates import parse_gates, read_stable_regular_file  # noqa: E402  # type: i
 
 doc = parse_gates(read_stable_regular_file(sys.argv[1], label="gate ledger"))
 
-# `_seen_attrs` is the port's own bookkeeping (a set, which JSON cannot encode) and has no
-# counterpart in the oracle's gate objects. Dropped here rather than left to diverge: it is
-# internal to the parse, and a caller that serialised a gate would otherwise carry it.
-gates = [{k: v for k, v in g.items() if k != "_seen_attrs"} for g in doc["gates"]]
+# No key-stripping. An earlier version dropped a `_seen_attrs` set the port had put on every
+# gate dict, which made the shapes match while leaving the real difference in place — the
+# oracle's gate objects have no such field, and a set is not JSON-encodable, so any consumer
+# that serialised a gate would crash. Fixed in parse_gates instead; the driver now compares
+# the gates as they actually are, which is the only way it can see that kind of divergence.
+gates = doc["gates"]
 
 json.dump({
     "lines": doc["lines"],

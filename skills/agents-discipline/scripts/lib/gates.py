@@ -177,6 +177,9 @@ def parse_gates(text, options=None):
     abandoned = {}
     owns = []
     errors = []
+    # Parse-time only, keyed by gate index. Deliberately NOT a field on the gate dicts: see
+    # the note where it is populated.
+    seen_attrs = {}
     warnings = []
     ids = {}
     current = None
@@ -211,12 +214,16 @@ def parse_gates(text, options=None):
                 "evidence": None,
                 "evidenceLine": -1,
                 "cwd": None,
-                # Not a JS field: gates.mjs tracks "which attrs seen" in a WeakMap keyed
-                # by the gate object; a plain dict key here does the same job without
-                # needing hashable gate objects.
-                "_seen_attrs": set(),
             }
             gates.append(current)
+            # OUTSIDE the gate dict, keyed by its index. gates.mjs tracks "which attrs seen"
+            # in a WeakMap, so its gate objects carry exactly the fields above; an earlier
+            # port put the set INSIDE the dict, which added a key the oracle has no
+            # counterpart for -- and a set, which json.dumps cannot encode at all. Any
+            # consumer that serialised or iterated a gate would have crashed or diverged, and
+            # gate-check writes receipts. The comparison driver was stripping the key, which
+            # hid the shape difference instead of removing it.
+            seen_attrs[len(gates) - 1] = set()
             if not id_match:
                 errors.append("line " + str(index + 1) + ": gate needs an explicit ID followed by a colon")
             elif not _VALID_ID_RE.match(gate_id):
@@ -258,10 +265,11 @@ def parse_gates(text, options=None):
             attr_match = any_attr
             key = attr_match.group(2).lower()
             value = attr_match.group(3).strip()
-            if key in current["_seen_attrs"]:
+            current_seen = seen_attrs[len(gates) - 1]
+            if key in current_seen:
                 errors.append("line " + str(index + 1) + ": duplicate " + attr_match.group(2) +
                                " for gate " + current["id"])
-            current["_seen_attrs"].add(key)
+            current_seen.add(key)
             if key == "evidence":
                 current["evidence"] = value
                 current["evidenceLine"] = index
