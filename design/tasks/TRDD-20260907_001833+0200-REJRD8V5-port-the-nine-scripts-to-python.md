@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T01:09:32+0200
+updated: 2026-09-07T01:16:21+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -98,7 +98,17 @@ control proving the intended row MOVED is not evidence the new behaviour is RIGH
   catch would turn a typo into "no pipelines configured".
 
 ### NEXT ACTION
-**`lib/gates.py` is COMPLETE** — every name `gate-check.mjs` imports is ported. One item left:
+**Every NAME `gate-check.mjs` imports exists in `gates.py`** (23/23, sound presence test).
+That is a name claim, NOT signature compatibility — and the port is knowingly inconsistent
+about signatures, which the `gate-check.mjs` port must reconcile:
+| oracle | port |
+|---|---|
+| `readStableRegularFile(path, {root, maxBytes, label})` | snake_case **kwargs** |
+| `writeAtomic(file, text, {root})` | snake_case **kwargs** |
+| `statCurrentNamedFile(path, options)` | a positional **dict with camelCase keys** |
+`claimLeases` / `releaseLeases` / `withFileLock` are `await`ed at every JS call site and are
+SYNC here (mutual exclusion is the file lock, not the scheduler, so this is not a behavioural
+difference — but every call site has to drop the await). One item left:
 
 1. **`gate-check.mjs`** (950 lines). Its own ~30 private functions are the work now, not the
    library: `parseArgs`, the approval store (`recordApproval`, `approvalExists`,
@@ -107,8 +117,17 @@ control proving the intended row MOVED is not evidence the new behaviour is RIGH
    (`insertOrUpdateEvidence`). It also spawns two siblings needing their own ports —
    `lib/check-supervisor.mjs` and `lib/regex-worker.mjs` — plus `lib/process-tree.mjs`, ported.
 
-   **Use `tests/mutate-probe.sh` for every control.** Hand-rolled inline probes produced two
-   false results in this port, the worse of which reported a syntax error as nine catches.
+   **Use `tests/mutate-probe.sh` for every control, and pass anchors as ordinary quoted
+   arguments.** Hand-rolled probes produced THREE false results in this port: one reported a
+   syntax error as nine catches; one ran with anchors that `eval echo` had stripped of all
+   leading whitespace (they matched only by luck of uniqueness); and the harness itself would
+   have reported REDDENS for any anchor while the tree was already failing — it now runs the
+   runner once BEFORE mutating and refuses to proceed unless that baseline is green.
+
+   `runRolling(tasks, limit)` is the first place the sync-vs-async choice stops being free:
+   it is bounded concurrency over promises, so a synchronous port needs threads or processes
+   and the interleaving of check output becomes a NEW divergence surface. Decide that before
+   writing it, not during.
 
 **Completeness, re-measured soundly (2026-09-07).** `gate-check.mjs` imports **23** names from
 `lib/gates.mjs` and **none** is missing from `gates.py`. The presence test is now

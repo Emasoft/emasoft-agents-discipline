@@ -1578,8 +1578,17 @@ def _read_leases_unlocked(root):
             leases.append({**value, "globs": [item["value"] for item in normalized],
                            "file": file})
         except Exception:
-            # Bare catch, faithfully: ANY failure to read or validate a record must degrade to
-            # the everything-overlapping placeholder rather than skip the file.
+            # BROAD ON PURPOSE, and for a stronger reason than "the oracle has a bare catch":
+            # this block RAISES ValueError itself as control flow, and a lease file holding a
+            # JSON array decodes to a list whose .get raises AttributeError -- which is exactly
+            # the oracle's `typeof value.scope !== "string"` rejection. `except OSError` here
+            # would crash on both.
+            #
+            # This is NOT the standard applied in list_scopes, which was deliberately narrowed
+            # to OSError in the same file. The rule that reconciles them: catch what the block
+            # LEGITIMATELY RAISES for bad input. Here that includes ValueError and
+            # AttributeError; there, only OSError qualifies, so a bare catch would have turned
+            # a typo in the comprehension into a silent "no pipelines configured".
             leases.append({"scope": "(invalid)", "leaf": name, "globs": ["**"],
                            "file": file, "invalid": True})
     return leases

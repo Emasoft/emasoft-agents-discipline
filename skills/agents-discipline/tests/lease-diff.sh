@@ -20,7 +20,7 @@ const ok = steps.filter((s) => s.outcome && s.outcome.ok === true).length;
 const conflicted = steps.filter((s) => s.outcome && s.outcome.conflicts &&
   s.outcome.conflicts.length > 0).length;
 const released = steps.filter((s) => typeof s.outcome === "number" && s.outcome > 0).length;
-if (ok < 3 || conflicted < 5 || released < 2) {
+if (ok < 4 || conflicted < 8 || released < 2) {
   console.error(`VACUOUS: ok=${ok} conflicted=${conflicted} released=${released}`);
   process.exit(1);
 }' || { echo "VACUOUS lease sequence"; exit 1; }
