@@ -113,6 +113,128 @@ def _assert_regular_single_link(st, target, label, max_bytes):
         raise OSError(f"{label} exceeds {max_bytes} bytes: {target}")
 
 
+_MISSING = object()
+
+
+def _js_is_integer(value):
+    """`Number.isInteger` — TRUE for 5.0, because JS has one number type.
+
+    `isinstance(5.0, int)` is False, so a plain isinstance check would reject a maxBytes the
+    oracle accepts. Infinity and NaN are both non-integers here, matching JS.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return value == value and value not in (float("inf"), float("-inf")) and float(value).is_integer()
+
+
+def _js_to_number(value):
+    """`Number(x)` for the shapes an options dict can carry. NaN stands in for JS NaN.
+
+    NOT jsapi._js_number, which goes the OTHER way (a number to JS's String() spelling).
+    Same two words, opposite direction -- hence the distinct name.
+    """
+    if value is None:
+        return 0            # Number(null) === 0, and JSON null decodes to None
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        text = js_trim(str(value))
+        return 0 if text == "" else float(text)
+    except ValueError:
+        return float("nan")
+
+
+def _same_snapshot(left, right):
+    return (same_file_identity(left, right) and left.st_size == right.st_size
+            and left.st_mtime_ns == right.st_mtime_ns and left.st_ctime_ns == right.st_ctime_ns)
+
+
+def _node_lstat(target):
+    """os.lstat, re-raising with node's message shape.
+
+    stat_current_named_file does NOT catch this error -- it propagates to the caller, so its
+    text is part of the function's observable surface. Measured: a missing path gives
+    "ENOENT: no such file or directory, lstat '<p>'" from the oracle against Python's
+    "[Errno 2] No such file or directory: '<p>'". Caught by the driver rows for this function,
+    which is the whole reason they dump the MESSAGE rather than just the outcome.
+    """
+    try:
+        return os.lstat(target)
+    except OSError as error:
+        raise OSError(_node_fs_message(error, "lstat")) from error
+
+
+def stat_current_named_file(path, options=None):
+    """lstat a path, asserting it is one regular single-link file within a size cap.
+
+    On Windows the oracle additionally brackets a second, non-creating descriptor open,
+    because path-stat and descriptor-stat used different implementations in affected libuv
+    builds and their `dev` fields are not comparable. That branch is ported but is
+    **UNWITNESSED** — nothing in this repository runs on Windows, so no test here can execute
+    it. It is kept rather than dropped because it is a TOCTOU identity guard: omitting it
+    would silently weaken the check on the one platform it exists for.
+    """
+    options = options or {}
+    target = os.path.abspath(path)
+    kind = js_string(options["label"] if js_truthy(options.get("label")) else "file")
+
+    raw_limit = options.get("maxBytes", _MISSING)
+    # `undefined` and `null` are DIFFERENT to the oracle: absent means Infinity, an explicit
+    # null is Number(null) === 0 and fails the bound. Python collapses both to None, so the
+    # distinction has to come from a sentinel or the port silently accepts a null maxBytes.
+    limit = float("inf") if raw_limit is _MISSING else _js_to_number(raw_limit)
+    if not (limit == float("inf") or (_js_is_integer(limit) and limit >= 1)):
+        raise OSError(kind + " maxBytes must be a positive integer")
+
+    raw_flags = options.get("openFlags", _MISSING)
+    access_flags = (os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)) if raw_flags is _MISSING \
+        else _js_to_number(raw_flags)
+    mutating_flags = getattr(os, "O_CREAT", 0) | getattr(os, "O_TRUNC", 0)
+    if not _js_is_integer(access_flags) or (int(access_flags) & mutating_flags) != 0:
+        raise OSError(kind + " identity descriptor must use non-creating, non-truncating flags")
+
+    before = _node_lstat(target)
+    _assert_regular_single_link(before, target, kind, limit)
+    if sys.platform != "win32":
+        return before
+
+    # Everything below is Windows-only. A checker pinned to this machine's platform narrows
+    # sys.platform and reports it structurally unreachable -- which is TRUE here and exactly
+    # why the branch is marked unwitnessed above. Suppressed rather than deleted: it is a
+    # TOCTOU identity guard, and the platform it guards is one no test here can run.
+    fd = None  # pyright: ignore[reportUnreachable]
+    try:
+        fd = os.open(target, int(access_flags))
+        current = os.fstat(fd)
+        _assert_regular_single_link(current, target, kind, limit)
+        after = _node_lstat(target)
+        _assert_regular_single_link(after, target, kind, limit)
+        after_current = os.fstat(fd)
+        _assert_regular_single_link(after_current, target, kind, limit)
+        # Two results from the SAME path-stat implementation, so identity and snapshot stay
+        # comparable even on affected builds -- this brackets the secondary open without ever
+        # comparing a path-stat `dev` to a descriptor-stat `dev`.
+        named_entry_unchanged = (same_file_identity(before, after)
+                                 if options.get("stableSnapshot") is False
+                                 else _same_snapshot(before, after))
+        if not named_entry_unchanged:
+            raise OSError(kind + " changed while its named identity was checked: " + target)
+        # The lstat pair alone cannot see an A -> B -> A swap around the descriptor open;
+        # exact inode equality supplies the comparable named-to-handle field.
+        if before.st_ino != current.st_ino or after.st_ino != current.st_ino:
+            raise OSError(kind + " descriptor does not identify its guarded name: " + target)
+        if options.get("stableSnapshot") is not False and not _same_snapshot(current, after_current):
+            raise OSError(kind + " changed while its descriptor identity was checked: " + target)
+        return after_current
+    finally:
+        # A close failure is an infrastructure failure, not a reason to accept an identity
+        # result whose secondary descriptor did not close cleanly.
+        if fd is not None:
+            os.close(fd)
+
+
 def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
     """Read a regular file under a size cap, refusing symlinks, FIFOs and mid-read changes.
 
@@ -776,7 +898,7 @@ def same_file_identity(left, right):
 
 
 def _js_join(*parts):
-    """`path.join` — which NORMALIZES, where `os.path.join` does not.
+    """`path.join`, which differs from `os.path.join` in THREE ways, not one.
 
     Measured: node's join("a//", "b") is "a/b" and Python's is "a//b"; ("a/.", "b") gives
     "a/b" against "a/./b". The port already carried this fix at scope_root and
@@ -789,9 +911,29 @@ def _js_join(*parts):
     is exactly normpath's contract. A trailing separator survives BOTH (node keeps "a/b/"),
     which normpath would strip -- hence the re-append.
     """
-    joined = os.path.join(*parts)
+    # NOT os.path.join. Measured: os.path.join DISCARDS everything before an absolute
+    # component -- ("/a", "/b") gives "/b" where node gives "/a/b" -- because that discard is
+    # `resolve`'s rule, not `join`'s. normpath cannot recover the dropped prefix, so a helper
+    # built on os.path.join was wrong before it ever normalized anything. Node's algorithm is
+    # instead: drop ZERO-LENGTH segments, concatenate with the separator, normalize, and
+    # answer "." for an empty result.
+    kept = [str(part) for part in parts if part != ""]
+    if not kept:
+        return os.curdir                      # path.join() and path.join("") are both "."
+    joined = os.sep.join(kept).replace("/", os.sep) if os.sep != "/" else "/".join(kept)
     normalized = os.path.normpath(joined)
-    if joined.endswith(("/", os.sep)) and not normalized.endswith(os.sep):
+    # POSIX gives a LEADING double slash implementation-defined meaning and normpath preserves
+    # it; node's posix join does not honour that rule and collapses it. Found by a 3000-case
+    # randomized differential, not by hand: ["//"] answers "/" in node and "//" from normpath,
+    # and every case whose first segment was "/" inherited the same extra slash. Guarded to
+    # posix because on Windows a leading "\\" is a UNC root, which node's win32 join keeps.
+    if os.sep == "/" and normalized.startswith("//") and not normalized.startswith("///"):
+        normalized = normalized[1:]
+    # A trailing separator survives node's join ("a", "b/") -> "a/b/", where normpath strips
+    # it. Read the intent off `kept[-1]`, NOT off `joined`: joined could have acquired the
+    # separator from an empty final segment, which is how the first version answered "a/" for
+    # ("a", "") where node answers "a".
+    if kept[-1].endswith(("/", os.sep)) and not normalized.endswith(os.sep):
         normalized += os.sep
     return normalized
 
@@ -803,10 +945,14 @@ def _node_fs_message(error, syscall):
     everywhere else, which is what _err_code is for). Node's shape is
     `CODE: lowercase prose, syscall 'path'`; Python's str() is `[Errno N] Prose: 'path'`.
 
-    MEASURED against node for all three errnos a directory scan can raise -- EACCES, ENOENT,
-    ENOTDIR -- where `os.strerror(n).lower()` reproduces libuv's prose exactly. That
-    equivalence is verified for those three, NOT proven in general: libuv carries its own
-    message table, so a rarer errno may not match. Falling back to the errno name alone would
+    MEASURED against node for EACCES, ENOENT and ENOTDIR, where `os.strerror(n).lower()`
+    reproduces libuv's prose exactly. Those three are the COMMON cases, NOT the complete set:
+    a scan can also raise ELOOP, EMFILE, ENFILE, ENOMEM and EOVERFLOW, and ELOOP looks like a
+    live counterexample -- macOS strerror says "Too many levels of symbolic links" where
+    libuv's own table reads "too many symbolic links encountered", a different sentence rather
+    than a different case. Unverified against node (hard to force through this call, since
+    _real_directory_inside rejects a symlinked directory first), so treat any errno outside
+    the measured three as UNCONFIRMED rather than assuming the lowercase rule generalizes. Falling back to the errno name alone would
     be a silent, smaller divergence, so an unmatched code still produces this shape.
     """
     code = _err_code(error)
@@ -875,7 +1021,13 @@ def list_scopes(root):
                        and not validate_scope_id(entry.name)
                        and _real_directory_inside(root, _js_join(directory, entry.name))),
                       key=js_sort_key)
-    except Exception:
+    except OSError:
+        # Deliberately NARROWER than the oracle's bare `catch`, unlike _named_entry above.
+        # A bare catch here would turn a typo in this comprehension into "no pipelines
+        # configured" -- silently, which is the exact failure mode this project keeps hunting.
+        # There is nothing to be faithful TO: a Python AttributeError has no counterpart in
+        # the oracle's code, so swallowing it reproduces no observable oracle behaviour and
+        # only costs the crash that would locate the bug.
         return []
 
 
@@ -895,7 +1047,10 @@ def _markdown_discovery(root, directory):
         files = sorted((_js_join(directory, entry.name) for entry in os.scandir(directory)
                         if entry.name.endswith(".md")), key=js_sort_key)
         return {"files": files, "errors": []}
-    except Exception as error:
+    except OSError as error:
+        # OSError, not Exception -- see list_scopes. A non-OSError here also degrades
+        # _node_fs_message twice over (no errno => code falls back to str(error), and prose
+        # then repeats it), emitting the message doubled around a colon.
         return {"files": [], "errors": [
             "cannot inspect gate directory " + directory + ": " + _node_fs_message(error,
                                                                                    "scandir")]}

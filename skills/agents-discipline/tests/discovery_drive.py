@@ -12,7 +12,7 @@ import os  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "lib"))
 
-from gates import legacy_files, list_scopes, resolve_target, same_file_identity, scope_files  # noqa: E402,I001  # type: ignore[import-not-found]
+from gates import legacy_files, list_scopes, resolve_target, same_file_identity, scope_files, stat_current_named_file, _js_join  # noqa: E402,I001  # type: ignore[import-not-found]
 
 root = sys.argv[1]
 os.environ.pop("AGENTS_DISCIPLINE_SCOPE", None)
@@ -31,6 +31,28 @@ def target(**options):
     unexpected = set(result) - set(expected)
     assert not unexpected, "resolve_target returned unexpected key(s): " + repr(sorted(unexpected))
     return {key: result[key] for key in expected if key in result}
+
+
+_stat_dir = os.path.join(root, "stat-probe")
+_stat_file = os.path.join(_stat_dir, "regular")
+_stat_symlink = os.path.join(_stat_dir, "link")
+_stat_hardlink = os.path.join(_stat_dir, "hard")
+_stat_fifo = os.path.join(_stat_dir, "fifo")
+_stat_missing = os.path.join(_stat_dir, "absent")
+
+
+def _join_row(parts):
+    try:
+        return _js_join(*parts)
+    except Exception as error:            # node throws TypeError for join(); mirror the name
+        return "THREW:" + type(error).__name__
+
+
+def _stat_row(path, options):
+    try:
+        return "ok:" + str(stat_current_named_file(path, options).st_size)
+    except OSError as error:
+        return str(error).replace(root, "<R>")
 
 
 def with_env(value, run):
@@ -64,6 +86,22 @@ json.dump({
     "envScope": with_env("api", lambda: target()),
     "envScopeOverriddenByExplicit": with_env("api", lambda: target(scope="web")),
     "envScopeWithEmptyExplicit": with_env("api", lambda: target(scope="")),
+    "jsJoin": [_join_row(parts) for parts in [["a","b"],["a//","b"],["a/.","b"],["a","b/"],["/a","/b"],["a","/b"],["a",""],["",""],
+    ["//"],["///"],["/","x.md"],["/","."],[".."],["../a","b"],["a","..","b"],["a/","/b/"],
+    ["","a"],["a",".","b"],[".",""],["/",""],["a/b/","c"]]],
+    # Mirrors discovery-drive.mjs row for row; the mjs runs FIRST and builds the probe tree.
+    "statCurrentNamedFile": [_stat_row(path, opts) for path, opts in [
+        (_stat_file, None), (_stat_file, {}), (_stat_file, {"label": "ledger"}),
+        (_stat_file, {"maxBytes": 10}), (_stat_file, {"maxBytes": 1}),
+        (_stat_file, {"maxBytes": 0}), (_stat_file, {"maxBytes": 2.5}),
+        (_stat_file, {"maxBytes": -1}), (_stat_file, {"maxBytes": None}),
+        (_stat_file, {"maxBytes": "10"}), (_stat_file, {"maxBytes": "ten"}),
+        (_stat_file, {"maxBytes": True}), (_stat_file, {"label": ""}),
+        (_stat_file, {"label": 0}), (_stat_file, {"label": 7}),
+        (_stat_file, {"openFlags": 0}),
+        (_stat_symlink, None), (_stat_hardlink, None), (_stat_dir, None),
+        (_stat_fifo, {"maxBytes": 100}), (_stat_missing, None),
+    ]],
     "sameFileIdentity": [
         same_file_identity({"dev": 7, "ino": 11}, {"dev": 7, "ino": 11}),
         same_file_identity({"dev": 7, "ino": 11}, {"dev": 7, "ino": 12}),

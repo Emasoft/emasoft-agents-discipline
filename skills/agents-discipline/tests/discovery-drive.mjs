@@ -11,12 +11,27 @@
  *
  * Usage: node discovery-drive.mjs <root>
  */
-import { lstatSync } from "node:fs";
-import { dirname } from "node:path";
-import { legacyFiles, listScopes, resolveTarget, sameFileIdentity, scopeFiles }
+import { existsSync, linkSync, lstatSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { legacyFiles, listScopes, resolveTarget, sameFileIdentity, scopeFiles, statCurrentNamedFile }
   from "../scripts/lib/gates.mjs";
 
 const root = process.argv[2];
+// statCurrentNamedFile targets, created here so BOTH drivers see one tree: the mjs runs first
+// and builds them, the python driver finds them already present. mkdir/symlink/link are all
+// idempotent-guarded so a re-run against the same root is a no-op rather than a crash.
+const statDir = join(root, "stat-probe");
+mkdirSync(statDir, { recursive: true });
+const statFile = join(statDir, "regular");
+if (!existsSync(statFile)) writeFileSync(statFile, "hi");
+const statSymlink = join(statDir, "link");
+if (!existsSync(statSymlink)) symlinkSync(statFile, statSymlink);
+const statHardlink = join(statDir, "hard");
+if (!existsSync(statHardlink)) linkSync(statFile, statHardlink);
+const statFifo = join(statDir, "fifo");
+if (!existsSync(statFifo)) execFileSync("mkfifo", [statFifo]);
+const statMissing = join(statDir, "absent");
 delete process.env.AGENTS_DISCIPLINE_SCOPE;
 
 const target = (options) => {
@@ -74,6 +89,38 @@ process.stdout.write(JSON.stringify({
   // key by PRESENCE would stop at "" and take the no-scope path. That mutation survived all
   // eight variants before this row existed.
   envScopeWithEmptyExplicit: withEnv("api", () => target({ scope: "" })),
+  // path.join itself, because the port reimplements it. os.path.join differs in THREE ways
+  // (it DISCARDS a prefix before an absolute segment, keeps a separator an empty segment
+  // contributed, and raises on no arguments), and normpath adds a fourth: POSIX preserves a
+  // leading "//" where node collapses it. That last one reddened NO variant in this file --
+  // no tree here has a "//"-leading root -- so without these rows the fix could be reverted
+  // silently. Found by a 3000-case randomized differential; these are its distinct classes.
+  jsJoin: [["a","b"],["a//","b"],["a/.","b"],["a","b/"],["/a","/b"],["a","/b"],["a",""],["",""],
+    ["//"],["///"],["/","x.md"],["/","."],[".."],["../a","b"],["a","..","b"],["a/","/b/"],
+    ["","a"],["a",".","b"],[".",""],["/",""],["a/b/","c"]].map((parts) => {
+    try { return join(...parts); } catch (error) { return "THREW:" + error.constructor.name; }
+  }),
+  // statCurrentNamedFile: the MESSAGES are the interesting half. Each row reports either
+  // "ok:<size>" or the thrown message, so an option-validation divergence shows as text
+  // rather than as a silently different Stats object. The paths are built by the caller
+  // (see the statTargets note in the runner) so both runtimes see the same tree.
+  statCurrentNamedFile: [
+    [statFile, undefined], [statFile, {}], [statFile, { label: "ledger" }],
+    [statFile, { maxBytes: 10 }], [statFile, { maxBytes: 1 }],
+    [statFile, { maxBytes: 0 }], [statFile, { maxBytes: 2.5 }], [statFile, { maxBytes: -1 }],
+    [statFile, { maxBytes: null }],        // Number(null) === 0, NOT the absent default
+    [statFile, { maxBytes: "10" }],        // Number("10") === 10
+    [statFile, { maxBytes: "ten" }],       // NaN
+    [statFile, { maxBytes: true }],        // Number(true) === 1
+    [statFile, { label: "" }],             // falsy label falls back to "file"
+    [statFile, { label: 0 }], [statFile, { label: 7 }],
+    [statFile, { openFlags: 0 }],
+    [statSymlink, undefined], [statHardlink, undefined], [statDir, undefined],
+    [statFifo, { maxBytes: 100 }], [statMissing, undefined],
+  ].map(([p, o]) => {
+    try { const st = statCurrentNamedFile(p, o); return "ok:" + st.size; }
+    catch (error) { return String(error.message).replace(root, "<R>"); }
+  }),
   // sameFileIdentity takes plain objects here exactly as hardening-tests.mjs:108 does.
   sameFileIdentity: [
     sameFileIdentity({ dev: 7, ino: 11 }, { dev: 7, ino: 11 }),

@@ -30,7 +30,12 @@ for variant in one-scope two-scopes no-scopes hostile-entries scope-is-a-file \
   python3 tests/discovery_drive.py "$root" >/tmp/disc-py.json 2>/tmp/disc-py.err; prc=$?
   if [ $jrc != 0 ] || [ $prc != 0 ]; then
     fail=1; echo "CRASH   $variant (js=$jrc py=$prc)"
-    head -4 /tmp/disc-js.err /tmp/disc-py.err
+    # tail, NOT head. A Python traceback puts its MESSAGE on the LAST line, so `head -4`
+    # printed the banner and stack frames and cut off exactly the text a failure exists to
+    # produce -- the unexpected-key assertion below would have reported nothing usable. This
+    # is the never-tail-on-error-messages rule INVERTED: here it is head that keeps the wrong
+    # end. Node puts its message near the top, so that side keeps head.
+    head -3 /tmp/disc-js.err; tail -3 /tmp/disc-py.err
   elif diff -q /tmp/disc-js.json /tmp/disc-py.json >/dev/null; then
     echo "OK      $variant"
   else
