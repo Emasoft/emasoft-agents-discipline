@@ -18,13 +18,18 @@ answering a constant would agree with each other, so the differing pair must als
 Run: python3 tests/python-lib-checks.py   (also runs as the last step of `npm test`)
 """
 
+import sys
+# BEFORE any local import. A stale .pyc in scripts/lib/__pycache__ once executed while
+# inspect.getsource() read the CORRECTED .py -- so the source looked right, every branch
+# condition evaluated true, and the output was still wrong, and two runs of "the same"
+# code disagreed. Not writing bytecode for these modules removes the failure mode.
+sys.dont_write_bytecode = True
 import atexit
 import json
 import os
 import pathlib
 import shutil
 import subprocess
-import sys
 import tempfile
 
 # The suite declares `engines: node >=16` and declared no Python floor at all — while

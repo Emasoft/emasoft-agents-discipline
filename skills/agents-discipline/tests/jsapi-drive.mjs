@@ -105,7 +105,12 @@ for (const cp of TRIM_PROBE) {
 // expansion via int(). Exact powers of ten agree either way, which is what hid the last one.
 const NUMS = [1.0, 0.5, 1e21, 1.5e21, 1e22, 1e-7, 1e-6, 1e-5, 1 / 3, -0.0, Infinity, -Infinity,
   NaN, 1e25, 1e-21, 123.456, 5e-324, 1.7976931348623157e308, 5, -5, 0, 10 ** 21, 10 ** 25,
-  2 ** 53, 2 ** 53 + 2, 1.2345678901234567e20, 9.999999999999999e20, 2 ** 60, 1e20, 1e16, 1e17];
+  2 ** 53, 2 ** 53 + 2, 1.2345678901234567e20, 9.999999999999999e20, 2 ** 60, 1e20, 1e16, 1e17,
+  // The [1e-6, 1e-4) band with a FULL mantissa: JS prints these in plain decimal, which
+  // needs up to 24 places after the point (6 leading zeros + 17 significant digits). The
+  // port's loop capped at 17, exhausted, and fell back to repr()'s exponent form. Found by
+  // a randomized differential over 4314 doubles, not by any hand-picked value.
+  1.2430862257523161e-06, 3.4040019134427085e-06, -4.7746763818860036e-05, -1.8366746337768764e-05, 2.7810433130305134e-05, -3.85325871109577e-06, 9.999999999999999e-07, 1.0000000000000002e-06];
 for (const n of NUMS) out.push(["String(number) " + JSON.stringify(String(n)), String(n)]);
 for (const [label, v] of [["null", null], ["true", true], ["false", false], ["empty array", []],
   ["array one", ["pending"]], ["array null", [null, 1]], ["nested", [[1, 2], [3]]],

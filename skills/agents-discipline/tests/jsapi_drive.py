@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Drive scripts/lib/jsapi.py on the oracle driver's corpus. Pair of tests/jsapi-drive.mjs."""
 
+import sys
+# BEFORE any local import. A stale .pyc in scripts/lib/__pycache__ once executed while
+# inspect.getsource() read the CORRECTED .py -- so the source looked right, every branch
+# condition evaluated true, and the output was still wrong, and two runs of "the same"
+# code disagreed. Not writing bytecode for these modules removes the failure mode.
+sys.dont_write_bytecode = True
 import json
 import os
 import sys
@@ -99,7 +105,8 @@ for _cp in (
 _NUMS = [1.0, 0.5, 1e21, 1.5e21, 1e22, 1e-7, 1e-6, 1e-5, 1 / 3, -0.0, float("inf"),
          float("-inf"), float("nan"), 1e25, 1e-21, 123.456, 5e-324, 1.7976931348623157e308,
          5, -5, 0, 10 ** 21, 10 ** 25, 2 ** 53, 2 ** 53 + 2, 1.2345678901234567e20,
-         9.999999999999999e20, float(2 ** 60), 1e20, 1e16, 1e17]
+         9.999999999999999e20, float(2 ** 60), 1e20, 1e16, 1e17,
+         1.2430862257523161e-06, 3.4040019134427085e-06, -4.7746763818860036e-05, -1.8366746337768764e-05, 2.7810433130305134e-05, -3.85325871109577e-06, 9.999999999999999e-07, 1.0000000000000002e-06]
 for _n in _NUMS:
     out.append(["String(number) " + json.dumps(js_string(_n)), js_string(_n)])
 for _label, _v in [["null", None], ["true", True], ["false", False], ["empty array", []],

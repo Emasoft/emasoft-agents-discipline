@@ -4,6 +4,12 @@
 Pair of tests/parse-gates-drive.mjs. See that file for why the unread fields matter.
 """
 
+import sys
+# BEFORE any local import. A stale .pyc in scripts/lib/__pycache__ once executed while
+# inspect.getsource() read the CORRECTED .py -- so the source looked right, every branch
+# condition evaluated true, and the output was still wrong, and two runs of "the same"
+# code disagreed. Not writing bytecode for these modules removes the failure mode.
+sys.dont_write_bytecode = True
 import json
 import os
 import sys

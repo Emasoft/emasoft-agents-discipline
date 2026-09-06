@@ -5,6 +5,12 @@ Pair of tests/dispatch-drive.mjs. A fixed `now` is threaded through every transi
 runtimes produce byte-identical state files; without it every row diverges on the clock.
 """
 
+import sys
+# BEFORE any local import. A stale .pyc in scripts/lib/__pycache__ once executed while
+# inspect.getsource() read the CORRECTED .py -- so the source looked right, every branch
+# condition evaluated true, and the output was still wrong, and two runs of "the same"
+# code disagreed. Not writing bytecode for these modules removes the failure mode.
+sys.dont_write_bytecode = True
 import errno
 import json
 import re

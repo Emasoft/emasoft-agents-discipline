@@ -118,16 +118,25 @@ def _js_number(value):
     if 1e-6 <= magnitude < 1e21:
         # Plain decimal, at the SHORTEST precision that still round-trips -- which is what both
         # engines print, but Python's repr may hand back an exponent form inside this band.
-        for places in range(1, 18):
+        # range to 25, NOT 18. `places` counts digits AFTER the point, and this band reaches down
+        # to 1e-6, so a value needs up to 6 leading zeros PLUS 17 significant digits. Capping at
+        # 17 made the loop exhaust and fall through to repr(), which returns the EXPONENT form --
+        # so every such value rendered as "1.2430862257523161e-06" where JS prints
+        # "0.0000012430862257523161". Found by a randomized differential over 4314 doubles (21
+        # failures); my hand-picked 32-value corpus had no value in that band with a full
+        # mantissa, so it passed. 24 is the true maximum here and 25 leaves a margin.
+        for places in range(1, 26):
             candidate = f"{value:.{places}f}".rstrip("0").rstrip(".")
             if float(candidate) == value:
                 return candidate
         return repr(value)
     # Exponential. Python writes e-07/e+21, JS writes e-7/e+21: strip the zero padding, keep the
     # sign, and drop a mantissa that is a bare integer down to its digits (1e+21, never 1.0e+21).
+    # repr() ALWAYS carries an exponent here -- this branch is reached only for magnitude
+    # < 1e-6 or >= 1e21, and repr switches to exponential below 1e-4 and at/above 1e16. A
+    # `if not exponent:` fallback stood here and could never fire; a guarded path that
+    # cannot execute reads as coverage it does not provide.
     mantissa, _, exponent = repr(value).partition("e")
-    if not exponent:
-        mantissa, _, exponent = f"{value:e}".partition("e")
     mantissa = mantissa.rstrip("0").rstrip(".") if "." in mantissa else mantissa
     sign = "-" if exponent.startswith("-") else "+"
     return mantissa + "e" + sign + str(int(exponent.lstrip("+-")))
