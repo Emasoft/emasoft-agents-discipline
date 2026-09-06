@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T01:08:57+0200
+updated: 2026-09-07T01:09:32+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -110,36 +110,22 @@ control proving the intended row MOVED is not evidence the new behaviour is RIGH
    **Use `tests/mutate-probe.sh` for every control.** Hand-rolled inline probes produced two
    false results in this port, the worse of which reported a syntax error as nine catches.
 
-**Measured — and the claim is narrower than it first read.** `gate-check.mjs` imports **23**
-names from `lib/gates.mjs`; exactly **4** are absent from `gates.py` — `claimLeases`,
-`releaseLeases`, `sleep`, `statCurrentNamedFile`. Three corrections a review forced, each
-verified here:
-- Items 1 and 2 above are a SUPERSET, not that list: `readLeases` is **not** imported by
-  gate-check (measured: 0 occurrences in its import block). Building it is optional work.
-- "4 unported" weights unequally. `sleep` is a one-line alias over `time.sleep`;
-  `statCurrentNamedFile` is a ~50-line, option-validating, Windows-bracketed function.
-- The measurement covers `lib/gates.mjs` NAMES ONLY. It says nothing about
-  `lib/process-tree.mjs` (ported — recalled, not measured here), and nothing about SIGNATURE
-  compatibility: it proves `read_stable_regular_file` exists, not that its option surface
-  matches the call sites gate-check uses.
+**Completeness, re-measured soundly (2026-09-07).** `gate-check.mjs` imports **23** names from
+`lib/gates.mjs` and **none** is missing from `gates.py`. The presence test is now
+`^(def |class )<name>\b` or `^<name>\s*[:=]` — not the earlier `^(def |_?)<name>\b`, which
+reduced to "the name appears at column 0 on any line" and could only produce a false PRESENT.
 
-Its presence test was also unsound in the dangerous direction — `^(def |_?)<name>\b` under
-MULTILINE reduces to "the name appears at column 0 on any line", which a module-level call or
-re-assignment would satisfy. It can only produce a false PRESENT, never a false MISSING, so the
-4 is a lower bound on what is done. `MAX_CHECK_OUTPUT_BYTES` and `MAX_AUTOMATIC_EVIDENCE_CHARS`
-rested entirely on that loose regex and have since been **re-verified soundly** (`gates.py:605`
-and `:606`), so the count of 4 stands.
+Two measurement errors happened on THIS claim, both worth remembering because each produced a
+confident wrong number:
+- the loose presence regex vouched for `MAX_CHECK_OUTPUT_BYTES` and `MAX_AUTOMATIC_EVIDENCE_CHARS`
+  on evidence that could not distinguish a definition from a mention (they are genuinely at
+  `gates.py:605-606`, verified since);
+- extracting the import block with `.*?` under `re.S` SPANNED the earlier `node:fs`,
+  `node:path` and `node:os` blocks, reporting "42 imported" with fragments like
+  `sep } from "node:path"; import ...` as missing names. `[^{}]*` cannot cross a block.
 
-Beyond the library, `gate-check.mjs`'s OWN ~30 private functions are a separate body of work: `parseArgs`,
-the approval store (`recordApproval`, `approvalExists`, `readApprovalFile`,
-`validatedApprovalDir`, `assertPrivateApprovalEntry`), the runner (`runCheck`, `runRolling`,
-`safeRegexMatch` and its Worker), and evidence rewriting (`insertOrUpdateEvidence`). It also
-spawns two siblings that need their own ports — `lib/check-supervisor.mjs` and
-`lib/regex-worker.mjs` — plus `lib/process-tree.mjs`, which is already ported.
-
-`readLeases` needs `releaseLeases`/`claimLeases` context and is dumped by no driver yet;
-`scopeFiles`/`legacyFiles` have ZERO callers in `scripts/` or `tests/` (verified) — ported
-because they are exported and would ship, not because anything exercises them.
+`scope_files` / `legacy_files` / `read_leases` are ported but have ZERO callers in `scripts/`
+or `tests/` — shipped because they are exported, not because anything exercises them.
 
 ### REVIEW FINDINGS — all verified first-hand, fixed across e547741, 36e3785, 50788cd, f3a4c86
 Four adversarial reviews; every finding was re-measured here rather than taken on report,
