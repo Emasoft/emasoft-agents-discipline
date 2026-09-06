@@ -238,6 +238,21 @@ def _self_check():
     # Polled, because Popen returns as soon as the fork succeeds: the first snapshot caught
     # bash plus ONE sleep, the other not yet spawned. The control fired on that -- an
     # assertion that failed for the right reason before it ever passed.
+    try:
+        _run_self_check(child, pgid, members)
+    finally:
+        # A leak-detection check that LEAKS on failure is the irony this guard exists to
+        # avoid: every assertion below fires while two `sleep 47` processes are alive, and an
+        # unguarded raise would strand them for 47 seconds each time the check is run.
+        # Belt-and-braces, because the success path has already reaped the group: killpg on an
+        # empty group raises ProcessLookupError, which is the expected case here, not an error.
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def _run_self_check(child, pgid, members):
     alive = []
     for _ in range(40):
         alive = members()
