@@ -219,7 +219,7 @@ def _self_check():
     """
     if sys.platform == "win32":
         print("self-check skipped: POSIX group kill only")
-        return
+        return None
     child = subprocess.Popen(
         # BOTH sleeps backgrounded, bash blocking in `wait`: three processes exist by
         # construction. `sleep 47 & sleep 47` leaves the last command exposed to bash's
@@ -255,7 +255,7 @@ def _self_check():
     # bash plus ONE sleep, the other not yet spawned. The control fired on that -- an
     # assertion that failed for the right reason before it ever passed.
     try:
-        _run_self_check(child, pgid, members)
+        return _run_self_check(child, pgid, members)
     finally:
         # A leak-detection check that LEAKS on failure is the irony this guard exists to
         # avoid: every assertion below fires while two `sleep 47` processes are alive, and an
@@ -292,8 +292,13 @@ def _run_self_check(child, pgid, members):
             break
         time.sleep(0.05)
     assert not survivors, f"group {pgid} survived the kill: {survivors}"
-    print(f"self-check ok: group {pgid} had {len(alive)} members, all reaped "
-          "(including the backgrounded grandchild)")
+    return {
+        "membersBefore": len(alive),
+        "ok": result["ok"],
+        "fallback": result["fallback"],
+        "diagnostic": result["diagnostic"],
+        "survivors": len(survivors),
+    }
 
 
 def _default_spawn_sync(command, args, timeout_ms=None):
@@ -308,4 +313,7 @@ def _default_spawn_sync(command, args, timeout_ms=None):
 
 
 if __name__ == "__main__":
-    _self_check()
+    # The dict is what tests/python-lib-checks.py compares against the oracle's; printed here
+    # so a bare `python3 scripts/lib/process_tree.py` still says what it did rather than
+    # succeeding in silence.
+    print(f"self-check ok: {_self_check()}")

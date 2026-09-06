@@ -19,12 +19,17 @@ const message = JSON.parse(readFileSync(0, "utf8"));
 const worker = new Worker(
   resolve(dirname(fileURLToPath(import.meta.url)), "../scripts/lib/regex-worker.mjs"),
 );
+// Terminate in the write callback, so the reply is flushed before the worker teardown that
+// lets the process exit. stdout is a pipe here, so the write is async.
 worker.once("message", (reply) => {
-  process.stdout.write(JSON.stringify(reply) + "\n");
-  worker.terminate();
+  process.stdout.write(JSON.stringify(reply) + "\n", () => worker.terminate());
 });
+// A worker-level `error` is THIS SHIM failing to load or run the oracle — not a reply. It goes
+// to stderr with a non-zero exit, never to stdout as `{"error": ...}`: the worker's own error
+// REPLY has that exact shape, so a broken shim would otherwise be indistinguishable from an
+// oracle that correctly rejected a bad pattern, and the comparison would pass on two failures.
 worker.once("error", (err) => {
-  process.stdout.write(JSON.stringify({ error: err.message }) + "\n");
-  worker.terminate();
+  process.stderr.write(`regex-worker-drive: could not run the oracle: ${err.message}\n`);
+  worker.terminate().finally(() => process.exit(1));
 });
 worker.postMessage(message);

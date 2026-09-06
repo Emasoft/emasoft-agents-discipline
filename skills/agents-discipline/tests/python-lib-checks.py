@@ -87,15 +87,20 @@ def regex_case(name, source, output, flags=""):
     ok = sorted(j) == sorted(p) and (("error" in j) or j == p)
     report(ok, f"regex_worker: {name} — port matches oracle",
            "" if ok else f"js={j} py={p} {pe[:80]}")
-    return json.dumps(p, sort_keys=True)
+    # BOTH replies, not just the port's: a vacuity control built on one side only re-creates
+    # the one-sidedness this whole file was rewritten to remove.
+    return json.dumps(j, sort_keys=True), json.dumps(p, sort_keys=True)
 
 
 matched = regex_case("a matching EXPECT", "VERIFY_OK", "all good VERIFY_OK")
 unmatched = regex_case("a NON-matching EXPECT", "VERIFY_OK", "nothing here")
 # The vacuity control: two implementations each hardcoding one reply would agree on every case
-# above. They cannot also produce DIFFERENT replies for match and non-match.
-report(matched is not None and matched != unmatched,
-       "regex_worker: match and non-match give different replies (vacuity control)",
+# above. Neither can also produce DIFFERENT replies for match and non-match — asserted of BOTH
+# sides, because checking only the port would leave a constant-answering ORACLE undetected and
+# every "port matches oracle" line above trivially true.
+report(matched is not None and unmatched is not None
+       and matched[0] != unmatched[0] and matched[1] != unmatched[1],
+       "regex_worker: match and non-match differ, in BOTH runtimes (vacuity control)",
        f"{matched} vs {unmatched}")
 regex_case("an invalid pattern", "(", "x")
 # \d must stay ASCII: JS's is [0-9] with or without the `u` flag, Python's is Unicode by
@@ -151,13 +156,35 @@ else:
     report(js_paths == py_paths, "windows_taskkill_path: port matches oracle on 5 environments",
            "" if js_paths == py_paths else f"js={js_paths} py={py_paths}")
     # Vacuity control: a function that returned None for everything would match a port that
-    # did the same. Exactly one environment must select a path, and four must fail closed.
-    report(sum(1 for p in py_paths if p) == 1 and py_paths[0],
-           "windows_taskkill_path: only the trusted environment selects a path (vacuity control)",
-           str(py_paths[0]))
+    # did the same. Exactly one environment must select a path, and four must fail closed —
+    # asserted of BOTH lists, since checking only the port leaves a constant-None ORACLE
+    # undetected and makes the equality above trivially true.
+    report(all(sum(1 for p in paths if p) == 1 and paths[0] for paths in (js_paths, py_paths)),
+           "windows_taskkill_path: only the trusted environment selects a path, in BOTH "
+           "runtimes (vacuity control)", str(py_paths[0]))
 
-# The POSIX group kill, driven for real. Prints its own line and raises on failure.
-process_tree._self_check()
+# --- the group kill: the module's whole purpose, and the last case still asserted ----------
+# Three real defects had already been found in this exact path (`child.exitCode`,
+# `child.kill(sig)`, the send_signal window) and every one of them was invisible to a check
+# that drove only one side. Both implementations now spawn their own detached group with a
+# backgrounded grandchild, reap it, and report the same five facts.
+if WIN32:
+    report(True, "process_tree: group kill skipped (POSIX only)")
+else:
+    py_kill = process_tree._self_check()
+    js_kill_out = subprocess.run(["node", os.path.join(TESTS, "process-tree-drive.mjs")],
+                                 capture_output=True, text=True, timeout=60)
+    if js_kill_out.returncode != 0:
+        report(False, "process_tree: oracle could not be driven", js_kill_out.stderr.strip()[:160])
+    else:
+        js_kill = json.loads(js_kill_out.stdout)
+        report(js_kill == py_kill, "process_tree: group kill — port matches oracle",
+               "" if js_kill == py_kill else f"js={js_kill} py={py_kill}")
+        # Vacuity control: both would agree on {membersBefore: 0, survivors: 0} if neither
+        # spawned anything at all, which is also what a broken `ps` parse looks like.
+        report(js_kill["membersBefore"] >= 3 and py_kill["membersBefore"] >= 3,
+               "process_tree: both saw a live 3-member group before killing it (vacuity control)",
+               f"js={js_kill['membersBefore']} py={py_kill['membersBefore']}")
 
 print("all pass" if not failed else f"{failed} FAILED")
 sys.exit(1 if failed else 0)
