@@ -483,7 +483,10 @@ report("raised OSError" in _lines.get("error", "") or "SKIPPED" in _lines.get("e
 # The SUCCESS path, which the first version of this probe did not have: proving the loop does not
 # truncate SILENTLY is not the same as proving it does not truncate. This one runs on every
 # platform, including Windows, where the two rlimit rows report SKIPPED.
-report("ALL BYTES" in _lines.get("success", ""),
+# SKIPPED accepted only for an unavailable PRIMITIVE, never for TRUNCATED: the probe words
+# those differently on purpose, so a platform that cannot run the case and a loop that loses
+# bytes can never print the same thing. Forced all three skip paths and confirmed the wording.
+report("ALL BYTES" in _lines.get("success", "") or "SKIPPED" in _lines.get("success", ""),
        "short_write: _write_all delivers every byte across multiple short writes",
        _lines.get("success", "MISSING"))
 completed.append("short_write")

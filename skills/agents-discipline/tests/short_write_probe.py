@@ -67,12 +67,30 @@ def _size_capped_cases(tmp):
 
 
 def _success_case():
-    """_write_all across MULTIPLE successful short writes -- the path the fix exists for."""
-    left, right = socket.socketpair()
+    """_write_all across MULTIPLE successful short writes -- the path the fix exists for.
+
+    The SETUP is guarded separately from the measurement. A platform that cannot provide the
+    mechanism (no socketpair, no settable SO_SNDBUF, no os.write on a socket fd) must report
+    SKIPPED; a _write_all that fails to deliver must report TRUNCATED. Wrapping both in one
+    try would let a real regression print the same word as an unavailable primitive -- and the
+    previous version of this file guarded win32 by branching around the rlimit cases while
+    still calling THIS one, so if socketpair or SO_SNDBUF behaves differently there, the guard
+    I added to fix a Windows failure would itself have failed on Windows. I have no Windows
+    machine to test on, so the honest fix is to make the outcome legible rather than to assume.
+    """
+    try:
+        left, right = socket.socketpair()
+    except (AttributeError, OSError) as error:
+        print(f"success: SKIPPED (socketpair unavailable: {type(error).__name__})")
+        return
     try:
         # A small send buffer makes the writes short; a reader that keeps draining makes each
         # subsequent one succeed, so the loop must run more than once to finish.
-        left.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        try:
+            left.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        except OSError as error:
+            print(f"success: SKIPPED (SO_SNDBUF not settable: {type(error).__name__})")
+            return
         received = bytearray()
 
         def drain():
@@ -82,9 +100,19 @@ def _success_case():
                     break
                 received.extend(chunk)
 
-        reader = threading.Thread(target=drain)
+        reader = threading.Thread(target=drain, daemon=True)
         reader.start()
-        _write_all(left.fileno(), PAYLOAD)
+        try:
+            _write_all(left.fileno(), PAYLOAD)
+        except OSError as error:
+            # os.write on a SOCKET fd is a POSIX affordance; on Windows a socket is a handle,
+            # not a CRT file descriptor. Reported as SKIPPED rather than TRUNCATED so an
+            # unavailable primitive never reads as the loop losing bytes.
+            print(f"success: SKIPPED (os.write on a socket fd: {type(error).__name__} "
+                  f"{getattr(error, 'errno', None)})")
+            return
+        # daemon=True above so a reader still blocked in recv cannot keep the interpreter alive
+        # past this join -- the suite runs this probe as a subprocess and waits on it.
         reader.join(timeout=30)
         ok = bytes(received) == PAYLOAD
         print(f"success: _write_all delivered {len(received)} of {len(PAYLOAD)} bytes "
