@@ -161,8 +161,12 @@ record("lock dir after throw", readdirSync(join(root, ".agents-discipline", "loc
 await attempt("withFileLock missing root", () =>
   withFileLock(join(root, "no-such-root"), join(root, "target"), () => "value"));
 
-// Regressions for the four findings of the b263dad review. Each row is a case that PASSED the
-// 55-row driver before the fix, which is the point: they were all in branches nothing drove.
+// Regressions for the b263dad review's findings, all in branches the 55-row driver never drove.
+// NOT all of them are regression rows, and saying so matters: `unparseable lock file` exercises
+// the PRE-EXISTING `except ValueError` arm, which the isinstance fix does not touch, and
+// `statusLogPath bare a` cannot change because normpath is the identity there. Both are useful
+// coverage and neither moves under a mutation of the code it sits next to -- a row that cannot
+// fail is exactly what a driver comment must not silently imply is a guard.
 // statusLogPath bare, over the un-normalized spellings the scoped branch already covered. The
 // original row passed an absolute mkdtemp path -- the one shape that cannot expose it.
 for (const r of ["a//", "./a", "a/b/..", "a"]) record("statusLogPath bare " + r, redact(statusLogPath(r, null)));

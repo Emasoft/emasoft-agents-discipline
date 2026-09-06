@@ -43,6 +43,21 @@ def _err_code(error):
             or str(error))
 
 
+def _write_all(fd, data):
+    """os.write until the buffer is drained, because a single call may write FEWER bytes.
+
+    Node's `writeFileSync(fd, ...)` loops internally; `os.write` returns a count and Python does
+    not check it. The consequence is not a wrong message, it is data loss: on a short write
+    write_atomic would fsync a TRUNCATED file and then os.replace it into position, so a
+    half-written dispatch.json passes every guard downstream and reads back as valid JSON or
+    as corruption depending on where the cut fell. Short writes are rare on a regular file and
+    routine at a disk-full or size-limit boundary, which is exactly when a state file matters.
+    """
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
 def _is_transient_windows_fs_error(error):
     return sys.platform == "win32" and getattr(error, "errno", None) in _WINDOWS_TRANSIENT_FS_ERRORS
 
@@ -553,7 +568,7 @@ def write_atomic(file, text, root=None):
         # "utf8") substitutes U+FFFD for a lone surrogate; a Python str carrying one can only
         # come from a surrogateescape decode, which nothing in this port performs, so a strict
         # failure here means a caller built an unencodable string and should hear about it.
-        os.write(fd, str(text).encode("utf-8"))
+        _write_all(fd, str(text).encode("utf-8"))
         os.fsync(fd)
         os.close(fd)
         fd = None
@@ -656,7 +671,11 @@ def with_file_lock(root, target, fn, timeout_ms=30000):
         # separators + ensure_ascii=False reproduce JSON.stringify byte for byte; the `target`
         # field is a filesystem path, so a non-ASCII repository name would otherwise be written
         # \u-escaped by one implementation and literally by the other.
-        os.write(fd, json.dumps(
+        # _write_all here too, and this site is the least obvious of the three: a short write
+        # leaves the lock metadata as truncated JSON, the release loop's json.load raises
+        # ValueError, that arm breaks WITHOUT unlinking, and the lock is held until a human
+        # removes it. A partial write of an ownership record is worse than no record.
+        _write_all(fd, json.dumps(
             {"token": token, "pid": os.getpid(), "target": lock_target,
              "at": int(time.time() * 1000)},
             separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
@@ -747,7 +766,7 @@ def append_status(root, scope, line):
         if (not statmod.S_ISREG(opened.st_mode) or opened.st_nlink != 1
                 or (opened.st_ino, opened.st_dev) != (named.st_ino, named.st_dev)):
             raise OSError("refusing non-file or replaced status log " + path)
-        os.write(fd, (re.sub(r"[\r\n]+", " ", str(line)) + "\n").encode("utf-8"))
+        _write_all(fd, (re.sub(r"[\r\n]+", " ", str(line)) + "\n").encode("utf-8"))
         os.fsync(fd)
         return path
     finally:

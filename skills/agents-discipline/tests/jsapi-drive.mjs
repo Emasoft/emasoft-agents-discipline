@@ -32,6 +32,15 @@ for (const a of alphabet) { ids.push(a); for (const b of alphabet) ids.push(a + 
 out.push(["localeCompare", ids.slice().sort((a, b) => a.localeCompare(b))]);
 out.push(["localeCompare pairs", ["a", "A", "aB", "Ab", "aa", "aA", "Aa", "AA", "a1", "A1", "1a"]
   .sort((a, b) => a.localeCompare(b))]);
+// THREE characters, not two. A two-character pair cannot distinguish a correct positional
+// tertiary weight from several wrong schemes that happen to agree on pairs; three can.
+out.push(["localeCompare triples", ["aAb", "AaB", "aab", "AAB", "aAB", "Aab", "abA", "aBa"]
+  .sort((a, b) => a.localeCompare(b))]);
+// A dict nested inside an ARRAY. js_json_object passed lists through untouched, so its nested
+// objects kept Python insertion order; nothing in dispatch state nests one today, which is why
+// only a deliberate row can see it.
+out.push(["stringify nested in array",
+  JSON.stringify({ waves: [{ b: 1, 10: 2, a: 3 }], meta: { z: 1, 2: 2 } })]);
 
 // 3. Date.parse. The spec-defined format only; the implementation-defined fallbacks are listed
 //    at the end as a DECLARED divergence, with the oracle's answer recorded so the difference is
@@ -45,7 +54,7 @@ const spec = [
   "2020-13-01T00:00:00Z", "2020-00-01T00:00:00Z", "2020-02-30T00:00:00Z", "2020-02-29T00:00:00Z",
   "2021-02-29T00:00:00Z", "2020-01-32T00:00:00Z", "2020-01-00T00:00:00Z",
   "Jan 1 2020", "2020", "2020-01", "2020-01-01T00:00:00.1234567Z", "2020-01-01T00:00:00.1Z",
-  "+002020-01-01T00:00:00Z", "-002020-01-01T00:00:00Z", "2020-01-01t00:00:00z",
+  "+002020-01-01T00:00:00Z", "-002020-01-01T00:00:00Z", "-000000-01-01T00:00:00Z", "+000000-01-01T00:00:00Z", "2020-01-01t00:00:00z",
   "2020-01-01T00:00:00.000z", "2020-01-01 00:00:00", "2020-01-01T00:00", "2020-01-01T00",
   "", " ", "not a date", "2020-01-01T00:00:00.000Z ", "1970-01-01T00:00:00Z",
   "1969-12-31T23:59:59Z", "275760-09-13T00:00:00Z", "2020-1-1T00:00:00Z",

@@ -49,7 +49,7 @@ failed = 0
 # not doing" failure: a documented hole is still a hole. atexit rather than wrapping each
 # section in try/except, because it needs no re-indentation and it reports the same fact.
 SECTIONS = ["regex_worker", "check_supervisor", "windows_taskkill_path", "process_tree",
-            "gates_helpers", "jsapi"]
+            "gates_helpers", "jsapi", "parse_gates", "short_write"]
 completed = []
 
 
@@ -403,6 +403,51 @@ report(_by.get("localeCompare pairs") != sorted(_by.get("localeCompare pairs", [
        "jsapi: localeCompare really differs from code-point order (vacuity control)",
        str(_by.get("localeCompare pairs")))
 completed.append("jsapi")
+
+# --- parse_gates: the whole parse result, field by field -----------------------------------
+# The drivers existed and NOTHING RAN THEM. 8424c59 cites "5/5 whole-object diffs identical" as
+# its verification, but that corpus lived in ad-hoc temp files and is gone — an unreproducible
+# claim, which is the same "documented hole is still a hole" failure this file's own header
+# describes. The five ledgers are fixtures now, each aimed at a class that has already produced a
+# divergence here: non-ASCII ids and titles, CRLF with duplicate attributes, a missing final
+# newline, a regex-reading EXPECT, and a ledger that is all parse errors.
+_PORT_FIXTURES = pathlib.Path(TESTS) / "fixtures" / "port"
+_fixtures = sorted(_PORT_FIXTURES.glob("*.md"))
+# Counted, not globbed-and-hoped: an empty glob would make the loop below pass by running zero
+# comparisons — a green section that checked nothing.
+report(len(_fixtures) == 5, "parse_gates: the fixture corpus is present", f"{len(_fixtures)} found")
+for _fixture in _fixtures:
+    _js = subprocess.run(["node", os.path.join(TESTS, "parse-gates-drive.mjs"), str(_fixture)],
+                         capture_output=True, text=True, timeout=30)
+    _py = subprocess.run([sys.executable, os.path.join(TESTS, "parse_gates_drive.py"),
+                          str(_fixture)], capture_output=True, text=True, timeout=30)
+    _ok = _js.returncode == 0 and _py.returncode == 0 and _js.stdout == _py.stdout
+    _detail = ""
+    if not _ok:
+        _detail = (_js.stderr or _py.stderr or "").strip()[-200:] or next(
+            (f"{a} | {b}" for a, b in zip(_js.stdout.splitlines(), _py.stdout.splitlines())
+             if a != b), "output length differs")
+    report(_ok, f"parse_gates: {_fixture.name} — whole parse result identical", _detail)
+completed.append("parse_gates")
+
+# --- short write: gates._write_all -----------------------------------------------------------
+# No oracle row is possible: Node's writeFileSync(fd, ...) loops internally, so there is nothing
+# to compare against -- the port had to GROW the loop. Verified against its own control instead,
+# in a subprocess because RLIMIT_FSIZE is process-wide.
+_sw = subprocess.run([sys.executable, os.path.join(TESTS, "short_write_probe.py")],
+                     capture_output=True, text=True, timeout=30)
+_lines = _sw.stdout.strip().splitlines()
+report(_sw.returncode == 0 and len(_lines) == 2, "short_write: probe ran",
+       (_sw.stderr or _sw.stdout).strip()[-200:])
+# The CONTROL first, and it gates the claim: if a bare os.write did not short-write, the second
+# line is consistent with the loop being unnecessary and must not be read as verification.
+report(bool(_lines) and "SHORT: True" in _lines[0],
+       "short_write: a bare os.write really does short-write here (control)",
+       _lines[0] if _lines else "")
+report(len(_lines) > 1 and "raised OSError" in _lines[1],
+       "short_write: _write_all surfaces the failure instead of truncating",
+       _lines[1] if len(_lines) > 1 else "")
+completed.append("short_write")
 
 # INLINE, before the exit, so a missing section actually FAILS the run. The atexit hook alone
 # was decorative for the case it was written for: a section that returns early WITHOUT raising

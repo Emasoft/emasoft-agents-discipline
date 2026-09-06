@@ -49,9 +49,20 @@ def js_entries(mapping):
     return [(k, mapping[k]) for k in js_object_key_order(list(mapping))]
 
 
-def js_json_object(mapping):
-    """Re-key `mapping` into JS enumeration order, recursively, for json.dumps."""
-    return {k: (js_json_object(v) if isinstance(v, dict) else v) for k, v in js_entries(mapping)}
+def js_json_object(value):
+    """Re-key every nested object into JS enumeration order, for json.dumps.
+
+    Descends into LISTS as well as dicts. The first version did not, so a dict inside a list kept
+    Python insertion order while its siblings were re-keyed -- silent byte-order drift in the
+    serialized state, in the one function whose entire job is preventing exactly that. Nothing in
+    today's dispatch state nests an object in an array (`leaves` is strings), which is precisely
+    why it would have gone unnoticed until a schema change put one there.
+    """
+    if isinstance(value, dict):
+        return {k: js_json_object(v) for k, v in js_entries(value)}
+    if isinstance(value, list):
+        return [js_json_object(item) for item in value]
+    return value
 
 
 # ---------------------------------------------------------------------------------------------
@@ -72,10 +83,20 @@ def locale_compare_key(value):
     "Ab" -- both fold to "ab", then position 0 decides. A per-character (fold, case) key would
     order them the other way, which is the mistake this two-tuple shape exists to avoid.
 
-    Characters outside the id charset fall back to their code point, offset past the table, so
-    an unexpected byte sorts last and deterministically instead of raising.
+    SCOPE OF THE GUARANTEE: the id charset `[A-Za-z0-9._-]`, and nothing else. Every caller
+    reaches this only through `validate_scope_id`, which rejects anything outside it. Characters
+    that are not in the table fall back to their code point, offset past it, so an unexpected one
+    sorts last and deterministically instead of raising -- but that fallback is NOT ICU. Measured:
+    the engine sorts ["~","e","E","é","É","ß","z"] and this key gives
+    ["e","E","z","~","ß","é","É"], because ICU folds é onto e at primary level and a code point
+    cannot. There is deliberately no corpus row for that: a row would assert a fidelity this
+    function does not claim, and making it pass would mean shipping a partial ICU table for
+    inputs no caller can produce.
     """
-    primary = tuple(_PRIMARY.get(c.lower(), len(_PRIMARY) + ord(c)) for c in value)
+    # ord(c.lower()), not ord(c): the fallback has to fold case like the lookup does, or an
+    # out-of-charset pair separates at PRIMARY level where ICU separates it at tertiary.
+    # Unreachable through validate_scope_id, so this is consistency rather than a live defect.
+    primary = tuple(_PRIMARY.get(c.lower(), len(_PRIMARY) + ord(c.lower())) for c in value)
     tertiary = tuple(1 if c.isupper() else 0 for c in value)
     return (primary, tertiary)
 
@@ -111,6 +132,12 @@ def parse_date(value):
     if not match:
         return None
     year, month, day, hour, minute, second, fraction, offset = match.groups()
+    # "-000000" is the one expanded year the format forbids: there is no negative zero year, so
+    # the sign would be meaningless. Measured: V8 returns NaN for "-000000-01-01T00:00:00Z" and a
+    # real number for "+000000-...". The regex accepts both, and int() erases the sign, so
+    # without this the port answered where the oracle refused.
+    if year.startswith("-") and int(year) == 0:
+        return None
 
     # A bare date is UTC and a bare date-TIME is LOCAL. That asymmetry is in the specification
     # (it is the one place the format is not self-describing) and it is a 1-hour error on this
