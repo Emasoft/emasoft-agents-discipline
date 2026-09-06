@@ -23,7 +23,9 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+import json
+import stat as statmod
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from gates import read_stable_regular_file  # noqa: E402  # type: ignore[import-not-found]
@@ -35,22 +37,32 @@ RUNNER_WORDS = {
     "make", "tsc", "deno", "bash", "sh", "ruby", "go", "cargo",
 }
 
-# re.ASCII on every pattern that uses \w, \b or \d: JavaScript's are ASCII-only, and Python's
-# are Unicode by default. Without the flag the port would silently accept more than the oracle.
+# JavaScript's \w, \b and \d are ASCII-only; Python's are Unicode by default. re.ASCII fixes
+# those three -- but it ALSO narrows \s, which JavaScript leaves Unicode-wide, so a pattern
+# containing both cannot use the flag. Measured: with re.ASCII, `12\xa0tests passed` (a
+# non-breaking space, what a paste out of a browser or a word processor routinely carries) is
+# NOT a measured result to the port while it IS one to the oracle -- honest evidence silently
+# demoted. So the flag is used only where no \s appears, and elsewhere \d and \b are spelled
+# out as their ASCII selves.
+NOT_WORD_BEFORE = r"(?<![0-9A-Za-z_])"
+NOT_WORD_AFTER = r"(?![0-9A-Za-z_])"
 CODE_SPAN = re.compile(r"`[^`]+`")
 FILENAME_SHAPED = re.compile(r"\b[A-Za-z0-9_./-]+\.[a-z0-9]{2,5}\b", re.I | re.A)
-MEASURED_RESULT = re.compile(r"\b\d+\s+(?:[a-z]+\s+){0,3}(passed|passing|pass|ok)\b", re.I | re.A)
-EXIT_CODE = re.compile(r"exit\s+\d+", re.I | re.A)
+MEASURED_RESULT = re.compile(
+    NOT_WORD_BEFORE + r"[0-9]+\s+(?:[a-z]+\s+){0,3}(passed|passing|pass|ok)" + NOT_WORD_AFTER,
+    re.I,
+)
+EXIT_CODE = re.compile(r"exit\s+[0-9]+", re.I)
 # NO WHITESPACE in the span: `node test/run-tests.mjs` is a COMMAND that happens to name a
 # path, and demanding that string exist as a file is nonsense. Only a bare path is a citation.
 CITATION = re.compile(r"`([^`\s]*/[^`\s]*\.[A-Za-z0-9]{1,6})`")
-UNIT_HEADER = re.compile(r"^\*\*unit\s+([0-9]+)(?![0-9A-Za-z_])", re.I | re.A)
+UNIT_HEADER = re.compile(r"^\*\*unit\s+([0-9]+)" + NOT_WORD_AFTER, re.I)
 TRAILING_PIPE = re.compile(r"(^|[^\\])\|$")
 SEPARATOR_CELL = re.compile(r"^:?-+:?$")
 RECEIPT_RE = re.compile(r"\n?<!-- agents-discipline-check: [^>]*-->\n?")
 PRIOR_RECEIPT = re.compile(r"<!-- agents-discipline-check: ([^ ]+) sha256:([0-9a-f]+) -->")
 CREATED = re.compile(
-    r"^Created:?\s+(\d{4}-\d{2}-\d{2}[T ][\d:]+(?:[+-]\d{2}:?\d{2})?)", re.M | re.A
+    r"^Created:?\s+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:[+-][0-9]{2}:?[0-9]{2})?)", re.M
 )
 
 path = sys.argv[1] if len(sys.argv) > 1 else "DELEGATION.md"
@@ -295,8 +307,17 @@ if any(r["status"] == "verified" for r in rows):
     created_ms = None
     cm = CREATED.search(text)
     if cm:
+        raw = cm.group(1).replace(" ", "T")
+        # `T24:00` is legal ISO 8601 and Date.parse accepts it; fromisoformat raises on it
+        # ("hour must be in 0..23"). Left unhandled, the ValueError below swallows the failure
+        # and the staleness rule is SILENTLY SKIPPED -- a gate that quietly stops running is
+        # worse than one that complains. Rewrite it to the midnight it denotes.
+        m24 = re.match(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})T24(:.*)?$", raw)
+        if m24:
+            raw = (datetime.fromisoformat(m24.group(1)) + timedelta(days=1)).strftime("%Y-%m-%d") \
+                + "T00" + (m24.group(2) or "")
         try:
-            dt = datetime.fromisoformat(cm.group(1).replace(" ", "T"))
+            dt = datetime.fromisoformat(raw)
             # A bare datetime with no offset is local time in both runtimes.
             if dt.tzinfo is None:
                 dt = dt.astimezone()
@@ -311,7 +332,11 @@ if any(r["status"] == "verified" for r in rows):
             missing_artifacts.append(p)
             continue
         st = os.stat(hit)
-        if os.path.isfile(hit) and st.st_size == 0:
+        # S_ISREG on the stat already taken, not a second os.path.isfile() call: two syscalls
+        # leave a window where the file vanishes between them, and isfile() swallows the error
+        # and answers False, so a zero-byte artifact would be judged by the staleness branch
+        # using the FIRST stat. The oracle asks its one stat object; so does this.
+        if statmod.S_ISREG(st.st_mode) and st.st_size == 0:
             empty_artifacts.append(p)
         elif created_ms is not None and st.st_mtime * 1000 < created_ms:
             stale_artifacts.append(p)
@@ -361,7 +386,10 @@ while True:
 #   ESCAPES. `pytest -q || true` exits 0 unconditionally. No whole-command regex can see it,
 #   because the cheat lives in the OPERATOR, not in any one word.
 ALWAYS_TRUE = re.compile(
-    r"^(?:(?:/(?:usr/)?bin/)?(?:true|echo|printf|pwd|sleep)(?:\s+[^&|;]*)?|:|command\s+true|exit\s+0)$",
+    # `\Z`, not `$`: Python's `$` also matches just before a trailing newline, JavaScript's
+    # does not. Unreachable today (cells come from one stripped table line) and spelled
+    # exactly anyway, because the next edit is where an inexact anchor gets noticed.
+    r"^(?:(?:/(?:usr/)?bin/)?(?:true|echo|printf|pwd|sleep)(?:\s+[^&|;]*)?|:|command\s+true|exit\s+0)\Z",
     re.I,
 )
 
@@ -452,17 +480,39 @@ rerun_skipped = bool(os.environ.get("AGENTS_DISCIPLINE_SKIP_RERUN"))
 # unset, matching the sibling SKIP_RERUN -- two env vars in one file with opposite
 # empty-string semantics is a trap. The validation only runs when a re-run will actually
 # happen: a structure-only check has no budget to misconfigure.
-_budget_raw = (os.environ.get("AGENTS_DISCIPLINE_RERUN_BUDGET_MS") or "").strip()
-if _budget_raw == "":
-    rerun_budget_ms = 600000.0
-else:
+def _js_number(s):
+    """JavaScript `Number(s)`, because the oracle's accept/reject set is the contract.
+
+    Measured divergence against a bare `float()`: `0x10` is 16 to Number and a ValueError to
+    float (the oracle RAN with a 16 ms budget, the port refused with exit 2), and `1_000` is
+    NaN to Number and 1000.0 to float (the oracle refused, the port RAN). Neither value is
+    sane in a milliseconds variable — the point is that the two runtimes must disagree with
+    the operator identically, or the same configuration means two different things.
+    """
+    if "_" in s:  # JS numeric separators are a LITERAL feature; Number("1_000") is NaN
+        return float("nan")
     try:
-        rerun_budget_ms = float(_budget_raw)
+        for prefix, base in (("0x", 16), ("0o", 8), ("0b", 2)):
+            if s[:2].lower() == prefix:
+                return float(int(s[2:], base))
+        return float(s)
     except ValueError:
-        rerun_budget_ms = float("nan")
-if not rerun_skipped and not (rerun_budget_ms == rerun_budget_ms and rerun_budget_ms != float("inf") and rerun_budget_ms >= 1):
+        return float("nan")
+
+
+_budget_raw = (os.environ.get("AGENTS_DISCIPLINE_RERUN_BUDGET_MS") or "").strip()
+rerun_budget_ms = 600000.0 if _budget_raw == "" else _js_number(_budget_raw)
+# `x != x` is the NaN test; `in (inf, -inf)` the infinity one -- together, Number.isFinite.
+if not rerun_skipped and not (
+    rerun_budget_ms == rerun_budget_ms
+    and rerun_budget_ms not in (float("inf"), float("-inf"))
+    and rerun_budget_ms >= 1
+):
+    # json.dumps, not an f-string in quotes: the oracle uses JSON.stringify, so a value
+    # containing a quote or a backslash is escaped rather than printed raw into a message that
+    # then reads as if the value ended early.
     fail(2, "agents-discipline: AGENTS_DISCIPLINE_RERUN_BUDGET_MS must be a positive number of "
-            f'milliseconds, got "{_budget_raw}"')
+            f"milliseconds, got {json.dumps(_budget_raw)}")
 
 rerun_deadline = time.monotonic() * 1000 + rerun_budget_ms
 if not rerun_skipped:
@@ -472,8 +522,11 @@ if not rerun_skipped:
         # command at all and fell through to `unreproducible`, which does not fail. That is
         # the cheapest cheat in the file: one word, and the row passes. Scan first, extract second.
         spans = [s[1:-1].strip() for s in CODE_SPAN.findall(r["acceptance"])]
+        # Truthiness, not `is not None`: the oracle's `find` + `if (chained)` skips an
+        # empty-string match. Both predicates reject "" today, so this only matters to whoever
+        # edits them next -- which is exactly when a silent semantic difference costs an hour.
         chained = next((s for s in spans if CHAIN_OPERATORS.search(mask_quoted(s))), None)
-        if chained is not None:
+        if chained:
             repro_failed.append({
                 "unit": r["unit"], "cmd": chained,
                 "code": "acceptance uses `||` or `;` — those pass whatever the code does; "
@@ -481,7 +534,7 @@ if not rerun_skipped:
             })
             continue
         noop = next((s for s in spans if is_noop_acceptance(s)), None)
-        if noop is not None:
+        if noop:
             repro_failed.append({
                 "unit": r["unit"], "cmd": noop,
                 "code": "no-op acceptance — exits 0 by construction, tests nothing",
@@ -521,6 +574,13 @@ if not rerun_skipped:
                 stderr=subprocess.DEVNULL,
                 timeout=remaining / 1000,
             ).returncode
+            # A signal death is `returncode = -N` here and `err.status = null` in the oracle,
+            # which its `typeof === "number"` test turns into 1. Left raw, an acceptance that
+            # segfaults or is OOM-killed prints `-> exit -9` in one runtime and `-> exit 1` in
+            # the other: same verdict, different artifact, and the ledger's own output is the
+            # artifact. Verdict is unaffected either way -- both are non-zero.
+            if code < 0:
+                code = 1
         except (subprocess.TimeoutExpired, OSError):
             code = 1
         (reran if code == 0 else repro_failed).append({"unit": r["unit"], "cmd": cmd, "code": code})
@@ -630,8 +690,8 @@ if not rerun_skipped:
         stamp = (
             f"<!-- agents-discipline-check: {now} sha256:{digest} -->\n"
             "<!-- agents-discipline-check: this is a CONTENT BINDING, not a verdict. It records "
-            "which bytes were checked, never whether they passed. Re-run ledger-check on this "
-            "file for a verdict. -->"
+            "which bytes were checked, never whether they passed. Re-run ledger-check.mjs on "
+            "this file for a verdict. -->"
         )
         with open(os.path.abspath(path), "w", encoding="utf-8") as fh:
             fh.write(body_for_hash + stamp + "\n")

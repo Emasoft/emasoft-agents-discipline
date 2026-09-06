@@ -272,6 +272,24 @@ const cases = [
     reject: ["cannot read"],
   },
   {
+    // JavaScript's `\s` is Unicode-wide; a `\s` compiled under Python's re.ASCII is not, and
+    // that flag is otherwise REQUIRED on the same patterns to keep `\d`/`\b` ASCII the way
+    // JavaScript has them. Measured: with re.ASCII, `12 tests passed` is a measured
+    // result to the oracle and NOT one to the port -- so honest evidence carrying a
+    // non-breaking space (what a paste out of a browser or a word processor routinely
+    // carries) is silently demoted, and the row it backs reports MISSING evidence.
+    // The measured-result pattern is the ONLY strong signal in this ledger: no code span,
+    // no filename shape, no exit code. So the assertion cannot pass by another route.
+    name: "a non-breaking space inside a measured result is still evidence",
+    rawBytes: Buffer.concat([
+      Buffer.from("# L\n\nUnits: 1\n\n| # | Unit | Files | Worker | Acceptance | Status |\n|---|---|---|---|---|---|\n| 1 | u | a.py | w | measured by hand | verified |\n\n## Evidence\n\n- 12", "utf8"),
+      Buffer.from([0xc2, 0xa0]),
+      Buffer.from("tests passed\n", "utf8"),
+    ]),
+    want: 0,
+    expect: ["evidence:    present"],
+  },
+  {
     // The re-run had ONE bound, per row, so a 40-row ledger could occupy the process for
     // `rows x 600s` with nothing watching the total. The budget is now shared. A row that
     // arrives after it is gone must FAIL -- silently skipping it would turn an exhausted
@@ -288,6 +306,22 @@ const cases = [
     envExtra: { AGENTS_DISCIPLINE_RERUN_BUDGET_MS: "1" },
     want: 1,
     expect: ["ACCEPTANCE DID NOT REPRODUCE", "budget exhausted before this row ran"],
+  },
+  {
+    // A malformed budget must HARD-FAIL, in every runtime, before a single row runs. The
+    // underscore form is the one that separates a JavaScript `Number()` from a Python
+    // `float()`: Number("1_000") is NaN (numeric separators are a literal-syntax feature, not
+    // a parsing one) and float("1_000") is 1000.0. Measured on the port before its fix, the
+    // oracle refused this configuration with exit 2 while the port silently ACCEPTED a
+    // one-second budget -- the same env var meaning two different things depending on which
+    // implementation happened to run it. Silent acceptance of malformed input is the wrong
+    // direction to diverge in for a tool whose thesis is that unverifiable claims fail.
+    name: "a budget JavaScript would reject is rejected by every runtime",
+    file: "tests/fixtures/budget-two-rows.md",
+    rerun: true,
+    envExtra: { AGENTS_DISCIPLINE_RERUN_BUDGET_MS: "1_000" },
+    want: 2,
+    expect: ["must be a positive number of milliseconds", '"1_000"'],
   },
 ];
 

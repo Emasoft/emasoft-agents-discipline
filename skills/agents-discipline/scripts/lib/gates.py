@@ -43,7 +43,14 @@ def read_stable_regular_file(path, max_bytes=None, label="file"):
 
     try:
         opened = os.fstat(fd)
+        named = os.lstat(target)
         _assert_regular_single_link(opened, target, label, limit)
+        # The descriptor and the NAME can already be different files: something may have
+        # swapped the path between the open and now. Comparing the fd's identity against the
+        # path's is what makes "the file I checked" and "the file at this path" one claim.
+        if (opened.st_ino, opened.st_dev) != (named.st_ino, named.st_dev):
+            raise OSError(f"{label} changed before it was read: {target}")
+        canonical_before = os.path.realpath(target)
 
         chunks = []
         total = 0
@@ -62,6 +69,8 @@ def read_stable_regular_file(path, max_bytes=None, label="file"):
             opened.st_ino, opened.st_dev, opened.st_size, opened.st_mtime_ns
         ):
             raise OSError(f"{label} changed while it was read: {target}")
+        if os.path.realpath(target) != canonical_before:
+            raise OSError(f"{label} changed canonical location while it was read: {target}")
         # errors="replace", NOT strict. A ledger is prose a human pasted into, so one byte of
         # it is routinely not UTF-8 -- a latin-1 accent, a smart quote out of a word processor.
         # Node's Buffer.toString("utf8") substitutes U+FFFD and carries on; a strict decode
