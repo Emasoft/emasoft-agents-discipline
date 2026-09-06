@@ -34,6 +34,12 @@ _ARRAY_INDEX_RE = re.compile(r"^(?:0|[1-9][0-9]*)\Z")
 
 
 def is_array_index(key):
+    # str(key), because a dict built programmatically can carry an INT key where one read back
+    # from json.loads never does. `_ARRAY_INDEX_RE.match(1)` raises TypeError, so js_json_object
+    # would crash on `state["waves"][1] = {...}` rather than merely misorder it -- the same
+    # latent-until-dispatch.py class as the list-nesting bug. JS coerces the key to a string
+    # anyway, so stringifying here is what the oracle does, not a workaround.
+    key = str(key)
     return bool(_ARRAY_INDEX_RE.match(key)) and int(key) < 2 ** 32 - 1
 
 

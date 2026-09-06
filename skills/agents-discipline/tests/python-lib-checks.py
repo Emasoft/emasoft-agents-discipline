@@ -416,6 +416,29 @@ _fixtures = sorted(_PORT_FIXTURES.glob("*.md"))
 # Counted, not globbed-and-hoped: an empty glob would make the loop below pass by running zero
 # comparisons — a green section that checked nothing.
 report(len(_fixtures) == 5, "parse_gates: the fixture corpus is present", f"{len(_fixtures)} found")
+# ...but the COUNT alone is not enough, and measured: five ZERO-BYTE .md files satisfy it and
+# then parse identically on both sides (`errors: ["ledger contains zero live gates"]`), so all
+# six rows go green while nothing is tested. That is the same defect as the empty glob with one
+# more step. So assert the corpus still exhibits the CLASSES the fixtures exist for, read from
+# the ORACLE's own output rather than from what I believe I wrote into the files.
+_oracle_docs = {}
+for _fixture in _fixtures:
+    _probe = subprocess.run(["node", os.path.join(TESTS, "parse-gates-drive.mjs"), str(_fixture)],
+                            capture_output=True, text=True, timeout=30)
+    if _probe.returncode == 0:
+        _oracle_docs[_fixture.name] = json.loads(_probe.stdout)
+_all = list(_oracle_docs.values())
+_classes = {
+    "a CRLF ledger": any(d["eol"] == "\r\n" for d in _all),
+    "a ledger with no final newline": any(d["finalNewline"] is False for d in _all),
+    "a non-ASCII gate id": any(not g["id"].isascii() for d in _all for g in d["gates"]),
+    "an ABANDON reason": any(d["abandoned"] for d in _all),
+    "a regex-reading EXPECT warning": any(d["warnings"] for d in _all),
+    "accumulated parse errors": any(len(d["errors"]) > 1 for d in _all),
+    "a checked box": any(d["gates"] for d in _all),
+}
+for _name, _present in sorted(_classes.items()):
+    report(_present, f"parse_gates: the corpus still contains {_name}")
 for _fixture in _fixtures:
     _js = subprocess.run(["node", os.path.join(TESTS, "parse-gates-drive.mjs"), str(_fixture)],
                          capture_output=True, text=True, timeout=30)
@@ -424,9 +447,16 @@ for _fixture in _fixtures:
     _ok = _js.returncode == 0 and _py.returncode == 0 and _js.stdout == _py.stdout
     _detail = ""
     if not _ok:
-        _detail = (_js.stderr or _py.stderr or "").strip()[-200:] or next(
-            (f"{a} | {b}" for a, b in zip(_js.stdout.splitlines(), _py.stdout.splitlines())
-             if a != b), "output length differs")
+        # The DIFF first, and stderr only when a process actually failed. With `or` the other way
+        # round, any stderr at all — a Node experimental warning, a DeprecationWarning — won
+        # over the line comparison even when both exited 0 and the failure was purely a stdout
+        # difference, so the diff was never computed and the row reported the wrong cause.
+        if _js.returncode != 0 or _py.returncode != 0:
+            _detail = (_js.stderr or _py.stderr or "").strip()[-200:]
+        else:
+            _detail = next(
+                (f"{a} | {b}" for a, b in zip(_js.stdout.splitlines(), _py.stdout.splitlines())
+                 if a != b), "output length differs")
     report(_ok, f"parse_gates: {_fixture.name} — whole parse result identical", _detail)
 completed.append("parse_gates")
 
@@ -436,17 +466,26 @@ completed.append("parse_gates")
 # in a subprocess because RLIMIT_FSIZE is process-wide.
 _sw = subprocess.run([sys.executable, os.path.join(TESTS, "short_write_probe.py")],
                      capture_output=True, text=True, timeout=30)
-_lines = _sw.stdout.strip().splitlines()
-report(_sw.returncode == 0 and len(_lines) == 2, "short_write: probe ran",
-       (_sw.stderr or _sw.stdout).strip()[-200:])
+# Keyed by PREFIX, not by position. The probe's three lines were reordered (the socket case
+# has to run BEFORE the rlimit lowers the hard limit), and the positional lookups silently
+# attached each assertion to the wrong line — three FAILs that were entirely the harness's.
+_lines = {line.split(":", 1)[0]: line for line in _sw.stdout.strip().splitlines()}
+report(_sw.returncode == 0 and set(_lines) == {"control", "error", "success"},
+       "short_write: probe ran", (_sw.stderr or _sw.stdout).strip()[-200:])
 # The CONTROL first, and it gates the claim: if a bare os.write did not short-write, the second
 # line is consistent with the loop being unnecessary and must not be read as verification.
-report(bool(_lines) and "SHORT: True" in _lines[0],
+report("SHORT: True" in _lines.get("control", "") or "SKIPPED" in _lines.get("control", ""),
        "short_write: a bare os.write really does short-write here (control)",
-       _lines[0] if _lines else "")
-report(len(_lines) > 1 and "raised OSError" in _lines[1],
+       _lines.get("control", "MISSING"))
+report("raised OSError" in _lines.get("error", "") or "SKIPPED" in _lines.get("error", ""),
        "short_write: _write_all surfaces the failure instead of truncating",
-       _lines[1] if len(_lines) > 1 else "")
+       _lines.get("error", "MISSING"))
+# The SUCCESS path, which the first version of this probe did not have: proving the loop does not
+# truncate SILENTLY is not the same as proving it does not truncate. This one runs on every
+# platform, including Windows, where the two rlimit rows report SKIPPED.
+report("ALL BYTES" in _lines.get("success", ""),
+       "short_write: _write_all delivers every byte across multiple short writes",
+       _lines.get("success", "MISSING"))
 completed.append("short_write")
 
 # INLINE, before the exit, so a missing section actually FAILS the run. The atexit hook alone

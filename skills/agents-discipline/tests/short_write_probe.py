@@ -1,40 +1,125 @@
 #!/usr/bin/env python3
-"""Prove gates._write_all survives a REAL short write, and that one can actually happen.
+"""Prove gates._write_all handles a REAL short write, and that one can actually happen.
 
-Runs as its own process because RLIMIT_FSIZE and the SIGXFSZ disposition are process-wide.
+Runs as its own process because RLIMIT_FSIZE and the SIGXFSZ disposition are process-wide and
+the rlimit's HARD half cannot be raised again afterwards.
 
 Why a size limit and not a pipe: a blocking pipe never short-writes (POSIX requires write() to
 transfer all nbyte before returning), and my first two attempts at this measured exactly that --
-os.write returned the full buffer, which is equally consistent with "the loop is unnecessary".
-A regular file under RLIMIT_FSIZE is the shape that genuinely short-writes, and it is the same
-shape as the failure the loop exists for: a state file hitting a disk or quota boundary.
+os.write returned the full buffer, a result equally consistent with "the loop is unnecessary".
 
-Prints two lines, CONTROL first: the control has to short-write, or the result below proves
-nothing at all.
+Three lines, and the CONTROL comes first because it licenses the other two: if a bare os.write
+did not short-write here, nothing below is evidence of anything.
+
+  control  -- a bare os.write on a regular file under RLIMIT_FSIZE returns SHORT
+  error    -- _write_all on that same shape surfaces the failure instead of truncating
+  success  -- _write_all delivers EVERY byte when the writes short but do not fail
+
+The third case is the one the fix exists for, and the first version of this probe did not have
+it: demonstrating "does not truncate SILENTLY" is not the same as demonstrating "does not
+truncate". A stream socket is used for it because, unlike a pipe, a blocking SOCK_STREAM send
+may return fewer bytes than asked once its send buffer fills.
 """
-import os, resource, signal, sys, tempfile
+
+import os
+import socket
+import sys
+import tempfile
+import threading
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts", "lib"))
 from gates import _write_all  # noqa: E402  # type: ignore[import-not-found]
-signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
-resource.setrlimit(resource.RLIMIT_FSIZE, (65536, 65536))
-payload = b"x" * (256 * 1024)
-_tmp = tempfile.mkdtemp()
 
-# CONTROL: one bare os.write on a REGULAR file under a size cap.
-fd = os.open(os.path.join(_tmp, "control"), os.O_WRONLY | os.O_CREAT, 0o600)
-try:
-    n = os.write(fd, payload)
-    print(f"control: single os.write returned {n} of {len(payload)} -> SHORT: {n < len(payload)}")
-except OSError as e:
-    print(f"control: os.write raised {type(e).__name__} {e.errno}")
-os.close(fd)
+PAYLOAD = b"x" * (256 * 1024)
+CAP = 65536
 
-# _write_all on the same shape: it must NOT silently stop at the cap.
-fd = os.open(os.path.join(_tmp, "loop"), os.O_WRONLY | os.O_CREAT, 0o600)
-try:
-    _write_all(fd, payload)
-    print("_write_all: returned without error (WRONG if the control short-wrote)")
-except OSError as e:
-    print(f"_write_all: raised {type(e).__name__} errno={e.errno} -> the caller SEES the failure")
-os.close(fd)
+
+def _size_capped_cases(tmp):
+    """The two RLIMIT_FSIZE cases. Unix only -- `resource` and SIGXFSZ do not exist on Windows."""
+    import resource
+    import signal
+
+    # Without this the process is KILLED by SIGXFSZ at the cap instead of getting a short count.
+    signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (CAP, CAP))
+
+    fd = os.open(os.path.join(tmp, "control"), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        written = os.write(fd, PAYLOAD)
+        print(f"control: single os.write returned {written} of {len(PAYLOAD)} "
+              f"-> SHORT: {written < len(PAYLOAD)}")
+    except OSError as error:
+        print(f"control: os.write raised {type(error).__name__} {error.errno}")
+    finally:
+        os.close(fd)
+
+    # A DIFFERENT file, so this starts from zero as the control did rather than from the cap.
+    fd = os.open(os.path.join(tmp, "loop"), os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        _write_all(fd, PAYLOAD)
+        print("error: _write_all returned without error (WRONG if the control short-wrote)")
+    except OSError as error:
+        print(f"error: _write_all raised {type(error).__name__} errno={error.errno} "
+              f"-> the caller SEES the failure")
+    finally:
+        os.close(fd)
+
+
+def _success_case():
+    """_write_all across MULTIPLE successful short writes -- the path the fix exists for."""
+    left, right = socket.socketpair()
+    try:
+        # A small send buffer makes the writes short; a reader that keeps draining makes each
+        # subsequent one succeed, so the loop must run more than once to finish.
+        left.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        received = bytearray()
+
+        def drain():
+            while len(received) < len(PAYLOAD):
+                chunk = right.recv(4096)
+                if not chunk:
+                    break
+                received.extend(chunk)
+
+        reader = threading.Thread(target=drain)
+        reader.start()
+        _write_all(left.fileno(), PAYLOAD)
+        reader.join(timeout=30)
+        ok = bytes(received) == PAYLOAD
+        print(f"success: _write_all delivered {len(received)} of {len(PAYLOAD)} bytes "
+              f"-> {'ALL BYTES' if ok else 'TRUNCATED'}")
+    finally:
+        left.close()
+        right.close()
+
+
+def main():
+    if sys.platform == "win32":
+        # Reported, not silently skipped: a probe that prints nothing on one platform is
+        # indistinguishable from one that was never wired up. The suite's other Windows-aware
+        # section (windows_taskkill_path) is the precedent; this one lacked the guard entirely
+        # and would have failed three rows on every Windows run from the commit that added it.
+        print("control: SKIPPED on win32 (no resource module, no SIGXFSZ)")
+        print("error: SKIPPED on win32")
+        _success_case()
+        return
+    tmp = tempfile.mkdtemp()
+    try:
+        # The success case runs FIRST: the rlimit below lowers the HARD limit too, which cannot
+        # be undone, and it would otherwise cap the socket case as well.
+        _success_case()
+        _size_capped_cases(tmp)
+    finally:
+        # The one probe here that deliberately writes files up to a size cap is the worst to
+        # leave lying around; without this it left ~128 KiB behind on every `npm test`, forever.
+        import shutil
+
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    # Guarded: setrlimit lowers the HARD limit irreversibly and SIGXFSZ is set to ignore, both
+    # of which were module-level side effects before, so importing this from anything else
+    # would have permanently capped that process's file size.
+    main()

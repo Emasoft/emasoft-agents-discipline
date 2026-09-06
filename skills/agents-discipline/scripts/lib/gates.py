@@ -55,7 +55,15 @@ def _write_all(fd, data):
     """
     view = memoryview(data)
     while view:
-        view = view[os.write(fd, view):]
+        written = os.write(fd, view)
+        # A 0 return makes no progress and `view[0:]` is the same length, so the loop would spin
+        # forever. POSIX makes that essentially unreachable for a non-empty write on a regular
+        # file, and the oracle's internal loop has the same shape -- but the governing plan names
+        # "no infinite loops" as a hard constraint, and every other loop in this port is bounded
+        # by an explicit deadline. One line to make this one bounded too.
+        if written <= 0:
+            raise OSError("write made no progress on fd " + str(fd))
+        view = view[written:]
 
 
 def _is_transient_windows_fs_error(error):
