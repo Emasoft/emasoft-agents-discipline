@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T01:31:28+0200
+updated: 2026-09-07T01:35:15+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -59,12 +59,23 @@ revert. If no mutation isolates a row, that row does not earn its place.
   that makes byte order equal unit order) at both sort sites.
 
 ### ROUNDS 5-7 — the reviews moved off the PORT and onto the TEST HARNESS
-Rounds 4-7 all fixed `tests/mutate-probe.sh`, not the port. `gate-check.mjs` did not advance in
-any of them. That is worth knowing before deciding how much more of this to run: the reviews
-kept finding real defects, but in infrastructure built to review the port rather than in the
-port. **Recommendation to the USER, not yet approved: narrow the review gate to commits
-touching `scripts/lib/`.** The token cost is real — one heartbeat measured a 12.3x spike over
-the session median, which is the fork cycle, each fork inheriting the full context.
+Rounds **5-8** all fixed `tests/mutate-probe.sh`, not the port — the harness round 4 CREATED
+alongside the lease port. (An earlier version of this line said "rounds 4-7", which was wrong
+twice: round 4 ported four functions into `gates.py`, and it created the harness rather than
+fixing it. The section heading and its own first sentence disagreed.) `gate-check.mjs` remained
+UNSTARTED throughout — not stalled, never begun.
+
+That is worth knowing before deciding how much more of this to run: the reviews kept finding
+real defects, but in infrastructure built to review the port rather than in the port.
+**Recommendation to the USER, not yet approved: narrow the review gate to commits touching
+`scripts/lib/`.** The durable evidence is the per-fork cost, which rose monotonically across
+the nine forks — roughly 315k, 326k, 327k, 390k, 419k, 459k, 516k, 532k, 552k subagent tokens,
+each fork inheriting the full context. (A "12.3x spike over the session median" figure cited
+here before was a 5-minute burstiness statistic from one heartbeat, session-local and not
+re-derivable by any future reader.)
+
+**Bullet convention, because these labels have been used both ways:** R5/R6 name the round
+whose REVIEW found the defect; R7/R8 describe what that round's commit DID.
 
 - **R5** — the harness reported REDDENS for ANY anchor while the tree was already red (no
   baseline check), and my invocations passed anchors through `"$(eval echo $old)"`, which
@@ -158,10 +169,15 @@ difference — but every call site has to drop the await). One item left:
    **Use `tests/mutate-probe.sh` for every control, and pass anchors as ordinary QUOTED
    arguments** — never `"$(eval echo $old)"`, which strips all leading whitespace. Read the
    verdict from stdout and do NOT pipe the script through a filter: a pipeline returns its
-   last command's status, discarding even `PROBE FAILED`. Hand-rolled probes produced FOUR
-   false results in this port: a syntax error counted as nine catches; anchors silently
-   stripped by `eval echo`; REDDENS for any anchor while the tree was already red; and a
-   dropped runner argument reported as `NOTHING REDDENED`. The harness now guards each.
+   last command's status, discarding even `PROBE FAILED`. Hand-rolled probes produced **THREE**
+   false results in this port — a syntax error counted as nine catches; a non-unique anchor
+   that never mutated yet reported `NOTHING REDDENED`; a dropped runner argument reported the
+   same — and carried **two more** defects caught before they could produce one: anchors
+   stripped by `eval echo` (every verdict happened to still be correct), and REDDENS for any
+   anchor while the tree was already red (argued from the code, then confirmed by a
+   deliberately constructed test AFTER the guard existed). The harness now guards all five.
+   An earlier version of this line called all four "false results", which asserted more than
+   the evidence showed — the exact overstatement this project keeps correcting elsewhere.
 
    `runRolling(tasks, limit)` is the first place the sync-vs-async choice stops being free:
    it is bounded concurrency over promises, so a synchronous port needs threads or processes
@@ -185,8 +201,10 @@ confident wrong number:
 `scope_files` / `legacy_files` / `read_leases` are ported but have ZERO callers in `scripts/`
 or `tests/` — shipped because they are exported, not because anything exercises them.
 
-### REVIEW FINDINGS — all verified first-hand, fixed across e547741, 36e3785, 50788cd, f3a4c86
-Four adversarial reviews; every finding was re-measured here rather than taken on report,
+### REVIEW FINDINGS — all verified first-hand; fix commits listed per round below
+NINE adversarial reviews so far (this list drifts every round — check `git log` rather than
+trusting the count). Port-side fixes: `e547741`, `36e3785`, `50788cd`, `f3a4c86`. Harness-side:
+`272df2b`, `e98441e`, `c952509`, `3d85eaa`. Every finding was re-measured here rather than taken on report,
 and each is fixed with a control proving the fix was load-bearing. The fourth review found
 the THIRD review's fix defective -- see round 2 below.
 Kept as a record of the defect CLASSES, since every one of them shipped green.
