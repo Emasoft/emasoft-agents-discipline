@@ -18,6 +18,17 @@ import assert from "node:assert/strict";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LINT = join(HERE, "..", "scripts", "gate-lint.mjs");
+
+// Same oracle discipline as ledger-tests: these assertions stay fixed and only the
+// IMPLEMENTATION varies, so a divergence is a porting defect rather than a re-specified test.
+// `AD_RUNTIME=python node tests/lint-tests.mjs` selects the port.
+const PY = process.env.AD_RUNTIME === "python";
+const RUNTIME_BIN = PY ? "python3" : process.execPath;
+const RUNTIME_ARGS = PY ? [join(HERE, "..", "scripts", "gate_lint.py")] : [LINT];
+// The ONE string that legitimately differs: a program names itself in its own usage line.
+// Everything else — every finding, every exit code, every LINT OK/FINDINGS line — must match
+// byte for byte, and is asserted unchanged below.
+const PROGRAM_NAME = PY ? "gate_lint.py" : "gate-lint.mjs";
 const filter = process.argv[2] || "";
 const DIR = mkdtempSync(join(tmpdir(), "agents-discipline-lint-test-"));
 
@@ -31,7 +42,7 @@ function write(name, body) {
 }
 
 function lint(...args) {
-  const result = spawnSync(process.execPath, [LINT, ...args], { encoding: "utf8" });
+  const result = spawnSync(RUNTIME_BIN, [...RUNTIME_ARGS,...args], { encoding: "utf8" });
   return { out: result.stdout + result.stderr, code: result.status };
 }
 
@@ -208,7 +219,7 @@ test("lint: a FIFO ledger is refused promptly instead of blocking", () => {
   const made = spawnSync("mkfifo", [fifo], { encoding: "utf8" });
   assert.equal(made.status, 0, made.stderr);
   const started = Date.now();
-  const result = spawnSync(process.execPath, [LINT, fifo], {
+  const result = spawnSync(RUNTIME_BIN, [...RUNTIME_ARGS,fifo], {
     encoding: "utf8",
     timeout: 2000,
   });
@@ -331,7 +342,7 @@ test("lint: finding count is capped without hiding totals or failure state", () 
 test("CLI: help retains trusted multiline formatting", () => {
   const { out, code } = lint("--help");
   assert.equal(code, 0, out);
-  assert.match(out, /^usage: gate-lint\.mjs/m);
+  assert.match(out, new RegExp("^usage: " + PROGRAM_NAME.replace(".", "\\."), "m"));
   assert.ok(out.split(/\r?\n/).length > 4, out);
   assert.doesNotMatch(out, /\\x0a/);
 });
@@ -364,7 +375,7 @@ test("CLI: the positional marker permits literal files named --help and -h", () 
   write("--help", SOUND_BODY);
   write("-h", SOUND_BODY);
   for (const filename of ["--help", "-h"]) {
-    const result = spawnSync(process.execPath, [LINT, "--", filename], { cwd: DIR, encoding: "utf8" });
+    const result = spawnSync(RUNTIME_BIN, [...RUNTIME_ARGS,"--", filename], { cwd: DIR, encoding: "utf8" });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /^LINT OK$/m);
     assert.doesNotMatch(result.stdout, /^usage:/m);
