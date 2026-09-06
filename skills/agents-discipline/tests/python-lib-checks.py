@@ -48,7 +48,8 @@ failed = 0
 # 8eb3710 named that gap in a commit message instead of closing it, which is the "filing is
 # not doing" failure: a documented hole is still a hole. atexit rather than wrapping each
 # section in try/except, because it needs no re-indentation and it reports the same fact.
-SECTIONS = ["regex_worker", "check_supervisor", "windows_taskkill_path", "process_tree"]
+SECTIONS = ["regex_worker", "check_supervisor", "windows_taskkill_path", "process_tree",
+            "gates_helpers"]
 completed = []
 
 
@@ -311,6 +312,57 @@ else:
                "process_tree: the injected failure really reached the fallback (vacuity control)",
                str(py_fb["diagnostic"]))
 completed.append("process_tree")
+
+# --- gates_helpers: scope resolution, atomic write, file lock, status log -----------------
+# The five helpers lib/dispatch.mjs imports. Whole-effect comparison rather than assertions:
+# four of the five are side-effecting, so what each LEAVES BEHIND (file contents, directory
+# modes, whether the lock file is gone) is the observable contract, and dumping it lets a
+# divergence I did not predict show up as a diff instead of passing unexamined.
+#
+# Each runtime gets its OWN temp root. Sharing one would make the second run see the first's
+# files and diverge on nothing but ordering.
+_js_root = tempfile.mkdtemp()
+_py_root = tempfile.mkdtemp()
+try:
+    _js = subprocess.run(["node", os.path.join(TESTS, "gates-helpers-drive.mjs"), _js_root],
+                         capture_output=True, text=True, timeout=60)
+    _py = subprocess.run([sys.executable, os.path.join(TESTS, "gates_helpers_drive.py"), _py_root],
+                         capture_output=True, text=True, timeout=60)
+    report(_js.returncode == 0, "gates_helpers: oracle driver ran", _js.stderr.strip()[-300:])
+    report(_py.returncode == 0, "gates_helpers: port driver ran", _py.stderr.strip()[-300:])
+    _js_rows = json.loads(_js.stdout) if _js.returncode == 0 else []
+    _py_rows = json.loads(_py.stdout) if _py.returncode == 0 else []
+    _first = next((f"{a} != {b}" for a, b in zip(_js_rows, _py_rows) if a != b), "")
+    report(_js_rows == _py_rows and bool(_js_rows),
+           "gates_helpers: port matches the oracle on every effect",
+           _first[:400] or f"lengths {len(_js_rows)}/{len(_py_rows)}")
+
+    # VACUITY CONTROLS. "The two agree" is trivially true of a comparison that cannot see
+    # anything, and this suite has already shipped three harnesses that agreed about nothing
+    # (a ps scan matching no line, a sorted(dict) dropping every value, a key stripped to make
+    # two shapes line up). So assert that the rows the security guards produce are PRESENT and
+    # say what they should -- and that the root guard's positive control still reads.
+    _by_name = dict(_js_rows)
+    report("outside the allowed root" in str(_by_name.get("read escaped with root")),
+           "gates_helpers: the containment guard fired (vacuity control)",
+           str(_by_name.get("read escaped with root"))[:200])
+    report("ok" in (_by_name.get("read escaped without root") or {}),
+           "gates_helpers: the SAME read succeeds without a root (discriminating control)",
+           str(_by_name.get("read escaped without root"))[:200])
+    report("ok" in (_by_name.get("read contained with root") or {}),
+           "gates_helpers: a contained file still reads with a root (positive control)",
+           str(_by_name.get("read contained with root"))[:200])
+    report(_by_name.get("mode .agents-discipline") == "700"
+           and _by_name.get("mode scope dir") == "700",
+           "gates_helpers: 0700 reaches the INTERMEDIATE state dir, not just the leaf",
+           f"{_by_name.get('mode .agents-discipline')}/{_by_name.get('mode scope dir')}")
+    report(all(_by_name.get(k) == [] for k in
+               ("lock dir after release", "lock dir after timeout", "lock dir after throw")),
+           "gates_helpers: the lock is released on success, timeout AND throw")
+finally:
+    shutil.rmtree(_js_root, ignore_errors=True)
+    shutil.rmtree(_py_root, ignore_errors=True)
+completed.append("gates_helpers")
 
 # INLINE, before the exit, so a missing section actually FAILS the run. The atexit hook alone
 # was decorative for the case it was written for: a section that returns early WITHOUT raising
