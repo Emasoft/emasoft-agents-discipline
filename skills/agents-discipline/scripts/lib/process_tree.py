@@ -8,6 +8,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 
 WINDOWS_TASKKILL_TIMEOUT_MS = 1000
 
@@ -182,6 +183,14 @@ def _child_kill(child, sig):
     # argument and Popen.send_signal() raises ProcessLookupError when the child is already
     # gone. Translating the raise into the oracle's `false` keeps the caller's three-way
     # result (requested / returned false / threw) meaning the same thing in both runtimes.
+    # The poll() guard is NOT redundant with the caller's: measured, `send_signal` on an
+    # already-REAPED Popen returns silently (Popen suppresses it) instead of raising, so
+    # without this the fallback reports "requested" for a signal nobody received, where the
+    # oracle's `child.kill()` returns false. The caller checks exit before entering, but the
+    # child can die in the window between that check and this call -- which is precisely the
+    # case the fallback exists for.
+    if child.poll() is not None:
+        return False
     try:
         child.send_signal(sig)
         return True
@@ -205,18 +214,45 @@ def _self_check():
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     pgid = os.getpgid(child.pid)
+
+    # ps snapshot FIRST, then read it: a live `pgrep -f`/`ps | grep` matches the very shell
+    # running the pipeline, because that shell carries the pattern in its own argv.
+    # `.split()`, never `.split(" ")`: ps RIGHT-ALIGNS the pgid column, so with a wider pgid
+    # anywhere on the machine every line begins with a space and `split(" ")[0]` is `''`.
+    # That made the survivor filter match nothing and the assertion below unfireable -- a
+    # check that passes because it cannot see, which is the failure it exists to catch.
+    def members():
+        snapshot = subprocess.run(
+            ["ps", "-eo", "pgid,command"], capture_output=True, text=True, timeout=10
+        ).stdout
+        out = []
+        for line in snapshot.splitlines():
+            head = line.split()
+            if head and head[0].isdigit() and int(head[0]) == pgid:
+                out.append(line.strip())
+        return out
+
+    # POSITIVE CONTROL, and it is the whole reason this check is worth anything: prove the
+    # detector CAN see the group while it is alive. Without it, "no survivors" afterwards is
+    # equally consistent with a perfect kill and with a parser that never matches.
+    # Polled, because Popen returns as soon as the fork succeeds: the first snapshot caught
+    # bash plus ONE sleep, the other not yet spawned. The control fired on that -- an
+    # assertion that failed for the right reason before it ever passed.
+    alive = []
+    for _ in range(40):
+        alive = members()
+        if len(alive) >= 3:
+            break
+        time.sleep(0.05)
+    assert len(alive) >= 3, f"expected the bash and its two sleeps in group {pgid}, saw {alive}"
+
     result = terminate_process_tree(child)
     assert result["ok"], result
     child.wait(timeout=5)
-    # ps snapshot FIRST, then read it: a live `pgrep -f`/`ps | grep` matches the very shell
-    # running the pipeline, because that shell carries the pattern in its own argv.
-    snapshot = subprocess.run(
-        ["ps", "-eo", "pgid,command"], capture_output=True, text=True, timeout=10
-    ).stdout
-    survivors = [l for l in snapshot.splitlines() if l.split(" ")[0].strip().isdigit()
-                 and int(l.split()[0]) == pgid]
+    survivors = members()
     assert not survivors, f"group {pgid} survived the kill: {survivors}"
-    print(f"self-check ok: group {pgid} reaped, including the backgrounded grandchild")
+    print(f"self-check ok: group {pgid} had {len(alive)} members, all reaped "
+          "(including the backgrounded grandchild)")
 
 
 def _default_spawn_sync(command, args, timeout_ms=None):
