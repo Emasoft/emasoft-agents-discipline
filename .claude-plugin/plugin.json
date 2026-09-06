@@ -20,12 +20,5 @@
     "discipline",
     "claude-code",
     "skills"
-  ],
-  "cpv": {
-    "pipeline": {
-      "intentional_divergence": [
-        "scripts/publish.py"
-      ]
-    }
-  }
+  ]
 }
