@@ -363,11 +363,14 @@ const cases = [
     reject: ["must be a positive number of milliseconds"],
   },
   {
-    // The other two JavaScript numeric prefixes. `_js_number` exists ONLY because Number()
-    // accepts these and float() does not; nothing else tests the octal and binary rungs, so
-    // deleting them would go unnoticed. Same shape as the 0x10 case above: 15 and 5 ms are
-    // both under a node startup, so row 1 dies on its own timeout and row 2 on the budget.
-    name: "octal and binary budgets JavaScript accepts are accepted by every runtime",
+    // The OCTAL prefix. `_js_number` exists only because Number() accepts these and float()
+    // does not, and nothing else reaches that rung. The three prefixes share ONE loop, so
+    // 0x and 0o already exercise it and a third near-duplicate case for 0b would be padding.
+    // (Named "octal and binary" until the review pointed out that only 0o17 appears here — a
+    // test name asserting coverage it does not have, in the commit closing a campaign against
+    // exactly that. The fix is the name, not another case.)
+    // 15 ms is under a node startup, so row 1 dies on its own timeout and row 2 on the budget.
+    name: "an octal budget JavaScript accepts is accepted by every runtime",
     file: "tests/fixtures/budget-two-rows.md",
     rerun: true,
     artifacts: ["reports/budget-1.txt", "reports/budget-2.txt"],

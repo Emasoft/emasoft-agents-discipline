@@ -175,7 +175,10 @@ else:
                       ["check_supervisor.py", shell, script])
         report(js == py, f"check_supervisor: {name} — port matches oracle",
                "" if js == py else f"js={js} py={py}")
-        seen[script] = (js, py)
+        # Keyed by (shell, script): both spawn-failure cases run "echo hi", so keying on the
+        # script alone silently overwrote the ENOENT entry with the EACCES one. Harmless while
+        # only the two /bin/bash entries are read back, and a bug the moment they are not.
+        seen[(shell, script)] = (js, py)
         # Agreement alone is not enough for the spawn-failure cases: if chmod 000 did not
         # actually deny (running as root, or a filesystem that ignores the mode), both
         # runtimes would spawn SUCCESSFULLY and agree just as well. Assert the errno the case
@@ -198,7 +201,7 @@ else:
            "check_supervisor: missing argv really refused with exit 2 (vacuity control)",
            f"exit {js_argv[0]}")
 
-    (ja, pa), (jb, pb) = seen["echo hi; exit 3"], seen["kill -9 $$"]
+    (ja, pa), (jb, pb) = seen[("/bin/bash", "echo hi; exit 3")], seen[("/bin/bash", "kill -9 $$")]
     report(ja != jb and pa != pb,
            "check_supervisor: the two CHECKs differ, in BOTH runtimes (vacuity control)",
            f"{pa} vs {pb}")
