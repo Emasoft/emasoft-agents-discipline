@@ -313,6 +313,13 @@ const reproFailed = [];
 const unreproducible = [];
 const unbacked = [];
 const rerunSkipped = Boolean(process.env.AGENTS_DISCIPLINE_SKIP_RERUN);
+// One budget for the whole re-run, not one per row. An env var rather than a flag because
+// argv[2] is the ledger path and every other knob here is already AGENTS_DISCIPLINE_*.
+const rerunBudgetMs = Number(process.env.AGENTS_DISCIPLINE_RERUN_BUDGET_MS ?? 600000);
+if (!Number.isFinite(rerunBudgetMs) || rerunBudgetMs < 1) {
+  fail(2, `agents-discipline: AGENTS_DISCIPLINE_RERUN_BUDGET_MS must be a positive number of milliseconds`);
+}
+const rerunDeadline = Date.now() + rerunBudgetMs;
 if (!rerunSkipped) {
   for (const r of rows.filter((x) => x.status === "verified")) {
     // The no-op scan runs over EVERY code span, BEFORE extraction, because `acceptanceCommand`
@@ -343,6 +350,16 @@ if (!rerunSkipped) {
     // anything, which is the obvious next move once execution is enforced. So it FAILS rather
     // than falling into `unreproducible`: the row with no command is admitting a limit, the row
     // with `true` is asserting a pass it did not earn.
+    // The per-row timeout was the ONLY bound: a 40-row ledger could legitimately occupy this
+    // process for `rows x 600s` with nothing watching the total. The budget is shared, so a
+    // ledger's whole re-run is bounded no matter how many rows it has, and a row that arrives
+    // after the budget is gone FAILS -- it is not silently skipped, which would turn an
+    // exhausted budget into a free pass for every row after it.
+    const remaining = rerunDeadline - Date.now();
+    if (remaining <= 0) {
+      reproFailed.push({ unit: r.unit, cmd, code: "re-run budget exhausted before this row ran — nothing was verified here" });
+      continue;
+    }
     let code = null;
     try {
       // `set -o pipefail` is load-bearing, not hygiene. A shell pipeline reports the LAST
@@ -351,7 +368,15 @@ if (!rerunSkipped) {
       // line the re-run is defeated by one pipe, which is the cheapest cheat in the file.
       // why: same shell, same pipefail, same command string, passed as argv instead of a template
       // string — the publish gate's static scanner flags interpolation into a shell string.
-      execFileSync("/bin/bash", ["-o", "pipefail", "-c", cmd], { cwd: runCwd, stdio: "pipe", timeout: 600000 });
+      // stdio "ignore", not "pipe". Measured: an acceptance of `sh -c 'sleep 300 & exit 0'`
+      // held this call for its ENTIRE timeout even though the direct child exited at once --
+      // execFileSync drains the stdout pipe, and the backgrounded grandchild inherited and
+      // held it. Isolated side by side: pipe 10002ms, ignore 7ms. Nothing read this output
+      // (only the exit status is used), so the pipe bought nothing and cost a hang. It also
+      // retires the maxBuffer failure mode, where a chatty-but-passing command overflowed the
+      // default 1 MiB and was reported as a FAILED acceptance, indistinguishable from a real
+      // failure.
+      execFileSync("/bin/bash", ["-o", "pipefail", "-c", cmd], { cwd: runCwd, stdio: "ignore", timeout: remaining });
       code = 0;
     } catch (err) {
       code = typeof err.status === "number" ? err.status : 1;

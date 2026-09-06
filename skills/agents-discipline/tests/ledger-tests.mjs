@@ -132,6 +132,24 @@ const cases = [
     want: 2,
     expect: ["exceeds 8388608 bytes"],
   },
+  {
+    // The re-run had ONE bound, per row, so a 40-row ledger could occupy the process for
+    // `rows x 600s` with nothing watching the total. The budget is now shared. A row that
+    // arrives after it is gone must FAIL -- silently skipping it would turn an exhausted
+    // budget into a free pass for every row after the one that ate it.
+    // Deterministic, and it takes TWO rows to reach the branch. With a 1ms budget the first
+    // row still sees `remaining > 0` -- clock granularity -- so it dies by its own timeout,
+    // which is an ordinary failure and proves nothing about the budget. Only by row 2 has
+    // the clock certainly advanced past the deadline. Nothing sleeps, so the suite stays
+    // fast and leaves no process behind.
+    name: "an exhausted re-run budget fails the row, never skips it",
+    file: "tests/fixtures/budget-two-rows.md",
+    rerun: true,
+    artifacts: ["reports/budget-1.txt", "reports/budget-2.txt"],
+    envExtra: { AGENTS_DISCIPLINE_RERUN_BUDGET_MS: "1" },
+    want: 1,
+    expect: ["ACCEPTANCE DID NOT REPRODUCE", "budget exhausted before this row ran"],
+  },
 ];
 
 for (const c of cases) {
@@ -145,6 +163,7 @@ for (const c of cases) {
   // safe to execute here — that is the only way the re-run half gets any coverage.
   if (c.rerun) delete env.AGENTS_DISCIPLINE_SKIP_RERUN;
   else env.AGENTS_DISCIPLINE_SKIP_RERUN = "1";
+  Object.assign(env, c.envExtra ?? {});
   // A rerun case must run against a COPY. ledger-check signs the file it reads
   // (ledger-check.mjs:417), and that write is suppressed only while the skip is set
   // (:412) -- which is why the skipped cases can safely point at tracked fixtures.
