@@ -329,69 +329,35 @@ const ALWAYS_TRUE =
 // A single `split(/&&|;/)` treated `;` as a conjunction, so `pytest -q; true` -- the same
 // always-green trick as `|| true`, with more natural punctuation -- ran and certified a row.
 // Measured before this fix: `false; true` re-ran and PASSED.
-// True when the leading bracket closes only at the very end -- i.e. the pair really does
-// enclose the whole string, rather than being the first of several groups.
-function wrapsWhole(s, open, close) {
-  let depth = 0;
-  for (let i = 0; i < s.length; i++) {
-    if (s[i] === open) depth++;
-    else if (s[i] === close && --depth === 0) return i === s.length - 1;
-  }
-  return false;
-}
+// `||` and `;` are REFUSED rather than parsed. Both exist to decouple a chain's exit status
+// from whether its work succeeded -- `pytest -q || true` and `false; true` are green whatever
+// the code does -- and an acceptance has no honest need for either. Refusing them deletes the
+// entire always-green class by construction, instead of by out-parsing whoever writes the next
+// one. `&&` stays legal because it cannot hide a failure: every link must succeed, so
+// `cd packages/x && pytest -q` is exactly as strong as `pytest -q`.
+//
+// This replaced a hand-rolled shell-semantics parser that was wrong FOUR times -- a prefix
+// regex, a whole-command regex, a flat `split(/&&|;/)` that read `;` as a conjunction, and an
+// anchored paren peel that mangled `(false) ; (true)`. Each fix surfaced the next defect, and
+// three of the four were caught only by adversarial review. The lesson is not that the fourth
+// parser was finally right; it is that reimplementing shell status semantics was the wrong
+// job to take on. USER decision, 2026-09-06.
+const CHAIN_OPERATORS = /\|\||;/;
 
-// KNOWN CEILING: the splits below are textual, so a shell metacharacter inside quotes is
-// still treated as an operator -- `echo "a;b"` is a no-op this will not flag. Every such case
-// errs toward NOT flagging, which is the safe direction: the row still needs evidence and an
-// artifact, whereas a false positive would redden an honest ledger. Quote-aware splitting is
-// the fix if these ever show up in practice.
-function isNoopAcceptance(raw, depth = 0) {
-  // Bounded recursion: the input is untrusted ledger text.
-  if (depth > 8) return false;
+// A no-op acceptance exits 0 no matter what. With `||` and `;` refused upstream, the only
+// remaining shape is an `&&` chain, and it is always-green exactly when EVERY link is.
+function isNoopAcceptance(raw) {
   let s = String(raw).trim();
-  // `( exit 0 )`, `{ true; }` and a trailing `;` are pure syntax around the same command.
-  // The bracket peel must only fire when the pair WRAPS THE WHOLE string: an anchored
-  // `^\(...\)$` also matches `(false) ; (true)`, whose parens are two separate groups, and
-  // mangles it to `false) ; (true`. Balance-checking is what tells those apart.
+  // `( true )` and `{ true }` wrap the same command. No balance check is needed now that `;`
+  // cannot appear: there is no `(false) ; (true)` to mistake for one enclosing group.
   for (let i = 0; i < 4; i++) {
     const before = s;
-    s = s.replace(/;+\s*$/, "").trim();
-    for (const [open, close] of [["(", ")"], ["{", "}"]]) {
-      if (s.startsWith(open) && s.endsWith(close) && wrapsWhole(s, open, close)) {
-        s = s.slice(1, -1).trim();
-      }
-    }
+    s = s.replace(/^\(\s*([\s\S]*?)\s*\)$/, "$1").trim();
+    s = s.replace(/^\{\s*([\s\S]*?)\s*\}$/, "$1").trim();
     if (s === before) break;
   }
   if (!s) return false;
-
-  // `;` binds loosest, so split it first and judge ONLY the last command. Empty segments are
-  // dropped, which means the surviving text can differ from `s` even when just one segment
-  // remains (`;true`). Recursing whenever it differs is what stops the fall-through below
-  // from testing the original string, punctuation and all, and quietly answering "not a no-op".
-  const semi = s.split(";").map((p) => p.trim()).filter(Boolean);
-  if (semi.length > 1 || (semi.length === 1 && semi[0] !== s)) {
-    return isNoopAcceptance(semi[semi.length - 1], depth + 1);
-  }
-
-  const orParts = s.split("||").map((p) => p.trim());
-  if (orParts.length > 1) {
-    // `&&` and `||` share precedence and associate left, which a flat split cannot model:
-    // `true || pytest && npm test` is `(true || pytest) && npm test` and DOES run npm test.
-    // So when both operators are present, fall back to the strictly sound test -- every
-    // alternative always-true -- rather than the `some` rule. That misses `a && b || true`,
-    // a real cheat, and the miss is deliberate: a false positive here reddens honest ledgers,
-    // and this function has already shipped two of those. Named as a known ceiling.
-    const mixed = orParts.some((p) => p.includes("&&"));
-    return mixed
-      ? orParts.every((p) => isNoopAcceptance(p, depth + 1))
-      : orParts.some((p) => isNoopAcceptance(p, depth + 1));
-  }
-
-  const andParts = s.split("&&").map((p) => p.trim()).filter(Boolean);
-  if (andParts.length > 1) return andParts.every((p) => isNoopAcceptance(p, depth + 1));
-
-  return ALWAYS_TRUE.test(s);
+  return s.split("&&").map((p) => p.trim()).filter(Boolean).every((p) => ALWAYS_TRUE.test(p));
 }
 
 const reran = [];
@@ -418,9 +384,19 @@ if (!rerunSkipped) {
     // requires an argument — so a bare `true` was not recognised as a command at all and fell
     // through to `unreproducible`, which does not fail. That is the cheapest cheat in the file:
     // one word, and the row passes. Scan first, then extract.
-    const noop = (r.acceptance.match(/`[^`]+`/g) ?? [])
-      .map((s) => s.slice(1, -1).trim())
-      .find((s) => isNoopAcceptance(s));
+    const spans = (r.acceptance.match(/`[^`]+`/g) ?? []).map((s) => s.slice(1, -1).trim());
+    // Refuse the operators before judging the command. `||` and `;` both decouple a chain's
+    // exit status from its work, so there is no version of them worth re-running, and saying
+    // so is stronger than trying to out-parse the next always-green idiom.
+    const chained = spans.find((s) => CHAIN_OPERATORS.test(s));
+    if (chained) {
+      reproFailed.push({
+        unit: r.unit, cmd: chained,
+        code: "acceptance uses `||` or `;` — those pass whatever the code does; chain with `&&` or put the steps in a script",
+      });
+      continue;
+    }
+    const noop = spans.find((s) => isNoopAcceptance(s));
     if (noop) {
       reproFailed.push({ unit: r.unit, cmd: noop, code: "no-op acceptance — exits 0 by construction, tests nothing" });
       continue;

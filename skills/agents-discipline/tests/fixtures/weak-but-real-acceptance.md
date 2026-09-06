@@ -8,7 +8,7 @@ Created: 2020-01-01T00:00:00+0000
 | 1 | test-expr | app/a.py | worker-1 | `test -f /etc/hosts` | verified |
 | 2 | bracket-expr | app/b.py | worker-2 | `[ -f /etc/hosts ]` | verified |
 | 3 | listing | app/c.py | worker-3 | `ls /etc/hosts` | verified |
-| 4 | mixed-ops | app/d.py | worker-4 | `true \|\| false && node -e "process.exit(0)"` | verified |
+| 4 | and-chain | app/d.py | worker-4 | `echo checking && node -e "process.exit(0)"` | verified |
 
 ## Evidence
 

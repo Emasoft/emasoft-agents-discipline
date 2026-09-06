@@ -65,29 +65,21 @@ const cases = [
     want: 1,
     rerun: true,
     artifacts: ["reports/noop-1.txt", "reports/noop-2.txt", "reports/noop-3.txt", "reports/noop-4.txt", "reports/noop-5.txt", "reports/noop-6.txt", "reports/noop-7.txt", "reports/noop-8.txt", "reports/noop-9.txt"],
+    // Two distinct verdicts, and the split matters. Rows 1-3 and 5 are single commands that
+    // happen to exit 0 always, so they are judged. Rows 4 and 6-9 carry `||` or `;` and are
+    // REFUSED before judgement -- which is the point of the USER's design decision: every one
+    // of those four was a defect that shipped, was found by adversarial review, and was fixed
+    // by a parser that then leaked somewhere else. Refusing the operators retires the class.
     expect: [
       "#1 $ : -> no-op acceptance",
       "#2 $ exit 0 -> no-op acceptance",
       "#3 $ /bin/true -> no-op acceptance",
-      "#4 $ pytest -q || true -> no-op acceptance",
       "#5 $ ( exit 0 ) -> no-op acceptance",
-      // #6 is the mirror of #4 and was missed by the first parser: an always-true link
-      // FIRST short-circuits, so nothing after it ever runs. Equally always-green, and
-      // more brazen. It is here rather than only in a truth table because the truth table
-      // exercises an EXTRACTED COPY of the function; this row exercises the shipped path,
-      // through the same table parsing and `\|` unescaping a real ledger goes through.
-      "#6 $ true || pytest -q -> no-op acceptance",
-      // #7 is the third operator, and the one a flat `split(/&&|;/)` got backwards: in a `;`
-      // chain only the LAST status survives, so `false; true` exits 0. Measured before the
-      // fix, this row RE-RAN AND PASSED -- a guaranteed-green acceptance certifying a unit.
-      "#7 $ false; true -> no-op acceptance",
-      // #8 and #9 are parser edge cases that a truth table caught but no fixture covered --
-      // and a truth table run once in a shell is not a regression guard. #8: filtering empty
-      // `;` segments left one segment that differed from the original, and the fall-through
-      // then tested the original, punctuation included. #9: an anchored `^\(...\)$` peel also
-      // matches two SEPARATE groups and mangled it to `false) ; (true`.
-      "#8 $ ;true -> no-op acceptance",
-      "#9 $ (false) ; (true) -> no-op acceptance",
+      "#4 $ pytest -q || true -> acceptance uses `||` or `;`",
+      "#6 $ true || pytest -q -> acceptance uses `||` or `;`",
+      "#7 $ false; true -> acceptance uses `||` or `;`",
+      "#8 $ ;true -> acceptance uses `||` or `;`",
+      "#9 $ (false) ; (true) -> acceptance uses `||` or `;`",
     ],
   },
   {
@@ -101,10 +93,10 @@ const cases = [
     file: "tests/fixtures/weak-but-real-acceptance.md",
     want: 0,
     rerun: true,
-    // Row 4 pins the documented mixed-operator ceiling. `true || false && node -e ...` is
-    // `(true || false) && node -e ...` -- it RUNS node, so it is not always-green. If anyone
-    // "simplifies" `mixed ? every : some` back to a plain `some`, this row starts failing as
-    // a false positive. Without it the ceiling is a comment nothing enforces.
+    // Row 4 pins the half of the USER's decision that is easy to over-apply: `&&` stays
+    // LEGAL. It cannot hide a failure (every link must succeed), and forbidding it would
+    // also forbid `cd packages/x && pytest -q`, which is honest and common. If someone
+    // later widens CHAIN_OPERATORS to include `&&`, this row fails.
     artifacts: ["reports/weak-1.txt", "reports/weak-2.txt", "reports/weak-3.txt", "reports/weak-4.txt"],
     // `reject`, not `expect`: the property under test is an ABSENCE -- none of these three
     // is flagged a no-op. Asserting a re-ran COUNT instead would test something else and
