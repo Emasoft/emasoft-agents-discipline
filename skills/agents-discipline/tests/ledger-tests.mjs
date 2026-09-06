@@ -163,11 +163,15 @@ const cases = [
     reject: ["evidence:    MISSING"],
   },
   {
-    // The other direction, and the one the first version of the fix got wrong. These lines
-    // are ENTIRELY placeholders, separated by an em-dash -- the character this skill's own
-    // evidence format uses (`**Unit N —**`). A punctuation class listing only the ASCII
-    // hyphen kept them, so a copied-but-unfilled Evidence section scored as real evidence.
-    name: "a line of pure placeholders is not evidence, em-dash included",
+    // A CHARACTERIZATION test, not a regression guard, and the distinction is measured:
+    // pre-fix and post-fix both report `evidence: MISSING` here. An all-placeholder line
+    // scores weak whether it is dropped or kept, so `strong === 0` either way -- the
+    // dropping only changes what lands in evidenceText for citation extraction and block
+    // slicing, and a placeholder line contributes nothing to either. I first shipped this
+    // claiming it guarded the dash class; it does not, and a test that passes identically
+    // against broken and fixed code is the thing this suite exists to avoid.
+    // It still earns its place: it pins that unfilled boilerplate never satisfies evidence.
+    name: "a line of pure placeholders is not evidence",
     file: "tests/fixtures/evidence-placeholders.md",
     want: 1,
     expect: ["evidence:    MISSING"],
