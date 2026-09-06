@@ -62,6 +62,12 @@ def read_stable_regular_file(path, max_bytes=None, label="file"):
             opened.st_ino, opened.st_dev, opened.st_size, opened.st_mtime_ns
         ):
             raise OSError(f"{label} changed while it was read: {target}")
-        return b"".join(chunks).decode("utf-8")
+        # errors="replace", NOT strict. A ledger is prose a human pasted into, so one byte of
+        # it is routinely not UTF-8 -- a latin-1 accent, a smart quote out of a word processor.
+        # Node's Buffer.toString("utf8") substitutes U+FFFD and carries on; a strict decode
+        # raises instead, and the caller then reports "cannot read" (exit 2, "not a ledger")
+        # on a file that is visibly a ledger, over a byte that is almost never in the row
+        # under test. Measured: `caf\xe9` in a unit name turned a complete ledger into exit 2.
+        return b"".join(chunks).decode("utf-8", errors="replace")
     finally:
         os.close(fd)

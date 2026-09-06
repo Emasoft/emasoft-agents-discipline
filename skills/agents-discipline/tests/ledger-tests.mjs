@@ -249,6 +249,29 @@ const cases = [
     expect: ["exceeds 8388608 bytes"],
   },
   {
+    // A ledger is prose a human pasted into, so ONE byte of it is routinely not UTF-8: a
+    // latin-1 accent, a smart quote out of a word processor, a name copied from a terminal in
+    // another encoding. Node decodes those lossily (U+FFFD) and checks the ledger anyway.
+    // A decoder that RAISES instead would report exit 2 `cannot read` -- "this is not a
+    // ledger" -- on a file that is visibly a ledger, and the row it could not decode is
+    // almost never the row under test. Measured on the Python port before its fix: exactly
+    // that, `'utf-8' codec can't decode byte 0xe9`, exit 2, on the ledger below.
+    // The bytes are written raw rather than through a JS string, because any JS string is
+    // valid UTF-8 by construction and cannot express the input this guards.
+    name: "a ledger with one non-UTF-8 byte is still checked, not rejected as unreadable",
+    rawBytes: Buffer.concat([
+      Buffer.from("# L\n\nUnits: 1\nCreated: 2020-01-01T00:00:00+0000\n\n| # | Unit | Files | Worker | Acceptance | Status |\n|---|---|---|---|---|---|\n| 1 | caf", "utf8"),
+      Buffer.from([0xe9]),
+      Buffer.from(" | a.py | w | `pytest -q` | verified |\n\n**Unit 1 —** ran `pytest -q`, 3 passed\n", "utf8"),
+    ]),
+    // 0, because the ledger is honest: one verified row, strong evidence, no cited artifact
+    // to be missing, and the re-run skipped. The point of the case is that the undecodable
+    // byte does not stop the checker -- the verdict is whatever the CONTENT deserves.
+    want: 0,
+    expect: ["units:       1", "verified:    1"],
+    reject: ["cannot read"],
+  },
+  {
     // The re-run had ONE bound, per row, so a 40-row ledger could occupy the process for
     // `rows x 600s` with nothing watching the total. The budget is now shared. A row that
     // arrives after it is gone must FAIL -- silently skipping it would turn an exhausted
@@ -287,7 +310,7 @@ for (const c of cases) {
   // dirty the working tree.
   // These two build their input rather than naming a fixture: a FIFO cannot be committed,
   // and a 9 MiB file should not be.
-  if (c.fifo || c.oversized) {
+  if (c.fifo || c.oversized || c.rawBytes) {
     if (c.fifo && process.platform === "win32") {
       report(true, `${c.name} (skipped: no mkfifo on win32)`);
       continue;
@@ -295,10 +318,14 @@ for (const c of cases) {
     const dir = mkdtempSync(join(tmpdir(), "ledger-bounds-"));
     const target = join(dir, "ledger.md");
     if (c.fifo) execFileSync("mkfifo", [target]);
+    else if (c.rawBytes) writeFileSync(target, c.rawBytes);
     else writeFileSync(target, "x".repeat(9 * 1024 * 1024));
     let out = "";
     try {
-      out = execFileSync(runtimeBin, [...runtimeArgs, target], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15000, env: process.env });
+      // `env`, not `process.env`: the two bounds cases never reach the re-run, but a case that
+      // builds a PARSEABLE ledger from raw bytes does, and executing its acceptance would test
+      // whether pytest is installed on this machine rather than how the checker decodes.
+      out = execFileSync(runtimeBin, [...runtimeArgs, target], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 15000, env });
       code = 0;
     } catch (err) {
       code = err.status;
@@ -308,6 +335,7 @@ for (const c of cases) {
     // failing test -- so the timeout above turns it back into an ordinary failure.
     report(code === c.want, c.name, `exit ${code}, want ${c.want}`);
     for (const want of c.expect ?? []) report(out.includes(want), `${c.name} -> ${want}`);
+    for (const no of c.reject ?? []) report(!out.includes(no), `${c.name} -> no "${no}"`);
     continue;
   }
 

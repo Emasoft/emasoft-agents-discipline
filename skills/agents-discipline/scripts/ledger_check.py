@@ -67,7 +67,7 @@ try:
     # blocked the process forever -- an unbounded wait in the one script a coordinator is told
     # to run on a ledger it may not have written.
     text = read_stable_regular_file(path, label="ledger")
-except (OSError, UnicodeDecodeError) as err:
+except OSError as err:
     fail(2, f"agents-discipline: cannot read {path}: {err}")
 
 lines = text.split("\n")
