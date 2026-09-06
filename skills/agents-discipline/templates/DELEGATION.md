@@ -22,8 +22,9 @@ Created: <ISO 8601, e.g. 2026-08-29T22:50:00+0200 — the checker dates artifact
   so `cd packages/x && pytest -q` is exactly as strong as `pytest -q`. Need real sequencing? Put
   it in a script and name the script. Operators inside quotes are arguments, not chains, so
   `python3 -c "import sys; sys.exit(0)"` is fine.
-- Escape any literal `\|` inside a cell. An unescaped pipe adds a column and shifts every later
-  cell, so `Status` would be read from the wrong place.
+- Escape any literal `\|` inside a cell. An unescaped pipe adds a column, and the checker holds
+  every row to the header's column count, so the row is reported malformed rather than parsed
+  with `Status` read from the wrong cell.
 - Status: `pending` → `done` (worker reported) → `verified` (coordinator checked it themselves).
   `abandoned` is terminal-but-unsuccessful: the unit cannot be finished, the reason is written in
   its Evidence block, and the ledger reports a required handoff rather than completion.

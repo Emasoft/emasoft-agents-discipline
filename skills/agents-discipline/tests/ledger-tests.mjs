@@ -150,6 +150,18 @@ const cases = [
     expect: ["evidence:    MISSING", "UNBACKED verified rows"],
   },
   {
+    // A trailing `|` is OPTIONAL in GitHub-flavoured markdown. Dropping the last field
+    // unconditionally made such a header count one column short, which made EVERY row
+    // malformed, emptied `rows`, and tripped the "no unit rows" bail -- so a ledger that
+    // parsed cleanly before the column check existed became unreadable, and the reason was
+    // computed and then discarded. Measured: pre-B3 this fixture was `ledger complete`.
+    name: "a table written without trailing pipes still parses",
+    file: "tests/fixtures/no-trailing-pipe.md",
+    want: 0,
+    expect: ["verified:    2"],
+    reject: ["malformed"],
+  },
+  {
     // T6. An UNESCAPED pipe inside an Acceptance command adds a column. The only shape check
     // used to be `cells.length < 6`, which a 7-cell row passes -- so `Status` was read from
     // `cells[5]`, the wrong cell, and the row parsed silently as whatever the shift produced.
