@@ -488,6 +488,62 @@ def parse_gates(text, options=None):
 
 
 # ---------------------------------------------------------------------------------------------
+# The gate-definition digest. This one is security-relevant: it is what binds a recorded
+# approval to the exact CHECK/EXPECT/CWD that was approved, so a digest that differs between
+# the runtimes does not fail loudly -- it silently reports "gate not approved" for a gate the
+# other runtime approved, and the cause is misattributed to the approval store.
+# ---------------------------------------------------------------------------------------------
+
+MAX_CHECK_OUTPUT_BYTES = 1024 * 1024
+MAX_AUTOMATIC_EVIDENCE_CHARS = 900
+
+
+def gate_definition_digest(gate):
+    """sha256(JSON.stringify([...])) over the fields that define a runnable gate, or None.
+
+    Two serialization details decide whether the hex matches the oracle's, and BOTH are silent:
+
+    - `separators=(",", ":")`. `json.dumps` defaults to `", "` and `": "`; JSON.stringify emits
+      no spaces at all. Every digest would differ, for every gate.
+    - `ensure_ascii=False`. `json.dumps` defaults to escaping non-ASCII to \\uXXXX, while
+      JSON.stringify emits the character. So the two agree on an ASCII gate and diverge the
+      moment a CHECK, EXPECT or CWD carries one non-ASCII byte -- which is why the differential
+      row feeds it the unicode fixture rather than a plain gate.
+    """
+    if not isinstance(gate, dict):
+        return None
+    check = gate.get("check")
+    expect = gate.get("expect")
+    if not isinstance(check, str) or check == "":
+        return None
+    if not isinstance(expect, str) or expect == "":
+        return None
+    cwd = gate.get("cwd")
+    payload = [
+        "agents-discipline.gate-definition",
+        1,
+        check,
+        expect,
+        None if cwd is None else str(cwd),
+    ]
+    # No js_json_object() here: the payload is a flat list of primitives with no dict at any
+    # depth, so the JS key-order helper has nothing to reorder. Adding it would be dead code
+    # that reads as if key order were a live hazard in this function. It is not -- and it
+    # cannot become one without editing the literal above.
+    return sha256(json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
+
+
+_DIGEST_HEX_RE = re.compile(r"^[a-f0-9]{64}\Z")
+
+
+def automatic_evidence_prefix(definition_digest):
+    # `String(definitionDigest || "")` -- None and "" both reach the test as "", which fails it.
+    if not _DIGEST_HEX_RE.match("" if not definition_digest else str(definition_digest)):
+        raise ValueError("automatic evidence needs a full lowercase SHA-256 definition digest")
+    return "automatic-evidence=v1; definition-sha256=" + definition_digest + ";"
+
+
+# ---------------------------------------------------------------------------------------------
 # Scope resolution, durable writes, and the file lock. Port of the gates.mjs half that
 # lib/dispatch.mjs imports: validateScopeId, scopeRoot, writeAtomic, withFileLock, appendStatus.
 # ---------------------------------------------------------------------------------------------

@@ -10,7 +10,9 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts", "lib"))
-from gates import parse_gates, read_stable_regular_file  # noqa: E402  # type: ignore[import-not-found]
+from gates import (  # noqa: E402  # type: ignore[import-not-found]
+    automatic_evidence_prefix, gate_definition_digest, parse_gates, read_stable_regular_file,
+)
 
 doc = parse_gates(read_stable_regular_file(sys.argv[1], label="gate ledger"))
 
@@ -20,6 +22,18 @@ doc = parse_gates(read_stable_regular_file(sys.argv[1], label="gate ledger"))
 # that serialised a gate would crash. Fixed in parse_gates instead; the driver now compares
 # the gates as they actually are, which is the only way it can see that kind of divergence.
 gates = doc["gates"]
+
+
+def _digest_row(gate):
+    digest = gate_definition_digest(gate)
+    try:
+        prefix = None if digest is None else automatic_evidence_prefix(digest)
+    except ValueError as error:
+        prefix = "threw: " + str(error)
+    return {"id": gate["id"], "digest": digest, "prefix": prefix}
+
+
+digests = [_digest_row(gate) for gate in gates]
 
 json.dump({
     "lines": doc["lines"],
@@ -35,6 +49,7 @@ json.dump({
     "owns": doc["owns"],
     "errors": doc["errors"],
     "warnings": doc["warnings"],
+    "digests": digests,
     # ensure_ascii=False: json.dumps escapes non-ASCII to \uXXXX by default and
     # JSON.stringify does not, so a ledger with a non-Latin title diverged on the SERIALISER
     # rather than on the parse. Measured: "тесты пройдены ✓" came back as те...

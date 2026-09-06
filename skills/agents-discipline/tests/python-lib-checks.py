@@ -460,6 +460,17 @@ _classes = {
     # title AND the id together, so the id class firing is all it actually demonstrated.
     "a non-ASCII title": any(not d["lines"][0].isascii() for d in _all if d["lines"]),
     "a checked box": any(g.get("checked") for d in _all for g in d["gates"]),
+    # Non-ASCII in the three fields the DIGEST is computed over, which is a different class from
+    # the id and the title above and is not implied by either. gate_definition_digest serializes
+    # with ensure_ascii=False; json.dumps defaults to True, and that mutation produced ZERO
+    # divergences across all eight fixtures because every CHECK/EXPECT/CWD in the corpus was
+    # pure ASCII -- the non-ASCII lived only in ids and titles, which the digest never reads.
+    # So the guard was untested while two neighbouring unicode classes were green. Without this
+    # predicate, ASCII-ising one fixture line silently restores that hole.
+    "non-ASCII in a digested field": any(
+        isinstance(g.get(_f), str) and not g[_f].isascii()
+        for d in _all for g in d["gates"] for _f in ("check", "expect", "cwd")
+    ),
     # The shapes the seventh review round named as structurally invisible: a fence closed by a
     # SHORTER run, a mismatched fence character, a backtick in the info string, an attribute
     # after a blank line, an unindented attribute, and duplicate OWNS entries. Every one AGREED
