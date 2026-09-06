@@ -48,6 +48,13 @@ bash "$PROBE" t "$target" '"x"' '"y"' "$runner" >/dev/null 2>&1
 check "non-unique anchor exits 1" 1 $?
 printf 'MARKER = "original"\n' > "$target"
 
+# RESET the call counter immediately before case 3. Nothing else uses $slow today, so the
+# counter is already 0 here -- but case 3's correctness DEPENDS on that, silently, and this
+# mechanism has already mis-targeted the kill once (a both-calls-slow runner put every
+# interrupt in the baseline and left case 4 unable to fail). A future case that reuses $slow
+# would push the kill back into the baseline with no assertion failing anywhere. One line.
+rm -f "$tmpdir/n"
+
 # 3. SIGNAL EXIT CODES: 128+signal. Both were hardcoded to 130 and nothing caught it.
 #    SIGTERM only -- a backgrounded script from a non-interactive shell has SIGINT set to
 #    SIG_IGN, and a signal ignored on entry CANNOT be re-trapped, so the INT path is not

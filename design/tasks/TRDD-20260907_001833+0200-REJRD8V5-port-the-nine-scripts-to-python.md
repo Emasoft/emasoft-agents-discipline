@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T01:49:13+0200
+updated: 2026-09-07T01:51:36+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -24,12 +24,24 @@ this project — the recurring defect all session has been an assertion satisfie
 other than the property it names. Mutate the implementation, confirm the intended row reddens,
 revert. If no mutation isolates a row, that row does not earn its place.
 
-### DONE (verified by differential + mutation control)
-- `lib/gates.py`: `read_stable_regular_file`, `write_atomic`, `with_file_lock`, `append_status`,
-  `parse_gates`, `validate_scope_id`, `scope_root`, `normalize_owns_glob`, `_write_all`
-- `lib/dispatch.py` + `dispatch_check.py` — 21/21 under the oracle's own suite
-- `lib/jsapi.py`: `js_object_key_order`, `js_json_object`, `js_length`, `js_slice`,
-  `locale_compare_key`, `parse_date`, `js_trim`, `js_truthy`, `js_string`/`_js_number`
+### DONE — but THE VERIFICATION STANDARD VARIES; read the per-bullet notes
+**Do not read this heading as uniform.** The bullets carrying explicit control counts were
+verified to the current standard. **The first three below carry none, and predate
+`tests/mutate-probe.sh` entirely** — their controls were run with the inline `probe()` shell
+function, the SAME generation that produced this session's worst false result (a syntax error
+counted as nine catches, because a mutant that would not import was scored as CRASH=catch).
+Those controls are RECORDED, not verified to the standard the rest of this document asserts.
+**Re-run them through `mutate-probe.sh` before building `gate-check.mjs` on top of them.**
+(Raised in review, and left unfixed for two rounds before being written down here — a silent
+skip until now, unlike the two in the DELIBERATELY-NOT-FIXED section.)
+
+- ⚠ OLD-STANDARD — `lib/gates.py`: `read_stable_regular_file`, `write_atomic`, `with_file_lock`,
+  `append_status`, `parse_gates`, `validate_scope_id`, `scope_root`, `normalize_owns_glob`,
+  `_write_all`
+- ⚠ OLD-STANDARD — `lib/dispatch.py` + `dispatch_check.py` — 21/21 under the oracle's own suite
+- ⚠ OLD-STANDARD — `lib/jsapi.py`: `js_object_key_order`, `js_json_object`, `js_length`,
+  `js_slice`, `locale_compare_key`, `parse_date`, `js_trim`, `js_truthy`,
+  `js_string`/`_js_number`
 - `gates.py`: `gate_definition_digest`, `automatic_evidence_prefix`, `classify_gate_evidence`,
   `gate_state`, `tail`, `format_document`, `qualify`, `js_basename`
 - `gates.py`: `globs_overlap`, `literal_prefix` — 18 pairs, each dumped in BOTH directions.
@@ -145,9 +157,18 @@ SEQUENCE makes both sides agree, so the diff passes and the GATE fires (`VACUOUS
 conflicted=8 released=1`).
 
 ### R9-R10 — the harness got a SELF-TEST, and it was vacuous on arrival
-`tests/mutate-probe-selftest.sh` (e2cc532) is the committed gate for the probe harness: it
+`tests/mutate-probe-selftest.sh` (e2cc532) is the committed CHECK for the probe harness: it
 exits non-zero, and each of its four assertions is shown capable of failing by reverting the
 guard it covers. Run it after ANY edit to `mutate-probe.sh`.
+
+**It is MANUAL AND UNENFORCED, deliberately — do not re-raise this as round 7's defect.** No
+runner invokes it (not `npm test`, not `python-lib-checks.py`), which by round 7's own standard
+looks like the unconsumed infrastructure that got the exit-code protocol deleted. The
+difference: that was a PROTOCOL, a contract between two components one of which did not exist,
+worth zero until a consumer appeared. This is an EXECUTABLE CHECK — it delivers its value the
+moment anyone runs it, and it has already delivered it once by catching a reverted constant. A
+test with no CI wiring is under-used; a protocol with no consumer is unused. Wiring it into a
+suite is a fine improvement; it is not a correctness defect.
 
 It did not start that way. **I shipped it having demonstrated ONE of four controls and
 generalised** — the exact standard this document imposes on the port, applied for ten rounds
