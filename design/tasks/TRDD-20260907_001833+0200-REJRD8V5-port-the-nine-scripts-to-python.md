@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T00:45:30+0200
+updated: 2026-09-07T00:53:58+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -44,20 +44,32 @@ revert. If no mutation isolates a row, that row does not earn its place.
 - `gates.py`: `list_scopes`, `scope_files`, `legacy_files`, `resolve_target`,
   `same_file_identity`, and the private `_named_entry` / `_real_directory_inside` /
   `_markdown_discovery` / `_scope_discovery` / `_legacy_discovery`. Eight tree shapes
-  (`tests/discovery-diff.sh` + `build-discovery-tree.py`), nine mutation controls, six redden.
+  (`tests/discovery-diff.sh` + `build-discovery-tree.py`), now NINE shapes; nine mutation
+  controls in the first round, six redden.
   **Found a real defect on the first run**: JS `Array.sort()` orders by UTF-16 code UNITS and
   Python `sorted()` by code POINTS, so a `gates/` directory holding U+1F600 and U+FFFD came
   back reversed — `markdownDiscovery` sorts filenames with NO id filter, so nothing upstream
   prevents it. Fixed with `jsapi.js_sort_key` (UTF-16-BE bytes; big-endian is the property
   that makes byte order equal unit order) at both sort sites.
 
+### ROUND 2 — the review of the fixes found the fixes defective (36e3785)
+The lesson worth keeping: **a fix ships under the authority of "a review found this", and a
+control proving the intended row MOVED is not evidence the new behaviour is RIGHT.**
+- `_js_join` was wrong before it normalized anything. `os.path.join` DISCARDS everything
+  before an absolute segment (that is `resolve`'s rule, not `join`'s), so `("/a","/b")` gave
+  `/b` against node's `/a/b`. Plus `("a","")` -> `a/` vs `a`, and `()` raised vs `.`.
+- A 3000-case RANDOMIZED differential then found a fourth class no hand-picked case reached:
+  POSIX preserves a leading `//`, node collapses it. Three rounds of hand-picked cases missed
+  what one randomized run caught in seconds — the same lesson as `js_string`'s exponent band.
+- That fix reddened ZERO variants, so it is now a permanent `jsJoin` corpus in both drivers.
+  A fix nothing can catch regressing is not finished.
+- `head -4` on a Python traceback cut off the assertion message, which lives on the LAST line.
+- I over-applied `except Exception` beyond what the finding asked; narrowed back where a bare
+  catch would turn a typo into "no pipelines configured".
+
 ### NEXT ACTION
-1. **`statCurrentNamedFile`** — the last non-dead `gates.mjs` export, consumed by
-   `gate-check.mjs:422,435`. Its logic is already INLINE inside the ported
-   `read_stable_regular_file`; the work is extracting it as a public name with the oracle's
-   own option surface (`maxBytes`, `openFlags`, `label`, `stableSnapshot`) and its
-   non-creating/non-truncating flag assertion. The Windows fstat-bracketing branch is
-   unreachable on this machine — port it, mark it UNWITNESSED, do not pretend otherwise.
+1. ~~`statCurrentNamedFile`~~ **DONE** (36e3785) — its own driver rows caught a propagated
+   `lstat` message divergence on their first run. The Windows branch is ported and UNWITNESSED.
 2. **`claim_leases` / `release_leases` / `sleep`** — the two gate-check actually imports,
    plus the one-line alias. `globs_overlap` is already their conflict predicate, so this is
    the layer that finally EXERCISES it against real lock files. `read_leases` is NOT imported
@@ -96,8 +108,9 @@ spawns two siblings that need their own ports — `lib/check-supervisor.mjs` and
 because they are exported and would ship, not because anything exercises them.
 
 ### REVIEW FINDINGS — all verified first-hand, ALL FIXED in e547741
-Three adversarial reviews raised nine between them; each was re-measured here rather than
-taken on report, and each is now fixed with a control proving the fix was load-bearing.
+Four adversarial reviews; every finding was re-measured here rather than taken on report,
+and each is fixed with a control proving the fix was load-bearing. The fourth review found
+the THIRD review's fix defective -- see round 2 below.
 Kept as a record of the defect CLASSES, since every one of them shipped green.
 
 1. **F1 — CONFIRMED, a real divergence.** `_markdown_discovery` interpolates `_err_code(error)`
@@ -109,8 +122,9 @@ Kept as a record of the defect CLASSES, since every one of them shipped green.
    `_err_code` is the right idiom for the oracle's `error.code` — but this site uses `.message`,
    and no variant built an unreadable directory, so the branch was never driven. **Fix:**
    `f"{code}: {os.strerror(n).lower()}, scandir '{path}'"` — measured EXACT against node for
-   all three errnos a scan can raise (EACCES / ENOENT / ENOTDIR). Add an `unreadable-gates-dir`
-   variant, and restore the mode in a `finally` so a failed run cannot leave a 000 directory.
+   EACCES / ENOENT / ENOTDIR (NOT the complete set -- see round 2). FIXED with an
+   `unreadable-gates-dir` variant; the runner restores the mode in a shell `trap ... EXIT INT
+   TERM` so an aborted run cannot leave a 000 directory behind.
    **My own first probe here was NON-DISCRIMINATING**: I read `scopeFiles`, which returns
    `discovery["files"]` and structurally cannot carry an error, and read the resulting match as
    agreement. The errors live in `targets.scopeApi.discoveryErrors`.
