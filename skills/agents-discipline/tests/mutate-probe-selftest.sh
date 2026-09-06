@@ -19,12 +19,24 @@ check() {                      # check <label> <expected> <actual>
 }
 
 # A target this self-test owns, so a probe can mutate it without touching real source.
-target=$(mktemp -d)/subject.py
+# The DIRECTORY is saved, not re-derived with `dirname` at cleanup time: reconstructing a path
+# in order to `rm -rf` it means an empty or relative $target would resolve to "." and delete
+# the working directory. Standing repo rule; cheap to obey.
+tmpdir=$(mktemp -d)
+target=$tmpdir/subject.py
 printf 'MARKER = "original"\n' > "$target"
-runner=$(mktemp)
+runner=$tmpdir/fast.sh
 printf '#!/bin/bash\necho "--- all identical ---"\n' > "$runner"; chmod +x "$runner"
-slow=$(mktemp)
-printf '#!/bin/bash\nsleep 5\necho "--- all identical ---"\n' > "$slow"; chmod +x "$slow"
+# FAST on the first call, SLOW on the second. mutate-probe.sh runs the runner TWICE -- the
+# baseline, then the post-mutation run -- so a uniformly-slow runner puts any timed kill inside
+# the BASELINE, before the anchor check and before the mutation. That is the wrong path: the
+# handler exists for an interrupt during the MUTANT run, and a baseline interrupt "restores" an
+# unmodified file over an unmodified file, which no broken restore can fail. Measured: with a
+# uniformly-slow runner, breaking the restore entirely reddened NOTHING.
+slow=$tmpdir/slow-second.sh
+printf '#!/bin/bash\nn=$(cat %s/n 2>/dev/null || echo 0); echo $((n+1)) > %s/n\n[ "$n" = 0 ] || sleep 5\necho "--- all identical ---"\n' \
+  "$tmpdir" "$tmpdir" > "$slow"; chmod +x "$slow"
+trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
 # 1. A dropped runner argument must be an ERROR, not a negative result about untested code.
 bash "$PROBE" t "$target" 'original' 'mutated' >/dev/null 2>&1
@@ -41,12 +53,19 @@ printf 'MARKER = "original"\n' > "$target"
 #    SIG_IGN, and a signal ignored on entry CANNOT be re-trapped, so the INT path is not
 #    testable here and remains argued rather than measured. Recorded, not papered over.
 bash "$PROBE" t "$target" 'original' 'mutated' "$slow" >/dev/null 2>&1 &
-probe=$!; sleep 1; kill -TERM $probe 2>/dev/null; wait $probe 2>/dev/null
+probe=$!
+sleep 2                       # past the fast baseline, inside the slow post-mutation run
+# The kill's failure is REPORTED, not discarded. `kill ... 2>/dev/null` on an
+# already-finished probe silently no-ops, and case 3 then asserts against the probe's natural
+# exit -- a timing flake wearing the costume of a signal-handling regression.
+if ! kill -TERM $probe 2>/dev/null; then
+  echo "  FAIL  probe already exited before the kill (timing, not a handler defect)"; fail=1
+fi
+wait $probe 2>/dev/null
 check "SIGTERM exits 143 (128+15)" 143 $?
 
-# 4. And the interrupt must leave the target RESTORED, which is the point of the handler.
+# 4. The interrupt must leave the target RESTORED -- the whole point of the handler, and the
+#    reason case 3 must land in the MUTANT run: only there is there something to restore.
 check "target restored after signal" "$(printf 'MARKER = "original"\n')" "$(cat "$target")"
-
-rm -rf "$(dirname "$target")" "$runner" "$slow"
 echo "--- $( [ $fail = 0 ] && echo 'all identical' || echo 'SELF-TEST FAILURES ABOVE' ) ---"
 exit $fail
