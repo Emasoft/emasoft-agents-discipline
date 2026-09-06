@@ -15,4 +15,4 @@ Created: 2026-01-01T00:00:00+0000
 
 **Unit 2 —** claimed done, nothing cited.
 
-**Unit 3 —** ran the suite, output in `tests/fixtures/pooled-evidence.md`.
+**Unit 3 —** ran the suite, output in `reports/unit-3-output.txt`.

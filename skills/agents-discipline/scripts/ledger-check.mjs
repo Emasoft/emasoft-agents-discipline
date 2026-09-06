@@ -164,10 +164,37 @@ const artifactPaths = [
 // coordinator's word UNLESS its own evidence points at something on disk, so evidence is
 // attributed per row rather than pooled: a single real artifact anywhere used to satisfy a
 // whole ledger, which let one genuinely-checked unit carry two invented ones.
+// Sliced by LINE-INITIAL `**Unit N` headers, not matched by a per-unit regex. The
+// regex this replaced could not terminate a block: both its lookaheads
+// (`\n\s*\n\*\*Unit` and `\n##\s`) needed text the evidence scan above had already
+// removed — blank lines at :121, `##` headings at :122-124 — before joining with a
+// single \n. So every block ran to end-of-text, and one real artifact cited under the
+// LAST unit backed every invented row above it. That is verbatim the pooling cheat the
+// old comment claimed was closed; it never was.
+//
+// Line-anchored is load-bearing: a substring test for "Unit 1" also matches prose that
+// merely mentions a unit (the template's own Evidence how-to did), which reproduces the
+// same over-crediting on an unmodified template.
+//
+// Slicing also removes the `${unit}` RegExp interpolation. That cell is untrusted table
+// content: `(a+)+$` used to be compiled and matched on the main thread with no budget,
+// while gate-check.mjs keeps a Worker + 250ms sandbox for exactly this hazard.
+//
+// DELIBERATE BEHAVIOUR CHANGE: the old regex also accepted a bare `#N` block header.
+// Only `**Unit N` is recognised now — the one shape templates/DELEGATION.md documents.
+// Evidence under no header at all backs no row: unattributed prose cannot corroborate a
+// specific unit, so a single pooled sentence can never satisfy a multi-row ledger.
+const evidenceBlocks = new Map();
+{
+  let current = null;
+  for (const line of evidenceText.split("\n")) {
+    const m = /^\*\*Unit\s+([0-9]+)\b/.exec(line);
+    if (m) current = m[1];
+    if (current) evidenceBlocks.set(current, (evidenceBlocks.get(current) ?? "") + line + "\n");
+  }
+}
 function evidenceBlockFor(unit) {
-  const re = new RegExp(`(^|\\n)[^\\n]*(?:\\bUnit\\s+${unit}\\b|#${unit}\\b)[\\s\\S]*?(?=\\n\\s*\\n\\*\\*Unit\\b|\\n##\\s|$)`);
-  const m = evidenceText.match(re);
-  return m ? m[0] : "";
+  return evidenceBlocks.get(String(unit).trim()) ?? "";
 }
 function existingArtifactsIn(block, bases) {
   return [...block.matchAll(/`([^`\s]*\/[^`\s]*\.[A-Za-z0-9]{1,6})`/g)]
