@@ -26,11 +26,16 @@
 # and only DIVERGE counts as reddening -- never CRASH.
 set -u
 label="$1"; target="$2"; old="$3"; new="$4"; shift 4
+# MEASURED: with no runner, `"$@"` is an empty simple command -- status 0, and exempt from
+# set -u -- so the baseline "passed", `output` was empty, and the probe printed a confident
+# NOTHING REDDENED about code it never executed. A typo that drops the runner must be an
+# error, not a negative result.
+if [ $# -lt 1 ]; then echo "$label -> PROBE FAILED (no runner given)" >&2; exit 1; fi
 backup=$(mktemp)
 cp "$target" "$backup"
 # PRINTED, because a SIGKILL skips the trap and leaves the mutant in place; without this the
 # only copy of the original is at an unknown temp path and recovery needs a gated git checkout.
-echo "$label -> backup: $backup"
+echo "$label -> backup: $backup" >&2   # stderr: stdout carries the VERDICT
 trap 'cp "$backup" "$target"' EXIT INT TERM
 
 # Guard 0. A pre-existing divergence makes every subsequent probe a false positive, so the
@@ -38,6 +43,14 @@ trap 'cp "$backup" "$target"' EXIT INT TERM
 if ! "$@" >/tmp/mutate-baseline.out 2>&1; then
   echo "$label -> PROBE FAILED (runner was ALREADY failing before the mutation)"
   tail -3 /tmp/mutate-baseline.out
+  exit 1
+fi
+# Exiting 0 is NOT proof the runner observes anything -- a script that prints nothing and
+# exits 0 would sail through and then report NOTHING REDDENED for every mutation. Require the
+# runner's own success marker. This is still not a full positive control (that needs a canary
+# mutation known to diverge); it closes the silent-runner case only, and says so.
+if ! grep -q -- "--- all identical ---" /tmp/mutate-baseline.out; then
+  echo "$label -> PROBE FAILED (runner produced no success marker; is it a differential runner?)"
   exit 1
 fi
 
@@ -74,11 +87,25 @@ output=$("$@" 2>&1)
 # rows is how "reddens 9" got quoted forward as nine independent catches.
 diverged=$(printf '%s\n' "$output" | grep -cE '^DIVERGE')
 crashed=$(printf '%s\n' "$output" | grep -cE '^(CRASH|BUILD-FAILED|VACUOUS)')
+# EXIT CODES, so a batch can assert "every probe must redden". Previously all three outcomes
+# exited 0 and the distinction lived only in prose for a human to read -- and an invocation
+# that piped this through `grep` discarded even the PROBE FAILED status, since a pipeline
+# returns its LAST command's.
+#   0 REDDENS   1 PROBE FAILED   2 NOTHING REDDENED   3 INCONCLUSIVE
 if [ "$diverged" -gt 0 ]; then
-  echo "$label -> REDDENS ($diverged diverging variant(s)$([ "$crashed" -gt 0 ] && echo ", $crashed crash(es)"))"
+  # For a target under tests/, DIVERGE may mean the DRIVERS were unpaired rather than that the
+  # implementation fix is load-bearing -- the harness cannot tell those apart, so it refuses to
+  # claim the stronger reading.
+  case "$target" in
+    */tests/*|tests/*) echo "$label -> DIFFERS ($diverged variant(s)) -- target is a DRIVER, so this may only mean the two drivers no longer match" ;;
+    *) echo "$label -> REDDENS ($diverged diverging variant(s)$([ "$crashed" -gt 0 ] && echo ", $crashed crash(es)"))" ;;
+  esac
+  exit 0
 elif [ "$crashed" -gt 0 ]; then
   # A crash is NOT a catch: the mutant broke the harness, so the probe proved nothing.
   echo "$label -> INCONCLUSIVE (only crashes, $crashed) -- the mutant broke the runner"
+  exit 3
 else
   echo "$label -> NOTHING REDDENED"
+  exit 2
 fi

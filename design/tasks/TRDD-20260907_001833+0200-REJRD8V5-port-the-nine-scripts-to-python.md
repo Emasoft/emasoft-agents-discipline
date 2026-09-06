@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T01:16:21+0200
+updated: 2026-09-07T01:20:59+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -99,13 +99,18 @@ control proving the intended row MOVED is not evidence the new behaviour is RIGH
 
 ### NEXT ACTION
 **Every NAME `gate-check.mjs` imports exists in `gates.py`** (23/23, sound presence test).
-That is a name claim, NOT signature compatibility — and the port is knowingly inconsistent
-about signatures, which the `gate-check.mjs` port must reconcile:
+That is a name claim, NOT signature compatibility. **The port is FAITHFUL to the oracle's
+options-object shape by default** — `stat_current_named_file`, `resolve_target`,
+`claim_leases` and `release_leases` all take a positional dict with camelCase keys, exactly as
+their oracles do. **Three functions deviate**, flattening the options object into keyword
+arguments, and those are the ones a `gate-check.mjs` port must translate differently:
 | oracle | port |
 |---|---|
-| `readStableRegularFile(path, {root, maxBytes, label})` | snake_case **kwargs** |
-| `writeAtomic(file, text, {root})` | snake_case **kwargs** |
-| `statCurrentNamedFile(path, options)` | a positional **dict with camelCase keys** |
+| `readStableRegularFile(path, {root, maxBytes, label})` | `read_stable_regular_file(path, max_bytes=…, label=…, root=…)` |
+| `writeAtomic(file, text, {root})` | `write_atomic(file, text, root=None)` |
+| `withFileLock(root, target, fn, {timeoutMs})` | `with_file_lock(root, target, fn, timeout_ms=…)` |
+(An earlier version of this table listed `stat_current_named_file` as the odd one out. It is
+the FAITHFUL one; the deviations are the kwargs trio.)
 `claimLeases` / `releaseLeases` / `withFileLock` are `await`ed at every JS call site and are
 SYNC here (mutual exclusion is the file lock, not the scheduler, so this is not a behavioural
 difference — but every call site has to drop the await). One item left:
