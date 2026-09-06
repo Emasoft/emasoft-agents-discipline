@@ -443,18 +443,22 @@ _classes = {
     "an ABANDON reason": any(any(reason for _id, reason in d["abandoned"]) for d in _all),
     "a regex-reading EXPECT warning":
         any("read as a regular expression" in w for d in _all for w in d["warnings"]),
-    # ACCUMULATED, so the unconditional "zero live gates" error must not count toward it:
-    # parse_gates appends that whenever a ledger has no live gates, so ONE real error in a
-    # gateless fixture already made len(errors) == 2 and satisfied `> 1` without demonstrating
-    # accumulation at all. errors.md produces four, so this passed honestly -- but the
-    # predicate did not require it to, which is the property the other six were tightened for.
-    "accumulated parse errors":
-        any(len([e for e in d["errors"] if "zero live gates" not in e]) > 1 for d in _all),
+    # ACCUMULATED errors on a ledger that HAS gates, so the unconditional "ledger contains zero
+    # live gates" error cannot be one of them. The previous spelling filtered that message by
+    # SUBSTRING, which fails OPEN: reword the error in parse_gates and the filter stops matching,
+    # the unconditional error counts again, and the predicate silently reverts to the weaker form
+    # — no failure, just less strictness, which is the worst direction for an assertion whose
+    # whole job is being strict. Requiring gates gets the same meaning with no coupling to text.
+    "accumulated parse errors": any(len(d["errors"]) > 1 and d["gates"] for d in _all),
     # The non-ASCII TITLE, asserted separately from the id. 8424c59's fixture comment claims
     # "non-ASCII ids and titles" and only the id was ever checked -- and the title is where a
     # real divergence lived: the ensure_ascii=False serializer bug was found on
     # "тесты пройдены ✓", not on an id. Editing that heading to ASCII went unnoticed.
-    "a non-ASCII line of prose": any(not line.isascii() for d in _all for line in d["lines"]),
+    # The TITLE specifically (line 0), not "any non-ASCII line": d["lines"] includes the GATE
+    # line, so `gäte-ü` satisfied the previous spelling on its own and ASCII-ising the heading
+    # still went unnoticed — the very thing the class was added for. My control mutated the
+    # title AND the id together, so the id class firing is all it actually demonstrated.
+    "a non-ASCII title": any(not d["lines"][0].isascii() for d in _all if d["lines"]),
     "a checked box": any(g.get("checked") for d in _all for g in d["gates"]),
 }
 for _name, _present in sorted(_classes.items()):
@@ -484,14 +488,22 @@ completed.append("parse_gates")
 # No oracle row is possible: Node's writeFileSync(fd, ...) loops internally, so there is nothing
 # to compare against -- the port had to GROW the loop. Verified against its own control instead,
 # in a subprocess because RLIMIT_FSIZE is process-wide.
-_sw = subprocess.run([sys.executable, os.path.join(TESTS, "short_write_probe.py")],
-                     capture_output=True, text=True, timeout=30)
+# TimeoutExpired caught, not propagated: a regressed `written <= 0` guard makes _write_all spin
+# forever, and MEASURED — removing that guard hangs the probe. Unwrapped, the timeout would take
+# down the whole run with a traceback instead of failing one row, so the one defect the guard
+# exists to prevent would also destroy the report that names it.
+try:
+    _sw = subprocess.run([sys.executable, os.path.join(TESTS, "short_write_probe.py")],
+                         capture_output=True, text=True, timeout=30)
+    _sw_stdout, _sw_rc, _sw_stderr = _sw.stdout, _sw.returncode, _sw.stderr
+except subprocess.TimeoutExpired:
+    _sw_stdout, _sw_rc, _sw_stderr = "", 1, "probe HUNG (an unbounded write loop?)"
 # Keyed by PREFIX, not by position. The probe's three lines were reordered (the socket case
 # has to run BEFORE the rlimit lowers the hard limit), and the positional lookups silently
 # attached each assertion to the wrong line — three FAILs that were entirely the harness's.
-_lines = {line.split(":", 1)[0]: line for line in _sw.stdout.strip().splitlines()}
-report(_sw.returncode == 0 and set(_lines) == {"control", "error", "success"},
-       "short_write: probe ran", (_sw.stderr or _sw.stdout).strip()[-200:])
+_lines = {line.split(":", 1)[0]: line for line in _sw_stdout.strip().splitlines()}
+report(_sw_rc == 0 and set(_lines) == {"control", "error", "success", "atomic", "noprogress"},
+       "short_write: probe ran", (_sw_stderr or _sw_stdout).strip()[-200:])
 # The CONTROL first, and it gates the claim: if a bare os.write did not short-write, the second
 # line is consistent with the loop being unnecessary and must not be read as verification.
 report("SHORT: True" in _lines.get("control", "") or "SKIPPED" in _lines.get("control", ""),
@@ -506,6 +518,17 @@ report("raised OSError" in _lines.get("error", "") or "SKIPPED" in _lines.get("e
 # SKIPPED accepted only for an unavailable PRIMITIVE, never for TRUNCATED: the probe words
 # those differently on purpose, so a platform that cannot run the case and a loop that loses
 # bytes can never print the same thing. Forced all three skip paths and confirmed the wording.
+# The property the whole fix exists for, and the one nothing tested until now: a write that
+# FAILS mid-way must leave the pre-existing target byte-identical, unlink its temp, and never
+# reach os.replace. Mutation-controlled both ways — swallowing the write error yields
+# target_unchanged=False, i.e. the truncated file really does get renamed into place.
+report("INTACT" in _lines.get("atomic", ""),
+       "short_write: a failed write_atomic leaves the target intact and no temp behind",
+       _lines.get("atomic", "MISSING"))
+# The `written <= 0` guard from 0fd2909, which nothing had executed. Removing it HANGS the probe.
+report("BOUNDED" in _lines.get("noprogress", ""),
+       "short_write: a 0-return raises instead of spinning forever",
+       _lines.get("noprogress", "MISSING"))
 report("ALL BYTES" in _lines.get("success", "") or "SKIPPED" in _lines.get("success", ""),
        "short_write: _write_all delivers every byte across multiple short writes",
        _lines.get("success", "MISSING"))

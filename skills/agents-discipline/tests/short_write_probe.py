@@ -22,13 +22,14 @@ in name only -- see _success_case for the three real descriptors that each turne
 short-write never, and for why the loop is driven by a stubbed os.write instead.
 """
 
+import errno
 import os
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts", "lib"))
-from gates import _write_all  # noqa: E402  # type: ignore[import-not-found]
+from gates import _write_all, write_atomic  # noqa: E402  # type: ignore[import-not-found]
 
 PAYLOAD = b"x" * (256 * 1024)
 CAP = 65536
@@ -122,6 +123,77 @@ def _success_case():
           f"{len(PAYLOAD)} bytes -> {'ALL BYTES' if ok else 'TRUNCATED'}")
 
 
+def _atomic_case(tmp):
+    """The property the whole _write_all fix exists for: a FAILED write leaves the target intact.
+
+    Everything else here tests _write_all in isolation. The claim that motivated it is about
+    write_atomic -- "a truncated dispatch.json fsync'd and renamed into position" -- and nothing
+    exercised write_atomic under a failure DURING the write. The gates_helpers driver has six
+    write_atomic rows and every one is a SETUP failure (symlink, a file where a directory must
+    be); none reaches the raise path, so the blast radius the fix was written for was unasserted.
+
+    Three things must hold after the failure, and each is a separate way to lose data:
+      - the pre-existing target is byte-identical (os.replace never ran);
+      - no .tmp file survives (the finally unlinked it -- untested on the raise path);
+      - the caller sees the error rather than a silent partial success.
+    """
+    target = os.path.join(tmp, "state.json")
+    before = b'{"schema":1,"waves":{}}\n'
+    with open(target, "wb") as handle:
+        handle.write(before)
+
+    calls = []
+    real_write = os.write
+
+    def fail_on_second(fd, data):
+        calls.append(len(data))
+        if len(calls) >= 2:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real_write(fd, bytes(data[:4096]))
+
+    gates_module = sys.modules[_write_all.__module__]
+    gates_module.os.write = fail_on_second
+    raised = None
+    try:
+        write_atomic(target, "x" * (64 * 1024))
+    except OSError as error:
+        raised = error
+    finally:
+        gates_module.os.write = real_write
+    assert os.write is real_write, "os.write was not restored"
+
+    with open(target, "rb") as handle:
+        after = handle.read()
+    leftovers = [n for n in os.listdir(tmp) if n.endswith(".tmp")]
+    ok = raised is not None and after == before and not leftovers
+    print(f"atomic: mid-write failure after {len(calls)} write(s) -> raised="
+          f"{raised is not None} target_unchanged={after == before} "
+          f"tmp_left={len(leftovers)} -> {'INTACT' if ok else 'DAMAGED'}")
+
+
+def _no_progress_case():
+    """The `written <= 0` guard added in 0fd2909, which nothing has ever executed.
+
+    It exists to satisfy the plan's "no infinite loops" constraint, and a guard nobody has run
+    is exactly what 3ed63fc turned out to be. The stub returns 0 forever, so an unguarded loop
+    hangs here rather than failing -- which is why this case asserts a raise, not a value.
+    """
+    real_write = os.write
+    gates_module = sys.modules[_write_all.__module__]
+    gates_module.os.write = lambda fd, data: 0
+    raised = None
+    try:
+        _write_all(-1, b"x" * 4096)
+    except OSError as error:
+        raised = error
+    finally:
+        gates_module.os.write = real_write
+    assert os.write is real_write, "os.write was not restored"
+    ok = raised is not None and "no progress" in str(raised)
+    print(f"noprogress: a 0-return raised={raised is not None} "
+          f"({raised}) -> {'BOUNDED' if ok else 'UNBOUNDED'}")
+
+
 def main():
     if sys.platform == "win32":
         # Reported, not silently skipped: a probe that prints nothing on one platform is
@@ -132,6 +204,8 @@ def main():
         print("control: SKIPPED on win32 (no resource module, no SIGXFSZ)")
         print("error: SKIPPED on win32")
         _success_case()
+        _no_progress_case()
+        _atomic_case(tempfile.mkdtemp())
         return
     tmp = tempfile.mkdtemp()
     try:
@@ -139,6 +213,8 @@ def main():
         # but the rlimit below lowers the HARD limit irreversibly, so keeping the unconstrained
         # case ahead of it stays correct if either ever touches a real descriptor again.
         _success_case()
+        _no_progress_case()
+        _atomic_case(tmp)
         _size_capped_cases(tmp)
     finally:
         # The one probe here that deliberately writes files up to a size cap is the worst to
