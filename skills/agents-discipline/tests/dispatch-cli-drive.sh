@@ -91,11 +91,32 @@ raw "DEL escaped" "$(python3 -c 'print("a" + chr(0x7f) + "b")')"
 # visible under mutation: replacing `total -= sizes.pop()` with `total -= 1` in the backoff
 # reddens the EMOJI-RUN row and NOTHING else in this file. It is the only row here that checks
 # the backoff subtracts a piece's real byte size rather than one byte.
-raw "astral cut in the ascii run" "$(python3 -c 'print("z"*497 + chr(0x1F600)*4)')"
+# The ascii-run row that sat here (497 z + 4 emoji) is GONE, not renamed. Its emoji never
+# entered `pieces`, so it was behaviourally "z"*497 -- an ASCII-run truncation already covered by
+# the 900-byte row above and by the boundary rows below, and no mutation measured here isolates
+# it from either. A row that duplicates another row's coverage while its name claims a mechanism
+# it does not reach is worse than no row: it makes the file look like it tests more than it does.
 raw "astral cut in the emoji run" "$(python3 -c 'print("z"*480 + chr(0x1F600)*4)')"
 raw "astral under budget, intact"  "$(python3 -c 'print("z"*400 + chr(0x1F600)*4)')"
+# EXACTLY on the boundary: "unknown command " is 16 bytes, so 484 z makes the last character the
+# one where total+size == max_bytes == 500. `>` appends it and returns the whole message; `>=`
+# truncates. Found by mutation -- `>` -> `>=` was caught by NOTHING in this file, because every
+# other row lands strictly inside or strictly outside the budget and an off-by-one is invisible
+# from either side. 483 and 485 bracket it, so a future off-by-one in the other direction has a
+# witness too.
+raw "exactly at the budget (484)" "$(python3 -c 'print("z"*484)')"
+raw "one byte under (483)"        "$(python3 -c 'print("z"*483)')"
+raw "one byte over (485)"         "$(python3 -c 'print("z"*485)')"
 raw "over-budget truncates" "$(python3 -c 'print("z"*900)')"
-raw "escape inside the backoff" "$(python3 -c 'print("z"*495 + chr(0x202e)*4)')"
+# MEASURED: the old spelling of this row ("z"*495 + 4 RLO) never reached an RLO at all. The
+# 16-byte "unknown command " prefix puts the cut at 484 z, so the break happens deep inside the
+# z run and no escaped piece ever enters `pieces`. It reddened under the 500->1024 mutation only
+# because a wider budget lets the escapes appear -- a budget row wearing an escape row's name,
+# the same defect as the astral labels below. A review proposed 470 z; measured, that does not
+# work either: two escapes DO enter `pieces`, and the marker backoff then pops both, so the
+# output again carries none. The escapes have to sit early enough that the backoff eats the
+# FILLER instead -- 400 z, then the escapes, then enough z to overrun the budget.
+raw "escaped pieces survive truncation" "$(python3 -c 'print("z"*400 + chr(0x202e)*4 + "z"*200)')"
 raw "unknown option echoes value" open --scope api --wave w1 --leaf a "$(printf -- '--o\001pt')"
 echo "--- $( [ $fail = 0 ] && echo 'all identical' || echo 'DIVERGENCES ABOVE' ) ---"
 exit $fail

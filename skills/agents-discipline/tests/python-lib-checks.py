@@ -456,12 +456,21 @@ def _gates_with_digests(doc):
     to close. Both drivers build `digests` by mapping over `gates` in order, so index
     correspondence is exact and needs no key at all.
     """
-    _g, _d = doc.get("gates", []), doc.get("digests", [])
-    # zip() truncates to the shorter side, so a driver that stopped emitting one digest per gate
-    # would silently shrink every predicate built on this rather than fail. Assert the pairing.
-    report(len(_g) == len(_d), "parse_gates: one digest per gate in the oracle dump",
-           f"{len(_g)} gates, {len(_d)} digests")
-    return list(zip(_g, _d))
+    return list(zip(doc.get("gates", []), doc.get("digests", [])))
+
+
+# The pairing assertion is here, in an EXPLICIT loop, and NOT inside the helper. It was inside,
+# which made it a side effect of a call made from a generator expression under `any(...)` -- and
+# `any` SHORT-CIRCUITS. Measured with the exact comprehension shape: with the matching fixture
+# sorted LAST the assertion runs for 9 of 9 fixtures, with it sorted FIRST it runs for 1 of 9.
+# It reported 9 today only because unicode-ids.md happens to sort last; renaming that file, or
+# adding non-ASCII to an earlier one, would have silently dropped the check to a single fixture
+# with no failure anywhere. zip() truncates to the shorter side, so an unpaired dump would then
+# quietly shrink every predicate built on it instead of failing.
+for _name, _doc in sorted(_oracle_docs.items()):
+    report(len(_doc.get("gates", [])) == len(_doc.get("digests", [])),
+           f"parse_gates: one digest per gate in {_name}",
+           f"{len(_doc.get('gates', []))} gates, {len(_doc.get('digests', []))} digests")
 
 # Each predicate must be satisfiable ONLY by a fixture that exercises the class in its name.
 # Three of these were not, and they had the exact defect they were written to catch:
@@ -775,9 +784,19 @@ if True:
             # and I had claimed it "catches .*" without ever running it under .*.
             report(False, f"automatic_evidence_prefix rejects {_why}",
                    f"raised {type(_exc).__name__}, not ValueError: {_exc}")
-    report(_g.automatic_evidence_prefix(_hex) ==
-           "automatic-evidence=v1; definition-sha256=" + _hex + ";",
-           "automatic_evidence_prefix accepts a real digest (positive control)")
+    # GUARDED, for the same reason the reject rows are. Unwrapped, inverting the guard to
+    # `if _DIGEST_HEX_RE.match(...)` makes all 8 reject rows report PASS -- for the wrong reason,
+    # since they now raise for the opposite cause -- and then this line raises an uncaught
+    # ValueError, aborting the run with a traceback UNDER eight greens. That is the identical
+    # shape as the TypeError crash the previous commit repaired; the hardening stopped one line
+    # short of the control that would have made the inversion legible.
+    try:
+        report(_g.automatic_evidence_prefix(_hex) ==
+               "automatic-evidence=v1; definition-sha256=" + _hex + ";",
+               "automatic_evidence_prefix accepts a real digest (positive control)")
+    except Exception as _exc:  # noqa: BLE001
+        report(False, "automatic_evidence_prefix accepts a real digest (positive control)",
+               f"raised {type(_exc).__name__} on a valid digest: {_exc}")
 
 # INLINE, before the exit, so a missing section actually FAILS the run. The atexit hook alone
 # was decorative for the case it was written for: a section that returns early WITHOUT raising
