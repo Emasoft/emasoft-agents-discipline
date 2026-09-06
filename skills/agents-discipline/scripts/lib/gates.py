@@ -141,14 +141,47 @@ def _js_to_number(value):
         return value
     try:
         text = js_trim(str(value))
-        return 0 if text == "" else float(text)
+        # int when integral: JS has ONE number type, so `${10}` prints "10". float("10") is
+        # 10.0, which passed validation and then rendered as "file exceeds 10.0 bytes" where
+        # the oracle says "10 bytes". Measured on maxBytes "1" against a 2-byte file.
+        number = 0.0 if text == "" else float(text)
+        return int(number) if number.is_integer() else number
     except ValueError:
+        # Node's Number() also accepts hex ("0x10" -> 16) where float() raises; unreachable
+        # here (no caller passes one) and left as NaN, which fails the bound closed.
         return float("nan")
 
 
 def _same_snapshot(left, right):
     return (same_file_identity(left, right) and left.st_size == right.st_size
             and left.st_mtime_ns == right.st_mtime_ns and left.st_ctime_ns == right.st_ctime_ns)
+
+
+_NODE_MESSAGE_TYPES = {}
+
+
+def _node_message_error(error, syscall):
+    """Same OSError SUBCLASS and errno as `error`, but str() gives node's message.
+
+    Three things have to hold at once and no plain construction gives all three:
+      * `except FileNotFoundError` must still match  -> keep the subclass
+      * `.errno` must survive                        -> this module branches on it in ~10 places
+      * str() must be node's sentence                -> and NOT Python's "[Errno N] ..." prefix
+    Measured, both simpler forms fail: a single-arg OSError(msg) drops the type and errno, and
+    assigning .errno afterwards makes str() switch to the two-arg rendering, which formats
+    from .strerror -- so the message is silently replaced by "[Errno 2] None: '<path>'".
+    A per-base subclass overriding __str__ is what satisfies all three; it is cached because
+    building a class per raised error would be a slow, unequal object every time.
+    """
+    base = type(error)
+    subclass = _NODE_MESSAGE_TYPES.get(base)
+    if subclass is None:
+        subclass = type("Node" + base.__name__, (base,), {"__str__": lambda self: self._node_message})
+        _NODE_MESSAGE_TYPES[base] = subclass
+    rebuilt = subclass(error.errno, error.strerror)
+    rebuilt.filename = error.filename
+    rebuilt._node_message = _node_fs_message(error, syscall)
+    return rebuilt
 
 
 def _node_lstat(target):
@@ -163,7 +196,13 @@ def _node_lstat(target):
     try:
         return os.lstat(target)
     except OSError as error:
-        raise OSError(_node_fs_message(error, "lstat")) from error
+        # Rebuild the SAME subclass with a single argument, then restore errno/filename by
+        # assignment. A plain `OSError(msg)` lost both the FileNotFoundError type and .errno,
+        # and this module branches on those in ten places -- matching node's message text is
+        # not worth breaking `except FileNotFoundError` for the caller. Single-arg (not
+        # two-arg) because a two-arg OSError renders str() as "[Errno 2] <msg>", putting back
+        # the Python-only prefix this reconstruction exists to remove.
+        raise _node_message_error(error, "lstat") from error
 
 
 def stat_current_named_file(path, options=None):
@@ -917,7 +956,15 @@ def _js_join(*parts):
     # built on os.path.join was wrong before it ever normalized anything. Node's algorithm is
     # instead: drop ZERO-LENGTH segments, concatenate with the separator, normalize, and
     # answer "." for an empty result.
-    kept = [str(part) for part in parts if part != ""]
+    for part in parts:
+        # node VALIDATES every argument -- path.join("a", 7) throws ERR_INVALID_ARG_TYPE. A
+        # str() coercion here answered "a/7", and for None it answered "a/None": a PLAUSIBLE
+        # path that then lstats ENOENT and reports as an ordinary missing file instead of the
+        # programming error it is. Same class as the js_sort_key str() finding -- a str()
+        # inserted for convenience where the oracle has semantics.
+        if not isinstance(part, str):
+            raise TypeError("Path must be a string. Received " + js_string(part))
+    kept = [part for part in parts if part != ""]
     if not kept:
         return os.curdir                      # path.join() and path.join("") are both "."
     joined = os.sep.join(kept).replace("/", os.sep) if os.sep != "/" else "/".join(kept)
@@ -927,7 +974,9 @@ def _js_join(*parts):
     # randomized differential, not by hand: ["//"] answers "/" in node and "//" from normpath,
     # and every case whose first segment was "/" inherited the same extra slash. Guarded to
     # posix because on Windows a leading "\\" is a UNC root, which node's win32 join keeps.
-    if os.sep == "/" and normalized.startswith("//") and not normalized.startswith("///"):
+    # Only EXACTLY two: normpath already collapses three or more ("///a" -> "/a"), so a
+    # "///" prefix cannot reach this line. The earlier guard against it was dead code.
+    if os.sep == "/" and normalized.startswith("//"):
         normalized = normalized[1:]
     # A trailing separator survives node's join ("a", "b/") -> "a/b/", where normpath strips
     # it. Read the intent off `kept[-1]`, NOT off `joined`: joined could have acquired the

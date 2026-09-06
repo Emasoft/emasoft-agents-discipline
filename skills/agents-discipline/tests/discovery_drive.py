@@ -86,16 +86,21 @@ json.dump({
     "envScope": with_env("api", lambda: target()),
     "envScopeOverriddenByExplicit": with_env("api", lambda: target(scope="web")),
     "envScopeWithEmptyExplicit": with_env("api", lambda: target(scope="")),
-    "jsJoin": [_join_row(parts) for parts in [["a","b"],["a//","b"],["a/.","b"],["a","b/"],["/a","/b"],["a","/b"],["a",""],["",""],
-    ["//"],["///"],["/","x.md"],["/","."],[".."],["../a","b"],["a","..","b"],["a/","/b/"],
-    ["","a"],["a",".","b"],[".",""],["/",""],["a/b/","c"]]],
+    "jsJoinCorpus": [["a", "b"], ["a//", "b"], ["a/.", "b"], ["a", "b/"], ["/a", "/b"], ["a", "/b"], ["a", ""], ["", ""], ["//"], ["///"], ["///", "a"], ["/", "x.md"], ["/", "."], [".."], ["../a", "b"], ["a", "..", "b"], ["a", "..", "..", "b"], ["/a/", "/b/", "/c/"], ["a/", "/b/"], ["", "a"], ["a", ".", "b"], [".", ""], ["/", ""], ["a/b/", "c"], [], ["é", "à"], ["😀", "a"], ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "b"]],
+    "jsJoin": [_join_row(parts) for parts in [["a", "b"], ["a//", "b"], ["a/.", "b"], ["a", "b/"], ["/a", "/b"], ["a", "/b"], ["a", ""], ["", ""], ["//"], ["///"], ["///", "a"], ["/", "x.md"], ["/", "."], [".."], ["../a", "b"], ["a", "..", "b"], ["a", "..", "..", "b"], ["/a/", "/b/", "/c/"], ["a/", "/b/"], ["", "a"], ["a", ".", "b"], [".", ""], ["/", ""], ["a/b/", "c"], [], ["é", "à"], ["😀", "a"], ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "b"]]],
     # Mirrors discovery-drive.mjs row for row; the mjs runs FIRST and builds the probe tree.
     "statCurrentNamedFile": [_stat_row(path, opts) for path, opts in [
         (_stat_file, None), (_stat_file, {}), (_stat_file, {"label": "ledger"}),
         (_stat_file, {"maxBytes": 10}), (_stat_file, {"maxBytes": 1}),
         (_stat_file, {"maxBytes": 0}), (_stat_file, {"maxBytes": 2.5}),
         (_stat_file, {"maxBytes": -1}), (_stat_file, {"maxBytes": None}),
-        (_stat_file, {"maxBytes": "10"}), (_stat_file, {"maxBytes": "ten"}),
+        (_stat_file, {"maxBytes": "10"}),
+        # "1" against a 2-byte file: the ONLY row that RENDERS the size message from a
+        # STRING maxBytes. Without it float("1") -> 1.0 printed "exceeds 1.0 bytes" where
+        # the oracle says "1 bytes", and every other string row stayed under its cap.
+        # ORDER MATTERS -- the two drivers compare POSITIONALLY, and inserting this row after
+        # a different neighbour on each side misaligned every row below it.
+        (_stat_file, {"maxBytes": "1"}), (_stat_file, {"maxBytes": "ten"}),
         (_stat_file, {"maxBytes": True}), (_stat_file, {"label": ""}),
         (_stat_file, {"label": 0}), (_stat_file, {"label": 7}),
         (_stat_file, {"openFlags": 0}),

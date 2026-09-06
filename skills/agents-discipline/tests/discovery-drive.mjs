@@ -95,9 +95,9 @@ process.stdout.write(JSON.stringify({
   // leading "//" where node collapses it. That last one reddened NO variant in this file --
   // no tree here has a "//"-leading root -- so without these rows the fix could be reverted
   // silently. Found by a 3000-case randomized differential; these are its distinct classes.
-  jsJoin: [["a","b"],["a//","b"],["a/.","b"],["a","b/"],["/a","/b"],["a","/b"],["a",""],["",""],
-    ["//"],["///"],["/","x.md"],["/","."],[".."],["../a","b"],["a","..","b"],["a/","/b/"],
-    ["","a"],["a",".","b"],[".",""],["/",""],["a/b/","c"]].map((parts) => {
+  jsJoinCorpus: [["a", "b"], ["a//", "b"], ["a/.", "b"], ["a", "b/"], ["/a", "/b"], ["a", "/b"], ["a", ""], ["", ""], ["//"], ["///"], ["///", "a"], ["/", "x.md"], ["/", "."], [".."], ["../a", "b"], ["a", "..", "b"], ["a", "..", "..", "b"], ["/a/", "/b/", "/c/"], ["a/", "/b/"], ["", "a"], ["a", ".", "b"], [".", ""], ["/", ""], ["a/b/", "c"], [], ["é", "à"], ["😀", "a"], ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "b"]],
+  jsJoin: [["a", "b"], ["a//", "b"], ["a/.", "b"], ["a", "b/"], ["/a", "/b"], ["a", "/b"], ["a", ""], ["", ""], ["//"], ["///"], ["///", "a"], ["/", "x.md"], ["/", "."], [".."], ["../a", "b"], ["a", "..", "b"], ["a", "..", "..", "b"], ["/a/", "/b/", "/c/"], ["a/", "/b/"], ["", "a"], ["a", ".", "b"], [".", ""], ["/", ""], ["a/b/", "c"], [], ["é", "à"], ["😀", "a"], ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "b"]]
+    .map((parts) => {
     try { return join(...parts); } catch (error) { return "THREW:" + error.constructor.name; }
   }),
   // statCurrentNamedFile: the MESSAGES are the interesting half. Each row reports either
@@ -110,6 +110,7 @@ process.stdout.write(JSON.stringify({
     [statFile, { maxBytes: 0 }], [statFile, { maxBytes: 2.5 }], [statFile, { maxBytes: -1 }],
     [statFile, { maxBytes: null }],        // Number(null) === 0, NOT the absent default
     [statFile, { maxBytes: "10" }],        // Number("10") === 10
+    [statFile, { maxBytes: "1" }],         // renders the message from a STRING maxBytes
     [statFile, { maxBytes: "ten" }],       // NaN
     [statFile, { maxBytes: true }],        // Number(true) === 1
     [statFile, { label: "" }],             // falsy label falls back to "file"
