@@ -64,7 +64,7 @@ const cases = [
     file: "tests/fixtures/noop-acceptance.md",
     want: 1,
     rerun: true,
-    artifacts: ["reports/noop-1.txt", "reports/noop-2.txt", "reports/noop-3.txt", "reports/noop-4.txt", "reports/noop-5.txt", "reports/noop-6.txt", "reports/noop-7.txt"],
+    artifacts: ["reports/noop-1.txt", "reports/noop-2.txt", "reports/noop-3.txt", "reports/noop-4.txt", "reports/noop-5.txt", "reports/noop-6.txt", "reports/noop-7.txt", "reports/noop-8.txt", "reports/noop-9.txt"],
     expect: [
       "#1 $ : -> no-op acceptance",
       "#2 $ exit 0 -> no-op acceptance",
@@ -81,6 +81,13 @@ const cases = [
       // chain only the LAST status survives, so `false; true` exits 0. Measured before the
       // fix, this row RE-RAN AND PASSED -- a guaranteed-green acceptance certifying a unit.
       "#7 $ false; true -> no-op acceptance",
+      // #8 and #9 are parser edge cases that a truth table caught but no fixture covered --
+      // and a truth table run once in a shell is not a regression guard. #8: filtering empty
+      // `;` segments left one segment that differed from the original, and the fall-through
+      // then tested the original, punctuation included. #9: an anchored `^\(...\)$` peel also
+      // matches two SEPARATE groups and mangled it to `false) ; (true`.
+      "#8 $ ;true -> no-op acceptance",
+      "#9 $ (false) ; (true) -> no-op acceptance",
     ],
   },
   {
@@ -94,12 +101,16 @@ const cases = [
     file: "tests/fixtures/weak-but-real-acceptance.md",
     want: 0,
     rerun: true,
-    artifacts: ["reports/weak-1.txt", "reports/weak-2.txt", "reports/weak-3.txt"],
+    // Row 4 pins the documented mixed-operator ceiling. `true || false && node -e ...` is
+    // `(true || false) && node -e ...` -- it RUNS node, so it is not always-green. If anyone
+    // "simplifies" `mixed ? every : some` back to a plain `some`, this row starts failing as
+    // a false positive. Without it the ceiling is a comment nothing enforces.
+    artifacts: ["reports/weak-1.txt", "reports/weak-2.txt", "reports/weak-3.txt", "reports/weak-4.txt"],
     // `reject`, not `expect`: the property under test is an ABSENCE -- none of these three
     // is flagged a no-op. Asserting a re-ran COUNT instead would test something else and
     // did: `[ -f x ]` is not extracted as a runnable command at all (a separate, pre-existing
     // limitation of acceptanceCommand), so only two of the three ever execute.
-    expect: ["re-ran:      2 acceptance command(s), all passed"],
+    expect: ["re-ran:      3 acceptance command(s), all passed"],
     reject: ["no-op acceptance"],
   },
   {

@@ -329,23 +329,50 @@ const ALWAYS_TRUE =
 // A single `split(/&&|;/)` treated `;` as a conjunction, so `pytest -q; true` -- the same
 // always-green trick as `|| true`, with more natural punctuation -- ran and certified a row.
 // Measured before this fix: `false; true` re-ran and PASSED.
+// True when the leading bracket closes only at the very end -- i.e. the pair really does
+// enclose the whole string, rather than being the first of several groups.
+function wrapsWhole(s, open, close) {
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === open) depth++;
+    else if (s[i] === close && --depth === 0) return i === s.length - 1;
+  }
+  return false;
+}
+
+// KNOWN CEILING: the splits below are textual, so a shell metacharacter inside quotes is
+// still treated as an operator -- `echo "a;b"` is a no-op this will not flag. Every such case
+// errs toward NOT flagging, which is the safe direction: the row still needs evidence and an
+// artifact, whereas a false positive would redden an honest ledger. Quote-aware splitting is
+// the fix if these ever show up in practice.
 function isNoopAcceptance(raw, depth = 0) {
   // Bounded recursion: the input is untrusted ledger text.
   if (depth > 8) return false;
   let s = String(raw).trim();
   // `( exit 0 )`, `{ true; }` and a trailing `;` are pure syntax around the same command.
+  // The bracket peel must only fire when the pair WRAPS THE WHOLE string: an anchored
+  // `^\(...\)$` also matches `(false) ; (true)`, whose parens are two separate groups, and
+  // mangles it to `false) ; (true`. Balance-checking is what tells those apart.
   for (let i = 0; i < 4; i++) {
     const before = s;
     s = s.replace(/;+\s*$/, "").trim();
-    s = s.replace(/^\(\s*([\s\S]*?)\s*\)$/, "$1").trim();
-    s = s.replace(/^\{\s*([\s\S]*?)\s*\}$/, "$1").trim();
+    for (const [open, close] of [["(", ")"], ["{", "}"]]) {
+      if (s.startsWith(open) && s.endsWith(close) && wrapsWhole(s, open, close)) {
+        s = s.slice(1, -1).trim();
+      }
+    }
     if (s === before) break;
   }
   if (!s) return false;
 
-  // `;` binds loosest, so split it first and judge ONLY the last command.
+  // `;` binds loosest, so split it first and judge ONLY the last command. Empty segments are
+  // dropped, which means the surviving text can differ from `s` even when just one segment
+  // remains (`;true`). Recursing whenever it differs is what stops the fall-through below
+  // from testing the original string, punctuation and all, and quietly answering "not a no-op".
   const semi = s.split(";").map((p) => p.trim()).filter(Boolean);
-  if (semi.length > 1) return isNoopAcceptance(semi[semi.length - 1], depth + 1);
+  if (semi.length > 1 || (semi.length === 1 && semi[0] !== s)) {
+    return isNoopAcceptance(semi[semi.length - 1], depth + 1);
+  }
 
   const orParts = s.split("||").map((p) => p.trim());
   if (orParts.length > 1) {
