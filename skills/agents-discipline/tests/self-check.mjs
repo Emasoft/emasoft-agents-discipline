@@ -10,7 +10,7 @@
 //
 // Prints "self-check ok (N/N)" on success, which is what the gate matches.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -349,6 +349,33 @@ check("abandonment is terminal handoff rather than ALL MET", () => {
     return "Stop hook does not surface bounded abandonment handoff";
   }
   return null;
+});
+
+check("every reference and template is linked from an entry document", () => {
+  // An orphaned file is worse than a missing one: it exists, so it reads as
+  // covered ground, but nothing points at it so the model never loads it and
+  // its rules silently stop applying. The merge left three references that way.
+  // Requiring a link from SKILL.md or SECURITY.md (rather than from any file at
+  // all) keeps a file that only some other orphan links from counting as
+  // reachable. This is the file->doc direction; the dangling-link check above
+  // covers doc->file, and neither alone catches both.
+  //
+  // The closing paren is load-bearing: it matches a link TARGET, not a bare
+  // mention. Dropping it lets the label half of "[dir/x.md](...)" count as its
+  // own link, so a broken target goes unnoticed. The optional "./" accepts the
+  // other spelling of the same target. The filename is fully regex-escaped: it
+  // comes from readdir, so an unescaped "+" or "(" in a future name would
+  // silently widen the match or throw.
+  const entry = ["SKILL.md", "SECURITY.md"].map(read).join("\n");
+  const orphans = [];
+  for (const dir of ["references", "templates"]) {
+    for (const f of readdirSync(join(ROOT, dir))) {
+      if (!f.endsWith(".md")) continue;
+      const esc = f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (!new RegExp("\\((?:\\./)?" + dir + "/" + esc + "\\)").test(entry)) orphans.push(dir + "/" + f);
+    }
+  }
+  return orphans.length ? "unlinked file(s): " + orphans.join(", ") : null;
 });
 
 let passed = 0;
