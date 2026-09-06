@@ -33,5 +33,10 @@ json.dump({
     "owns": doc["owns"],
     "errors": doc["errors"],
     "warnings": doc["warnings"],
-}, sys.stdout, indent=2)
+    # ensure_ascii=False: json.dumps escapes non-ASCII to \uXXXX by default and
+    # JSON.stringify does not, so a ledger with a non-Latin title diverged on the SERIALISER
+    # rather than on the parse. Measured: "тесты пройдены ✓" came back as те...
+    # The four ledgers this landed with are all ASCII, which is why it never surfaced —
+    # a harness that is only ever fed the inputs it was written against.
+}, sys.stdout, indent=2, ensure_ascii=False)
 sys.stdout.write("\n")
