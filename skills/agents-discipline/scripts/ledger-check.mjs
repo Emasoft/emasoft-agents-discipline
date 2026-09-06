@@ -371,7 +371,12 @@ if (artifactPaths.length) {
   // honest evidence, and failing it would redden real ledgers until someone deletes the
   // gate. But say out loud what the gate could NOT do here: with nothing on disk to point
   // at, every word above was checked for SHAPE and none of it for TRUTH.
-  console.log("  artifacts:   none cited — evidence is uncorroborated prose (shape checked, truth not)");
+  // Say WHICH shape was missing. "none cited" reads as "you cited nothing" even when the
+  // ledger cited plenty -- as commands. `node test/run-tests.mjs` yields no citation: the
+  // pattern forbids whitespace inside the span, deliberately, because every command names
+  // a script that already exists and extracting paths out of commands would make the
+  // corroboration trivially satisfiable. The ask is the artifact you PRODUCED.
+  console.log("  artifacts:   none cited — no backticked bare path found (a citation must be a path, not a command); evidence is uncorroborated prose (shape checked, truth not)");
 }
 for (const [label, list] of [["missing", missingArtifacts], ["empty", emptyArtifacts], ["older than the ledger", staleArtifacts]]) {
   if (!list.length) continue;

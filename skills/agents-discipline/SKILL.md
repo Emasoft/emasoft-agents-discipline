@@ -61,7 +61,7 @@ A worker report is a self-report. It is a claim, not proof. After each worker re
 2. Update the ledger row to `verified`, or fix the unit yourself (or spawn a follow-up worker) and then mark it verified. Never silently accept a claim.
 3. Write what you ran and saw under `## Evidence` in `DELEGATION.md`; `node <skill-dir>/scripts/ledger-check.mjs` requires it.
 
-The checker resolves every cited path, re-runs each acceptance command under `pipefail`, rejects no-op acceptances, fails any `verified` row backed by nothing outside your prose, and signs the ledger with a verdict-free receipt. Those commands come from the ledger, so read the local [SECURITY.md](SECURITY.md) before checking a ledger you did not write, or set `AGENTS_DISCIPLINE_SKIP_RERUN=1` to check structure only. Read [references/ledger-discipline.md](references/ledger-discipline.md) before marking any row `verified`.
+The checker re-runs each `verified` row's backticked acceptance under `pipefail`, rejects no-op acceptances, resolves the bare paths cited in that row's own `**Unit N**` block, fails any `verified` row backed by nothing outside your prose, and signs the ledger with a verdict-free receipt. Those commands come from the ledger, so read the local [SECURITY.md](SECURITY.md) before checking a ledger you did not write, or set `AGENTS_DISCIPLINE_SKIP_RERUN=1` to check structure only. Read [references/ledger-discipline.md](references/ledger-discipline.md) before marking any row `verified`.
 
 The integration pass is yours too: interfaces match, tests pass together, nothing outside the declared scope changed.
 
