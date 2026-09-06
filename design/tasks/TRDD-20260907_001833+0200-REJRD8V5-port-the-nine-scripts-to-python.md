@@ -58,9 +58,10 @@ revert. If no mutation isolates a row, that row does not earn its place.
    own option surface (`maxBytes`, `openFlags`, `label`, `stableSnapshot`) and its
    non-creating/non-truncating flag assertion. The Windows fstat-bracketing branch is
    unreachable on this machine — port it, mark it UNWITNESSED, do not pretend otherwise.
-2. **`claim_leases` / `release_leases` / `read_leases` / `sleep`** — the lease trio plus the
-   one-liner. `globs_overlap` is already their conflict predicate, so this is the layer that
-   finally EXERCISES it against real lock files.
+2. **`claim_leases` / `release_leases` / `sleep`** — the two gate-check actually imports,
+   plus the one-line alias. `globs_overlap` is already their conflict predicate, so this is
+   the layer that finally EXERCISES it against real lock files. `read_leases` is NOT imported
+   by gate-check and is optional; do it with the other two only if convenient.
 3. **`gate-check.mjs`** (950 lines) — last, because it consumes all of the above.
 
 **Measured — and the claim is narrower than it first read.** `gate-check.mjs` imports **23**
@@ -81,7 +82,9 @@ MULTILINE reduces to "the name appears at column 0 on any line", which a module-
 re-assignment would satisfy. It can only produce a false PRESENT, never a false MISSING, so the
 4 is a lower bound on what is done. `MAX_CHECK_OUTPUT_BYTES` and `MAX_AUTOMATIC_EVIDENCE_CHARS`
 rested entirely on that loose regex and have since been **re-verified soundly** (`gates.py:605`
-and `:606`), so the count of 4 stands. Its own 30-odd private functions are a separate body of work: `parseArgs`,
+and `:606`), so the count of 4 stands.
+
+Beyond the library, `gate-check.mjs`'s OWN ~30 private functions are a separate body of work: `parseArgs`,
 the approval store (`recordApproval`, `approvalExists`, `readApprovalFile`,
 `validatedApprovalDir`, `assertPrivateApprovalEntry`), the runner (`runCheck`, `runRolling`,
 `safeRegexMatch` and its Worker), and evidence rewriting (`insertOrUpdateEvidence`). It also
