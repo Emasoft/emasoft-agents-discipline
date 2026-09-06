@@ -30,7 +30,7 @@ MAX_STATE_BYTES = 8 * 1024 * 1024
 STATES = frozenset(("open", "sealed", "complete", "abandoned"))
 
 _CONTROL = re.compile(r"[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]")
-# `[\s﻿]`, not `\s`. MEASURED over every plausible whitespace code point: of the four where
+# `[\sU+FEFF]`, not `\s`. MEASURED over every plausible whitespace code point: of the four where
 # JS and Python disagree, three (U+0085, U+001C, U+001F) are replaced by the CONTROL pass before
 # the collapse ever sees them, and exactly one -- U+FEFF -- reaches it. JS calls it whitespace,
 # Python does not, and CONTROL does not cover it, so a diagnostic containing a BOM would collapse

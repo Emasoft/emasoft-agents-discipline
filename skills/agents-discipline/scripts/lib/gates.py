@@ -17,7 +17,7 @@ import time
 # `.trim()` is NOT `str.strip()`: the sets differ in both directions (U+FEFF one way, the five
 # separators U+001C-U+001F and U+0085 the other). Every `.trim()` in the gates.mjs half is ported
 # through this helper rather than str.strip(); see jsapi.js_trim for the measured sets.
-from jsapi import js_trim  # noqa: E402  # type: ignore[import-not-found]
+from jsapi import js_length, js_slice, js_trim  # noqa: E402  # type: ignore[import-not-found]
 
 AGENTS_DISCIPLINE_DIR = ".agents-discipline"
 LOCK_DIR = os.path.join(AGENTS_DISCIPLINE_DIR, "locks")
@@ -552,6 +552,74 @@ def automatic_evidence_prefix(definition_digest):
     if not _DIGEST_HEX_RE.match("" if not definition_digest else str(definition_digest)):
         raise ValueError("automatic evidence needs a full lowercase SHA-256 definition digest")
     return "automatic-evidence=v1; definition-sha256=" + definition_digest + ";"
+
+
+# `\Z`, not `$`: JS `$` does not match before a trailing newline, so `"pending\n"` is HUMAN
+# evidence to the oracle and would be "pending" to a `$`-spelled port -- a gate the oracle calls
+# met-by-a-human becomes an unmet-no-evidence gate. re.ASCII with re.IGNORECASE for the same
+# reason the id patterns carry it: JS `i` on an ASCII pattern folds ASCII, Python's folds Unicode.
+_PENDING_RE = re.compile(r"^pending\Z", re.IGNORECASE | re.ASCII)
+
+# `.` is NOT Python's `.`: JS excludes \n \r U+2028 U+2029, Python excludes only \n. Spelled as a
+# class so `shell=\r` is rejected in both. Everything else here is ASCII-only by construction, so
+# the \d-vs-Unicode trap cannot fire -- the digits are written [0-9] rather than \d for that.
+_AUTOMATIC_SUCCESS_RE = re.compile(
+    r"^ exit=0; EXPECT=matched; output-sha256=[a-f0-9]{64}; "
+    r"output-bytes=(0|[1-9][0-9]{0,6}); shell=[^\n\r"
+    # chr(), because writing these two as CHARACTERS puts raw U+2028/U+2029 bytes in this
+    # file -- which is what the first version did. An invisible-character scan I ran over
+    # this very line reported it clean, so a scan is not a substitute for not writing them.
+    + chr(0x2028) + chr(0x2029) + "]"
+)
+
+
+def classify_gate_evidence(gate):
+    """Port of classifyGateEvidence: pending | automatic-current | automatic-stale | human."""
+    raw = gate.get("evidence") if isinstance(gate, dict) else None
+    # `String((gate && gate.evidence) || "")` coerces every FALSY value to "" -- 0 and False
+    # included -- while an explicit null is handled by the branch before it. Both land on "".
+    evidence = "" if raw is None or not raw else str(raw)
+    if evidence == "" or _PENDING_RE.match(evidence):
+        return "pending"
+    definition_digest = gate_definition_digest(gate)
+    if definition_digest is not None:
+        prefix = automatic_evidence_prefix(definition_digest)
+        # js_slice/js_length, not [len:] and len(): the oracle measures BOTH the slice offset and
+        # the 900 bound in UTF-16 code units. An evidence string carrying astral characters is
+        # therefore cut at a different point and measured at a different length by a naive port,
+        # and the verdict this function returns decides whether a gate counts as MET.
+        deciding = js_slice(evidence, js_length(prefix))
+        success = _AUTOMATIC_SUCCESS_RE.match(deciding)
+        if (js_length(evidence) <= MAX_AUTOMATIC_EVIDENCE_CHARS
+                and evidence.startswith(prefix)
+                and success and int(success.group(1)) <= MAX_CHECK_OUTPUT_BYTES):
+            return "automatic-current"
+    if evidence.startswith("automatic-evidence=") or evidence.startswith("exit=0; shell="):
+        return "automatic-stale"
+    return "human"
+
+
+def gate_state(gate, abandoned):
+    """Port of gateState. `abandoned` is a dict here and a Map in the oracle; both are `in`."""
+    if gate["id"] in abandoned:
+        return "abandoned"
+    if not gate.get("checked"):
+        return "unmet"
+    evidence = classify_gate_evidence(gate)
+    runnable = gate_definition_digest(gate) is not None
+    if runnable:
+        return "met" if evidence == "automatic-current" else "stale-unmet"
+    if evidence == "pending":
+        return "unmet-no-evidence"
+    if evidence in ("automatic-current", "automatic-stale"):
+        return "stale-unmet"
+    return "met"
+
+
+def tail(output, max_chars=240):
+    """Port of tail: the last two non-blank lines, joined, capped at `max` UTF-16 code units."""
+    lines = [t for t in (js_trim(line) for line in re.split(r"\r?\n", str(output))) if t]
+    return js_slice(" | ".join(lines[-2:]) or "(no output)", 0, max_chars)
 
 
 # ---------------------------------------------------------------------------------------------
