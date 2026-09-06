@@ -92,6 +92,13 @@ def build(variant, root):
         elsewhere = mk(os.path.join(root, "elsewhere"))
         mk(os.path.join(elsewhere, "api"))
         link(elsewhere, os.path.join(root, AD))
+    elif variant == "dangling-state-link":
+        # .agents-discipline is a symlink to NOTHING. This is the only shape that separates
+        # existsSync (FOLLOWS the link => false) from an lstat-based presence test (=> true),
+        # and it exists because a mutation of exists -> lexists reddened NOTHING against the
+        # other six variants: state-is-a-symlink points at a real directory, where both
+        # answer true. A variant added because a mutation escaped, not because it looked tidy.
+        link(os.path.join(root, "no-such-target"), os.path.join(root, AD))
     elif variant == "empty":
         pass
     else:
