@@ -321,10 +321,19 @@ for (let d = runCwd; ; d = nodePath.dirname(d)) {
 const ALWAYS_TRUE =
   /^(?:(?:\/(?:usr\/)?bin\/)?(?:true|echo|printf|pwd|sleep)(?:\s+[^&|;]*)?|:|command\s+true|exit\s+0)$/i;
 
-function isNoopAcceptance(raw) {
+// The three operators have THREE DIFFERENT status rules, and collapsing any two of them is
+// how the previous two versions of this leaked:
+//   `;`   only the LAST status survives  -> `false; true` exits 0
+//   `||`  ANY always-true link forces 0  -> `true || pytest` AND `pytest || true`
+//   `&&`  every link must hold           -> `echo ok && pytest -q` is honest
+// A single `split(/&&|;/)` treated `;` as a conjunction, so `pytest -q; true` -- the same
+// always-green trick as `|| true`, with more natural punctuation -- ran and certified a row.
+// Measured before this fix: `false; true` re-ran and PASSED.
+function isNoopAcceptance(raw, depth = 0) {
+  // Bounded recursion: the input is untrusted ledger text.
+  if (depth > 8) return false;
   let s = String(raw).trim();
   // `( exit 0 )`, `{ true; }` and a trailing `;` are pure syntax around the same command.
-  // Bounded rather than `while`: peeling is driven by untrusted ledger text.
   for (let i = 0; i < 4; i++) {
     const before = s;
     s = s.replace(/;+\s*$/, "").trim();
@@ -333,14 +342,29 @@ function isNoopAcceptance(raw) {
     if (s === before) break;
   }
   if (!s) return false;
-  // `X || true` exits 0 whatever X does, so the guarantee comes from the RIGHT side. This
-  // must be tested BEFORE any every-link rule: `pytest -q || true` has a real left half and
-  // would otherwise look like an honest command.
+
+  // `;` binds loosest, so split it first and judge ONLY the last command.
+  const semi = s.split(";").map((p) => p.trim()).filter(Boolean);
+  if (semi.length > 1) return isNoopAcceptance(semi[semi.length - 1], depth + 1);
+
   const orParts = s.split("||").map((p) => p.trim());
-  if (orParts.length > 1 && orParts.slice(1).some((p) => ALWAYS_TRUE.test(p))) return true;
-  // Otherwise it is a no-op only when EVERY link is one. `echo ok && pytest -q` propagates
-  // pytest's exit status, so it is a legitimate chained verifier and must pass.
-  return s.split(/&&|;/).map((p) => p.trim()).filter(Boolean).every((p) => ALWAYS_TRUE.test(p));
+  if (orParts.length > 1) {
+    // `&&` and `||` share precedence and associate left, which a flat split cannot model:
+    // `true || pytest && npm test` is `(true || pytest) && npm test` and DOES run npm test.
+    // So when both operators are present, fall back to the strictly sound test -- every
+    // alternative always-true -- rather than the `some` rule. That misses `a && b || true`,
+    // a real cheat, and the miss is deliberate: a false positive here reddens honest ledgers,
+    // and this function has already shipped two of those. Named as a known ceiling.
+    const mixed = orParts.some((p) => p.includes("&&"));
+    return mixed
+      ? orParts.every((p) => isNoopAcceptance(p, depth + 1))
+      : orParts.some((p) => isNoopAcceptance(p, depth + 1));
+  }
+
+  const andParts = s.split("&&").map((p) => p.trim()).filter(Boolean);
+  if (andParts.length > 1) return andParts.every((p) => isNoopAcceptance(p, depth + 1));
+
+  return ALWAYS_TRUE.test(s);
 }
 
 const reran = [];

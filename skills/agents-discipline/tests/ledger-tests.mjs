@@ -64,13 +64,23 @@ const cases = [
     file: "tests/fixtures/noop-acceptance.md",
     want: 1,
     rerun: true,
-    artifacts: ["reports/noop-1.txt", "reports/noop-2.txt", "reports/noop-3.txt", "reports/noop-4.txt", "reports/noop-5.txt"],
+    artifacts: ["reports/noop-1.txt", "reports/noop-2.txt", "reports/noop-3.txt", "reports/noop-4.txt", "reports/noop-5.txt", "reports/noop-6.txt", "reports/noop-7.txt"],
     expect: [
       "#1 $ : -> no-op acceptance",
       "#2 $ exit 0 -> no-op acceptance",
       "#3 $ /bin/true -> no-op acceptance",
       "#4 $ pytest -q || true -> no-op acceptance",
       "#5 $ ( exit 0 ) -> no-op acceptance",
+      // #6 is the mirror of #4 and was missed by the first parser: an always-true link
+      // FIRST short-circuits, so nothing after it ever runs. Equally always-green, and
+      // more brazen. It is here rather than only in a truth table because the truth table
+      // exercises an EXTRACTED COPY of the function; this row exercises the shipped path,
+      // through the same table parsing and `\|` unescaping a real ledger goes through.
+      "#6 $ true || pytest -q -> no-op acceptance",
+      // #7 is the third operator, and the one a flat `split(/&&|;/)` got backwards: in a `;`
+      // chain only the LAST status survives, so `false; true` exits 0. Measured before the
+      // fix, this row RE-RAN AND PASSED -- a guaranteed-green acceptance certifying a unit.
+      "#7 $ false; true -> no-op acceptance",
     ],
   },
   {

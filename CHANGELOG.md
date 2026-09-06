@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Breaking Changes
 
-- The optional Claude Code Stop hook is removed: `scripts/stop-hook.mjs`, `scripts/install-hooks.mjs`, and the `--bind` scope-binding action are gone. If you previously ran the installer, Claude Code settings (`.claude/settings.local.json`, `.claude/settings.json`, or your user settings) still hold a hook entry pointing at the deleted script. Open that settings file and remove the `agents-discipline`-managed Stop hook entry by hand; also delete any leftover `.agents-discipline-hook-state.json` file.
+- The optional Claude Code Stop hook is removed: `scripts/stop-hook.mjs`, `scripts/install-hooks.mjs`, and the `--bind` scope-binding action are gone. If you previously ran the installer, Claude Code settings (`.claude/settings.local.json`, `.claude/settings.json`, or your user settings) still hold a hook entry pointing at the deleted script. Open that settings file and remove the `agents-discipline`-managed Stop hook entry by hand; also delete any leftover `.agents-discipline-hook-state.json` file. The per-scope `session` file under `.agents-discipline/<scope>/` is now written and read by nothing, and can be deleted too.
+
+- **`ledger-check.mjs` now rejects acceptances that cannot fail.** A ledger that passed yesterday can fail today. The scan previously matched only a command's first word, so every always-green idiom escaped it: `pytest -q || true`, `true || pytest -q`, `false; true`, `exit 0`, `( exit 0 )`, `:` and `/bin/true`. Each of those exits 0 whatever the code does, so a row backed by one was never verified. Rewrite the acceptance as a command that can actually fail. `echo ok && pytest -q` is still accepted — chaining a real verifier is not a cheat.
+
+- **A symlinked `DELEGATION.md` is now refused** (`ledger must be one unchanged regular single-link file`). The checker reads through `readStableRegularFile`, as every other reader here already did, so it does not follow symlinks or hard links, blocks on a FIFO, or read past 8 MiB. Pass the real path.
+
+### Fixes
+
+- `ledger-check.mjs` no longer flags `test -f x`, `[ -f x ]`, `ls dist/*.js` or `cat f` as no-op acceptances. They exit 1 when the thing is missing, so they are weak checks, not guaranteed passes, and rejecting them failed honest ledgers.
+- Evidence attribution is per row: an artifact cited under one `**Unit N**` block no longer backs any other row. One genuinely-checked unit used to carry every invented one.
+- In unbackticked prose, a single-character extension (`main.c`, `foo.h`, `analysis.R`) no longer reads as a filename — it was also matching things like `U.S.A.`. Cite those paths in backticks, which is unaffected.
 
 ## [1.0.1] — 2026-09-06
 
