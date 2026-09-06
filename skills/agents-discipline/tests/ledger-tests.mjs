@@ -150,6 +150,35 @@ const cases = [
     expect: ["evidence:    MISSING", "UNBACKED verified rows"],
   },
   {
+    // T6. An UNESCAPED pipe inside an Acceptance command adds a column. The only shape check
+    // used to be `cells.length < 6`, which a 7-cell row passes -- so `Status` was read from
+    // `cells[5]`, the wrong cell, and the row parsed silently as whatever the shift produced.
+    name: "an unescaped pipe is malformed, not silently shifted",
+    file: "tests/fixtures/column-shift.md",
+    want: 1,
+    expect: ["7 cells but the header declares 6", "escape a literal pipe"],
+  },
+  {
+    // T7. The mirror: widening the header leaves an old row short, and every added column
+    // read as `undefined` forever with no error. The two causes need opposite fixes, so the
+    // message must name the direction -- asserting that here is what keeps them apart.
+    name: "a row missing the header's new columns is malformed",
+    file: "tests/fixtures/short-row.md",
+    want: 1,
+    expect: ["6 cells but the header declares 8", "missing 2 trailing cell(s)"],
+    reject: ["escape a literal pipe"],
+  },
+  {
+    // T8. Regression guard for the widening itself: `Gates` and `Attempts` are APPENDED after
+    // `Status` precisely so `cells[0..5]` keep their meaning. Inserting either before `Status`
+    // would shift it to `cells[7]` and every row would parse its gate path as its status.
+    name: "a widened 8-column ledger still reads status from cells[5]",
+    file: "tests/fixtures/widened-columns.md",
+    want: 0,
+    expect: ["verified:    2"],
+    reject: ["malformed"],
+  },
+  {
     // The read used to be a plain readFileSync: no size cap, no regular-file assertion,
     // no O_NOFOLLOW, while every other reader here goes through readStableRegularFile.
     // Measured against the pre-fix script, this argument HUNG the process indefinitely
