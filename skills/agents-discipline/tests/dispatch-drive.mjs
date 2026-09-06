@@ -78,9 +78,15 @@ await attempt("default clock", async () => {
 // reaches it, so neither the warning text nor safeDiagnostic on that path was exercised.
 mkdirSync(dispatchStatePath(root, "warn").replace("/dispatch.json", ""), { recursive: true });
 symlinkSync("/nonexistent-target", dispatchStatePath(root, "warn").replace("dispatch.json", "status.log"));
+// The full REDACTED TEXT, not a boolean and not an errno. A review predicted this would fail
+// with ELOOP and that the two runtimes would render that differently, so the row should record
+// the errno name -- MEASURED, and that is wrong: append_status's own lstat guard rejects the
+// symlink BEFORE the O_NOFOLLOW open, so the failure is an AUTHORED message and both runtimes
+// emit it byte for byte. Comparing the text is therefore strictly stronger than either
+// alternative, and a `warned: true` boolean would have hidden a real divergence if one appeared.
 await attempt("logWarning", async () => {
   const r = await up({ scope: "warn", wave: "w1", action: "open", leaves: ["a"], now: T(1) });
-  return { state: r.wave.state, warned: r.logWarning.startsWith("state transition committed") };
+  return { state: r.wave.state, warning: redact(r.logWarning) };
 });
 
 // 3. Reporting.

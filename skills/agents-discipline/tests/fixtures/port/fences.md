@@ -18,7 +18,7 @@ text
   EXPECT: ok
   EVIDENCE: pending
 ```
-inside the fence that line opened
+- [ ] sneaky4: but the line above DOES open one, so this is swallowed
 ```
 
 - [ ] real: a genuine gate, outside every fence

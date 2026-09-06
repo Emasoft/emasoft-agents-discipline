@@ -102,9 +102,9 @@ os.symlink("/nonexistent-target",
 
 
 def _log_warning():
+    # The full redacted TEXT -- see the oracle driver for why this is comparable at all.
     result = up({"scope": "warn", "wave": "w1", "action": "open", "leaves": ["a"], "now": T(1)})
-    return {"state": result["wave"]["state"],
-            "warned": result["logWarning"].startswith("state transition committed")}
+    return {"state": result["wave"]["state"], "warning": redact(result["logWarning"])}
 
 
 attempt("logWarning", _log_warning)

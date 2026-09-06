@@ -470,11 +470,16 @@ _classes = {
     # have kept it green while the coverage silently vanished — the same defect as "a checked
     # box" meaning "any gate at all". This pins what the state machine must DO: a gate-shaped
     # line inside a fence is not a gate, and a real one after it still is.
+    # PRESENT in the source and ABSENT from the gates. The previous spelling asked only that no
+    # gate be NAMED sneaky1/sneaky2, which every fixture without one satisfies -- absence of
+    # evidence standing in for evidence of absence, the same defect as "a checked box" meaning
+    # "any gate at all". Now deleting the sneaky lines fails it, renaming them fails it, and
+    # letting them escape their fence fails it.
     "a fence that swallows gate-shaped lines": any(
-        any(g["id"] == "real" for g in d["gates"])
-        and not any(g["id"].startswith("sneaky1") or g["id"].startswith("sneaky2")
-                    for g in d["gates"])
-        and any("```" in line for line in d["lines"])
+        all(any("- [ ] " + name + ":" in line for line in d["lines"])
+            for name in ("sneaky1", "sneaky2", "sneaky4"))
+        and not any(g["id"] in ("sneaky1", "sneaky2", "sneaky4") for g in d["gates"])
+        and any(g["id"] == "real" for g in d["gates"])
         for d in _all),
     "a duplicated OWNS entry": any(len(d["owns"]) != len(set(d["owns"])) for d in _all),
 }
@@ -629,6 +634,35 @@ try:
 finally:
     shutil.rmtree(_dj, ignore_errors=True)
     shutil.rmtree(_dp, ignore_errors=True)
+    # The `default clock` row above pins the SHAPE, which is real coverage (a wrong format fails
+    # it) but NOT the bug it was added for. MEASURED: the buggy _iso_now -- seconds from a UTC
+    # clock, milliseconds from a SECOND, LOCAL-time call -- produces a stamp matching the same
+    # regex, so that row would have passed on it. The defect is a RACE (the two calls can
+    # straddle a second), and a race is not observable from one sample.
+    #
+    # What IS deterministic is the call COUNT. One clock read, or the stamp is assembled from
+    # two instants. This is port-only: the oracle's toISOString has nothing to compare against.
+    _clock_probe = r"""
+import datetime, sys
+sys.path.insert(0, %r)
+import dispatch
+calls = []
+real = datetime.datetime.now
+class Counting(datetime.datetime):
+    @classmethod
+    def now(cls, tz=None):
+        calls.append(tz)
+        return real(tz)
+dispatch.datetime.datetime = Counting
+stamp = dispatch._iso_now()
+dispatch.datetime.datetime = datetime.datetime
+print(f"{len(calls)}|{stamp}|{calls}")
+""" % (LIB,)
+    _cp = subprocess.run([sys.executable, "-c", _clock_probe], capture_output=True, text=True,
+                         timeout=30)
+    _count = _cp.stdout.split("|")[0] if _cp.stdout else ""
+    report(_count == "1", "dispatch: _iso_now reads the clock EXACTLY once (not shape — count)",
+           (_cp.stdout.strip() or _cp.stderr.strip())[:200])
 completed.append("dispatch")
 
 # INLINE, before the exit, so a missing section actually FAILS the run. The atexit hook alone
