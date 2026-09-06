@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T01:40:41+0200
+updated: 2026-09-07T01:49:13+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -143,6 +143,22 @@ which is the sentence a reader would have trusted). Both halves measured: a degr
 leaves the oracle-derived counts untouched, so the gate passes and the DIFF fires; a degraded
 SEQUENCE makes both sides agree, so the diff passes and the GATE fires (`VACUOUS: ok=3
 conflicted=8 released=1`).
+
+### R9-R10 — the harness got a SELF-TEST, and it was vacuous on arrival
+`tests/mutate-probe-selftest.sh` (e2cc532) is the committed gate for the probe harness: it
+exits non-zero, and each of its four assertions is shown capable of failing by reverting the
+guard it covers. Run it after ANY edit to `mutate-probe.sh`.
+
+It did not start that way. **I shipped it having demonstrated ONE of four controls and
+generalised** — the exact standard this document imposes on the port, applied for ten rounds
+and then skipped on my own test file. Measured afterwards: case 4 reddened for nothing,
+because the runner slept on BOTH the baseline and post-mutation calls while the kill landed at
+1s, so every interrupt hit the BASELINE and restore() copied an unmodified file over an
+unmodified one. Fixed with a fast-first/slow-second runner.
+
+Also R9-R10: RESTORE FAILED and INTERRUPTED were on stderr, which every invocation filters
+with `2>/dev/null` — the two messages that exist to prevent a silent wrong state were being
+swallowed by the redirect built to suppress noise. Both now on stdout.
 
 ### KNOWN, CONFIRMED, AND DELIBERATELY NOT FIXED — organizational, not factual
 Two findings below were CONFIRMED by review and left in place. Recording the decision, because
