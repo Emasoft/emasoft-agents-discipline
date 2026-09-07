@@ -91,13 +91,27 @@ export const CASES = {
   // What that same line DOES produce is two shapes no other row covers, and both are three-way
   // distinct in the hashed bytes ("" vs null vs a real string):
   "empty path (unset PATH becomes the empty string, not null)": oracle({ path: "" }),
-  // `null` from the ternary's other arm. LABELLED AS A SERIALIZER CONTROL, NOT AS A REACHABLE
-  // PAYLOAD, because the reachability claim I first wrote here does not survive measurement:
-  // gate-check.mjs:165 is `if (opt.status && opt.approve) failUsage(...)` -- measured, exit 2 --
-  // so --status never produces an approval FILE. The signature computation at :736 is not
-  // gated on opt.approve, so the null payload is probably still hashed under --status, but I
-  // have NOT proven that line executes there and am not asserting it.
-  // What the row does prove either way: null, "" and absent are three DISTINCT digests
+  // `null` from the ternary's other arm. A SERIALIZER CONTROL, and now for a MEASURED reason
+  // rather than a hedge -- the third version of this comment, because the first two each
+  // asserted more than had been checked:
+  //   v1 "the --status arm"        -- claimed --status reaches this payload. Wrong: :165 is
+  //                                   `if (opt.status && opt.approve) failUsage(...)`, exit 2,
+  //                                   so --status never produces an approval FILE.
+  //   v2 "probably still hashed"   -- retreated to a guess, since :736's
+  //                                   approvalOracleSignature is not gated on opt.approve.
+  //                                   Also wrong, and a guess in a comment is read as a finding.
+  //   v3 (this one) MEASURED       -- :721 is
+  //                                       if (opt.status || (!opt.reverify && state === "met"))
+  //                                         continue;
+  //                                   and it precedes the pending.push at :729 whose :736
+  //                                   computes the signature. Under --status the loop CONTINUES.
+  //                                   The signature is NEVER computed. Settled by reading the
+  //                                   control flow, which is what both earlier versions skipped.
+  //
+  // So the null payload is BUILT (:324-325 assign null) and never HASHED. This row therefore
+  // models a shape the serializer must handle, not a digest the oracle ever emits -- which is
+  // exactly what "serializer control" means, and now it is true rather than defensive.
+  // What the row proves: null, "" and absent are three DISTINCT digests
   // (measured 99c12694 / 4eb17f71 / 2535b409), so a port normalizing between them reddens.
   "null path (serializer control -- null is not empty-string)": oracle({ path: null }),
   // `shell` HAS THE SAME TERNARY and the corpus had the same gap -- every row carried
@@ -107,10 +121,16 @@ export const CASES = {
   // question the previous row's failure taught: `path`'s definition was read, `shell`'s and
   // `timeoutSeconds`' were inherited from whoever wrote this driver, unexamined.
   //
-  // REACHABILITY MEASURED, not assumed -- the reason the row it replaced was wrong. `--status`
-  // does not exit before the payload is built: approvalOracleSignature(ledger.file, gate) is
-  // unconditional at :736, and running `gate-check.mjs --status` on a one-gate ledger prints
-  // the report and exits 0 rather than short-circuiting. So this shape is emitted in practice.
+  // THIS BLOCK ONCE READ "REACHABILITY MEASURED, not assumed", and it was the worst comment in
+  // the file: it claimed :736's approvalOracleSignature was "unconditional", wore the word
+  // MEASURED, and was false. :721 gates the whole push --
+  //     if (opt.status || (!opt.reverify && state === "met")) continue;
+  // -- so under --status the signature is never computed. What I had actually measured was that
+  // `--status` exits 0 on a one-gate ledger; I then inferred the payload was hashed from the
+  // fact that the program did not exit EARLY, which does not follow. A label asserting its own
+  // rigour is the one a reader will not re-check, so it buys the least scrutiny where the claim
+  // needed the most.
+  // The row stands unchanged as a SERIALIZER CONTROL for the reason given above.
   "null shell (serializer control -- same ternary as path)": oracle({ shell: null }),
   "both ambient fields null (serializer control)": oracle({ shell: null, path: null }),
   // Characters JSON MUST escape, where the two escape tables can differ.

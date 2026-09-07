@@ -76,6 +76,9 @@ CASES = {
     "null path (serializer control -- null is not empty-string)": oracle(path=None),
     # See digest-drive.mjs: `shell` carries the SAME `opt.status ? null : ...` ternary
     # (gate-check.mjs:324), and the corpus had the same gap -- every row "/bin/bash", none null.
+    # Both rows are SERIALIZER CONTROLS: gate-check.mjs:721 continues the loop under --status
+    # before the :729 push whose :736 computes the signature, so the null payload is BUILT and
+    # never HASHED. Measured; two earlier versions of the .mjs comment claimed otherwise.
     "null shell (serializer control -- same ternary as path)": oracle(shell=None),
     "both ambient fields null (serializer control)": oracle(shell=None, path=None),
     "control chars": oracle(check="a" + chr(1) + "b" + chr(31) + "c"),

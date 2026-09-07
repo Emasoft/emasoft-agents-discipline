@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T05:33:18+0200
+updated: 2026-09-07T05:36:46+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -16,11 +16,30 @@ scope: project
 **WHERE THE PORT ACTUALLY IS (`d4a1acc`, and this line is the one to trust over anything older
 in this file).** `gate_check.py` is 851 lines against a 950-line oracle. `PORT_INCOMPLETE_EXIT`
 (90) fires from exactly ONE site, `:847`, now standing at `gate-check.mjs:775` — up from `:295`.
-Ported since: ledger loading, gate selection, `resolve_shell` (`:550`, which was the rank-1
-unported hazard because it feeds the approval payload's `shell` field), and the full
-approval-classification loop with a real token store. NOT ported: CHECK execution (spawning
+Ported since: ledger loading, gate selection, `resolve_shell` (`:550`), and the
+approval-classification loop with a token store. NOT ported: CHECK execution (spawning
 `lib/check-supervisor.mjs`, the regex Worker pool, process-tree teardown, per-check timeouts)
 and the final ledger/verdict tally.
+
+**`resolve_shell` — READ, not merely grepped, and the distinction is why this sentence exists.**
+`d4a1acc`'s message said it "landed, closing the rank-1 unported hazard" on the strength of a
+`grep -n "def resolve_shell"` hit. **A grep hit licenses "the name exists at line N" and nothing
+else** — a body of `return raw` satisfies it, and presence never retires a hazard; correctness
+does. Read afterwards against `gate-check.mjs:306-320`, it does hold up: same falsy-coalesce
+chain for `requested`, same `containsSeparator` test, `js_resolve`/`_js_join`/`js_json_stringify`
+rather than the Python conveniences, and `executable_candidates` uses `\Z` — **not `$`** — which
+is the correct translation of JS's end anchor and the same hazard the regex worker still carries
+as a KNOWN divergence. `os.path.isabs` is used where the oracle has `isAbsolute`; equivalent on
+POSIX, and `containsSeparator` already tests `"/"`, so it is redundant rather than wrong there.
+The `--status` guard is present and correct at `:535` (`shell`/`path_value`/`path_transcript` all
+`None`), matching the oracle's `:324-329` ternaries.
+
+**MEASURED: under `--status` the approval signature is NEVER computed.** `gate-check.mjs:721` is
+`if (opt.status || (!opt.reverify && state === "met")) continue;` and it precedes the
+`pending.push` at `:729` whose `:736` calls `approvalOracleSignature`. So the null `shell`/`path`
+payload is BUILT (`:324-325`) and never HASHED. This retires a question two earlier comment
+versions in `tests/digest-drive.mjs` got wrong in opposite directions — first asserting `--status`
+reached the payload, then hedging that it "probably" did.
 
 **THE GAP THAT ADVANCE CREATED, named here so it is not rediscovered as a surprise: nothing
 drives the new approval loop.** `gate-args-diff.sh` exercises `--approve` only as an ARGUMENT
@@ -140,19 +159,30 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > differential in this repo can reach it; these assertions are the only thing that can, and they
 > currently say nothing about `gate_check.py`.
 >
-> **NO LONGER BLOCKED — the reason this said "not yet" has expired (2026-09-07, `d4a1acc`).**
-> The paragraph below stood while the boundary was `gate-check.mjs:295`, which put the write path
-> past it, so the assertion would have failed for the honest reason that the code was absent.
-> **That is no longer true.** The boundary is now `:775` and `record_approval` exists at
-> `gate_check.py:704`, so a `write_atomic`/`with_file_lock` assertion against `gate_check.py`
-> would now be testing something real. The runtime-selector shape `run-tests.mjs` established in
+> **HALF-UNBLOCKED, and the halves are different claims (2026-09-07, `d4a1acc`; this paragraph
+> corrected the same day after review).** The deferral below rested on two conditions, and an
+> earlier version of this correction conflated them:
+>   1. **the code EXISTS** — now true. `record_approval` is at `gate_check.py:704`, the boundary
+>      moved `gate-check.mjs:295` → `:775`.
+>   2. **a run REACHES it** — **NOT established.** `PORT_INCOMPLETE_EXIT` still fires at `:847`,
+>      so every invocation terminates at 90. Whether a `--approve` run reaches `:704` first is a
+>      question about CALL ORDER, and `:704 < :847` is a fact about LEXICAL position — `:704` is
+>      a nested `def` inside `main`, so where it sits in the file says nothing about whether it
+>      is invoked. The first version of this paragraph wrote "the excuse expired" on the strength
+>      of the line-number comparison alone.
+>
+> So: a `write_atomic`/`with_file_lock` assertion is now worth ATTEMPTING, and may still fail for
+> the honest reason that nothing calls the code. **Establish (2) before writing the assertion**,
+> or a red result is unattributable. The runtime-selector shape `run-tests.mjs` established in
 > `e5578a3` is additive and applies here (the oracle's ASSERTIONS stay fixed; only which file is
 > read varies). The Python spellings are `write_atomic` / `with_file_lock`.
 >
-> **Recorded rather than done, and the distinction matters:** this is now a live TODO, not a
-> deferral with a standing excuse. A resuming session that reads the old wording would keep
-> deferring on grounds that stopped holding — which is the shape of a stale claim outliving its
-> measurement, the defect this file has caught three times in its own corpus.
+> **The correction is the lesson.** This paragraph was rewritten to warn against stale claims
+> outliving their measurement, and in the same edit asserted more than had been measured. Four
+> instances the same day (this, `resolve_shell` "landed", the `updated:` accusation, and the
+> `--status` reachability row) share one mechanism: **a `grep` hit or a line number licenses
+> "the name exists at line N" and nothing else** — not correctness, not reachability, not that a
+> hazard is retired.
 >
 > **⚠ THE REVIEW LOOP WENT SELF-SUSTAINING, AND THE COUNT IS THE ARGUMENT (2026-09-07).**
 > Of the ten commits `b525af2`..`33a3b3a`, exactly **ONE** advanced a ported script's behaviour
