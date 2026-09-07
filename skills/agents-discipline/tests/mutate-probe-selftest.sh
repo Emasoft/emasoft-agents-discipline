@@ -26,7 +26,14 @@ tmpdir=$(mktemp -d)
 target=$tmpdir/subject.py
 printf 'MARKER = "original"\n' > "$target"
 runner=$tmpdir/fast.sh
-printf '#!/bin/bash\necho "--- all identical ---"\n' > "$runner"; chmod +x "$runner"
+# The `DIVERGE` branch never fires -- $FORCE_DIVERGE is unset -- but it must be PRESENT, because
+# guard -1 refuses any runner whose script cannot emit the token, and a fixture that cannot is
+# not a stand-in for a real runner. Adding it is not gaming the guard: the predicate is "this
+# script CAN report divergence", and with the branch the fixture genuinely can. Without it, cases
+# 3 and 4 died at guard -1 before ever reaching the signal path they exist to test -- measured
+# when the guard moved to the top of the probe.
+printf '#!/bin/bash\n[ -n "${FORCE_DIVERGE:-}" ] && echo "DIVERGE  forced"\necho "--- all identical ---"\n' \
+  > "$runner"; chmod +x "$runner"
 # FAST on the first call, SLOW on the second. mutate-probe.sh runs the runner TWICE -- the
 # baseline, then the post-mutation run -- so a uniformly-slow runner puts any timed kill inside
 # the BASELINE, before the anchor check and before the mutation. That is the wrong path: the
@@ -34,7 +41,7 @@ printf '#!/bin/bash\necho "--- all identical ---"\n' > "$runner"; chmod +x "$run
 # unmodified file over an unmodified file, which no broken restore can fail. Measured: with a
 # uniformly-slow runner, breaking the restore entirely reddened NOTHING.
 slow=$tmpdir/slow-second.sh
-printf '#!/bin/bash\nn=$(cat %s/n 2>/dev/null || echo 0); echo $((n+1)) > %s/n\n[ "$n" = 0 ] || sleep 5\necho "--- all identical ---"\n' \
+printf '#!/bin/bash\nn=$(cat %s/n 2>/dev/null || echo 0); echo $((n+1)) > %s/n\n[ "$n" = 0 ] || sleep 5\n[ -n "${FORCE_DIVERGE:-}" ] && echo "DIVERGE  forced"\necho "--- all identical ---"\n' \
   "$tmpdir" "$tmpdir" > "$slow"; chmod +x "$slow"
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
@@ -74,5 +81,25 @@ check "SIGTERM exits 143 (128+15)" 143 $?
 # 4. The interrupt must leave the target RESTORED -- the whole point of the handler, and the
 #    reason case 3 must land in the MUTANT run: only there is there something to restore.
 check "target restored after signal" "$(printf 'MARKER = "original"\n')" "$(cat "$target")"
+
+# 5. GUARD -1: a runner that cannot emit DIVERGE must be REFUSED, not scored. Without this the
+#    verdict grep can only ever say NOTHING REDDENED, which is indistinguishable from "the
+#    mutation has no coverage" -- the false negative that hid a two-row catch for a whole turn.
+printf 'MARKER = "original"\n' > "$target"
+mute=$tmpdir/no-vocab.sh
+printf '#!/bin/bash\necho "--- all identical ---"\n' > "$mute"; chmod +x "$mute"
+bash "$PROBE" t "$target" 'original' 'mutated' "$mute" >/dev/null 2>&1
+check "runner with no DIVERGE emission exits 1" 1 $?
+check "target untouched by a refused probe" "$(printf 'MARKER = "original"\n')" "$(cat "$target")"
+
+# 6. THE VERDICT IS A SET DIFFERENCE, not a count. A runner carrying KNOWN divergences (green by
+#    its own exit status, as regex-worker-diff.sh deliberately is) must not award them to a
+#    mutation that did not cause them. This runner prints the SAME divergence before and after,
+#    so the correct verdict is NOTHING REDDENED; the pre-fix code scored it as a catch.
+noisy=$tmpdir/already-diverging.sh
+printf '#!/bin/bash\necho "DIVERGE  pre-existing case"\necho "--- 1 KNOWN ---"\nexit 0\n' \
+  > "$noisy"; chmod +x "$noisy"
+out=$(bash "$PROBE" t "$target" 'original' 'mutated' "$noisy" 2>&1 | tail -1)
+check "a baseline divergence is not awarded to the mutation" "t -> NOTHING REDDENED" "$out"
 echo "--- $( [ $fail = 0 ] && echo 'all identical' || echo 'SELF-TEST FAILURES ABOVE' ) ---"
 exit $fail

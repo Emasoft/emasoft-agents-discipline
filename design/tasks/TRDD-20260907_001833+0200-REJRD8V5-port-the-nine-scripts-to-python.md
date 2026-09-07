@@ -102,6 +102,39 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > sequel. The rule this yields: **a mutation result you did not personally observe is a
 > quotation, and must be attributed as one, never restated as a measurement.**
 >
+> **⚠ `mutate-probe.sh` ITSELF HAD A FALSE NEGATIVE AND A FALSE POSITIVE (2026-09-07). SCOPE,
+> MEASURED — my first statement of the blast radius was wrong in BOTH directions.**
+> - **FALSE NEGATIVE** — the verdict greps stdout for `^DIVERGE`, and the runner is arbitrary
+>   argv. Point it at `python-lib-checks.py` (which prints `FAIL <name>`) and a mutation that
+>   reddens two rows reports `NOTHING REDDENED`. Affects only non-`DIVERGE`-emitting runners,
+>   which **nothing before this session used** — I introduced it.
+> - **FALSE POSITIVE** — guard 0 asserted "not already diverging" via EXIT STATUS.
+>   `regex-worker-diff.sh` prints 7 `DIVERGE` lines and deliberately exits 0, so every probe
+>   against it inherited those 7. **Measured across all seven diff runners: it is the ONLY one
+>   with a non-zero baseline** (the other six are 0, so their absolute count equalled the
+>   delta). So the defect is confined to regex-worker probes — *today*. Any future runner
+>   adopting the same deliberate exit-0-while-diverging pattern inherits it.
+> - **I told the user "every REDDENS/NOTHING-REDDENED verdict in this task's history" was
+>   suspect. That over-claims:** most earlier controls were ad-hoc loops branching on the
+>   differential's EXIT CODE, never through this script, and their weakness is the separate
+>   crash-vs-divergence one recorded above. **And it under-claims where it matters:** the
+>   `regex-worker` control counts were already flagged unconfirmed for the exit-code reason, and
+>   are now **doubly** unconfirmed — a second, independent defect hits exactly them.
+> - The verdict is now a **SET DIFFERENCE over DIVERGE labels**, not a count and not a delta. A
+>   delta is silently wrong when a mutation FIXES one known divergence and INTRODUCES another:
+>   it nets to zero and reports `NOTHING REDDENED`. Healed divergences are reported separately
+>   rather than clamped away — a mutation making a known-divergent row agree is a finding about
+>   the port, not a null result.
+> - **The accept-predicate for a runner took three drafts, and draft 2 is the lesson:** it tested
+>   the baseline for `^(ok|DIVERGE) ` lines, derived from the two runners whose output I had just
+>   looked at — and **refused FOUR of the SEVEN committed diff runners**, measured before it
+>   shipped. *Never derive an accept-predicate from the samples in front of you without running
+>   it against the whole population.* (Draft 1 grepped the runner's SOURCE and matched a
+>   COMMENT. Draft 3 requires the token outside a comment: the seven runners score 1..8,
+>   `python-lib-checks.py` scores 0.)
+> - `mutate-probe-selftest.sh` now pins both guards (7 cases). The prior selftest **predated
+>   them and could not have caught either** — a selftest that predates a guard does not test it.
+>
 > **A CONTROL PROVES REACHABILITY. THE CORPUS DECIDES CORRECTNESS.** The digest serializer
 > computed the right JS float spelling with `_js_number` and then threw it away —
 > `json.loads(...)` back to a Python float, re-rendered by `json.dumps`. Wrong for exactly the

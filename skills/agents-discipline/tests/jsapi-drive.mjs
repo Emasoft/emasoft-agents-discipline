@@ -195,6 +195,21 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   //   grounded. A row costs one array entry; the rule exists to stop unbounded growth and false
   //   coverage claims, not to force deletion of a cheap probe.
   //
+  // WHAT THAT RULE STILL DOES NOT SUPPLY, said plainly rather than left for the next reader to
+  // discover: a STOPPING CONDITION for redundant rows. "Cheap" bounds nothing. The ~60 Unicode
+  // Nd blocks -- Devanagari U+0966, Bengali U+09E6, Thai U+0E50 -- each satisfy "cheap
+  // redundancy against a named hazard class" exactly as U+FF11 and U+06F4 do, and nothing here
+  // distinguishes 3 rows from 50. `["a//","b"]` leaned on a natural bound (its corpus has one
+  // such row); this class has none.
+  //
+  // It is the FIFTH resting place -- documentation, class isolation, cost, expressible
+  // mechanism, cheap redundancy. What genuinely changed is that the label is now HONEST: these
+  // rows are marked redundant instead of dressed as grounded, so a reader can discount them
+  // correctly. That is worth having and it is not the same as the recursion terminating.
+  // The one-line bound that would terminate it -- AT MOST ONE REDUNDANT SIBLING PER HAZARD
+  // CLASS -- is not adopted here, and the honest reason is that it would bite immediately: two
+  // siblings exist. Recorded as an open hole rather than closed by fiat or hidden by silence.
+  //
   // That is exactly how `["a//","b"]` is already treated in path-api-drive.mjs. Applying a
   // stricter rule here than there, over a spelling technicality (that clause needs a docstring
   // name, and non-ASCII cannot appear in one), was the inconsistency.

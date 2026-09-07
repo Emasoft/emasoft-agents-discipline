@@ -90,6 +90,17 @@ trap restore EXIT
 trap 'interrupted 2' INT
 trap 'interrupted 15' TERM
 
+# Guard -1, BEFORE guard 0 so a bad invocation costs no mutation and no runner call. The runner
+# must EMIT "DIVERGE" outside a comment; the verdict at the bottom is a set difference over
+# DIVERGE lines, so a runner that reports divergence any other way can only ever score NOTHING
+# REDDENED -- a false negative wearing the costume of a measurement. Full rationale, and the two
+# drafts of this guard that were wrong, at the verdict below.
+if ! grep -sqE '^[^#]*DIVERGE' "$@"; then
+  echo "$label -> PROBE FAILED (no runner script emits DIVERGE outside a comment; its"
+  echo "    NOTHING REDDENED would be a false negative. Use a *-diff.sh runner.)"
+  exit 1
+fi
+
 # Guard 0. A pre-existing divergence makes every subsequent probe a false positive, so the
 # harness must establish its own baseline rather than assume one.
 if ! "$@" >/tmp/mutate-baseline.out 2>&1; then
@@ -162,18 +173,42 @@ output=$("$@" 2>&1)
 # python-lib-checks.py contains the word DIVERGE once, in a COMMENT. Searching source text for
 # a string is the weak-predicate mistake this project keeps making -- a comment is not a
 # behaviour. The test has to be over what the runner PRINTS.
-if [ "$(printf '%s\n' "$baseline_out" | grep -cE '^(ok|DIVERGE) ')" = 0 ]; then
-  echo "$label -> PROBE FAILED (runner printed no 'ok'/'DIVERGE' lines, so the verdict grep"
-  echo "    below can only ever say NOTHING REDDENED. Use a *-diff.sh runner.)"
-  exit 1
-fi
+# DRAFT 2 of this guard tested the baseline for `^(ok|DIVERGE) ` lines and REFUSED FOUR OF THE
+# SEVEN committed diff runners -- discovery, gate-args, lease and tonumber print neither token
+# on a green run. Measured before it shipped. It was induction from the two runners whose output
+# I had just looked at, presented as a compatibility spec, and it would have broken more probes
+# than it protected. Never derive an accept-predicate from the samples in front of you without
+# running it against the whole population.
+#
+# The test that discriminates: the runner's script must EMIT the token, i.e. contain it outside
+# a comment. Measured across all eight candidates -- the seven *-diff.sh runners score 1..8,
+# python-lib-checks.py scores 0, which is the exact discrimination wanted. The plain source grep
+# of draft 1 scored python-lib-checks 1, on a COMMENT.
+# THE CHECK ITSELF RUNS AT THE TOP, before guard 0 -- a guard that refuses an invocation should
+# refuse it BEFORE mutating real source and running the runner twice. The rationale lives here,
+# next to the verdict it protects.
+#
+# THE LIMIT THIS DOES NOT CLOSE, restated because draft 2 pretended otherwise: emitting the
+# token somewhere is not proof the runner can OBSERVE the mutated code path. That still needs a
+# canary -- a mutation known to diverge, run once per batch -- and there still isn't one.
 # VARIANTS, not rows. These runners print one DIVERGE line per tree, and a corpus row is
 # identical in every tree -- so ONE divergence in a shared row reports as nine. Calling them
 # rows is how "reddens 9" got quoted forward as nine independent catches.
-# THE DELTA, not the count. See guard 0 above: a runner may carry known divergences and still
-# exit 0, and counting absolutely awards those to every probe.
-diverged=$(( $(printf '%s\n' "$output" | grep -cE '^DIVERGE') - baseline_diverged ))
-[ "$diverged" -lt 0 ] && diverged=0   # a mutation that FIXES a known divergence reddens nothing
+# THE SET DIFFERENCE, not the count and not the delta. See guard 0 above: a runner may carry
+# known divergences and still exit 0, so an ABSOLUTE count awards those to every probe. But a
+# DELTA is wrong too, and its failure is silent: a mutation that FIXES one known divergence and
+# INTRODUCES a different one nets to zero and reports NOTHING REDDENED while genuinely
+# reddening a row. DIVERGE lines carry their case name ("DIVERGE  JS named group (?<n>)"), so
+# the identifiers can be compared directly and no arithmetic can cancel.
+#
+# `comm -13` needs sorted input; the names are stable strings, so sorting is safe.
+printf '%s\n' "$output" | grep -E '^DIVERGE' | sort > /tmp/mutate-after.diverged
+printf '%s\n' "$baseline_out" | grep -E '^DIVERGE' | sort > /tmp/mutate-before.diverged
+new_diverged=$(comm -13 /tmp/mutate-before.diverged /tmp/mutate-after.diverged)
+diverged=$(printf '%s\n' "$new_diverged" | grep -cE '^DIVERGE')
+# A divergence the mutation REMOVED is not a catch, but it is not nothing either: it means the
+# mutant is closer to the oracle than the shipped code on that case, which is worth seeing.
+healed=$(comm -23 /tmp/mutate-before.diverged /tmp/mutate-after.diverged | grep -cE '^DIVERGE')
 crashed=$(printf '%s\n' "$output" | grep -cE '^(CRASH|BUILD-FAILED|VACUOUS)')
 # NO exit-code protocol for the verdicts. A 0/1/2/3 scheme was added here and then REMOVED:
 # nothing in this repo invokes this script, so the codes had no reader -- and the DIFFERS
@@ -191,10 +226,10 @@ if [ "$diverged" -gt 0 ]; then
   # addition and not the other, in the same file, was the inconsistency.
   # If you DO mutate a driver: DIVERGE then means the two drivers no longer match, NOT that an
   # implementation fix is load-bearing. The harness cannot tell those apart; you must.
-  echo "$label -> REDDENS ($diverged diverging variant(s)$([ "$crashed" -gt 0 ] && echo ", $crashed crash(es)"))"
+  echo "$label -> REDDENS ($diverged NEWLY diverging variant(s)$([ "$healed" -gt 0 ] && echo ", $healed healed")$([ "$crashed" -gt 0 ] && echo ", $crashed crash(es)"))"
 elif [ "$crashed" -gt 0 ]; then
   # A crash is NOT a catch: the mutant broke the harness, so the probe proved nothing.
   echo "$label -> INCONCLUSIVE (only crashes, $crashed) -- the mutant broke the runner"
 else
-  echo "$label -> NOTHING REDDENED"
+  echo "$label -> NOTHING REDDENED$([ "$healed" -gt 0 ] && echo " ($healed known divergence(s) HEALED -- the mutant is closer to the oracle here than the shipped code)")"
 fi
