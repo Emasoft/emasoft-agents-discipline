@@ -102,6 +102,23 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > sequel. The rule this yields: **a mutation result you did not personally observe is a
 > quotation, and must be attributed as one, never restated as a measurement.**
 >
+> **⚠ NEXT: `self-check.mjs`'s SOURCE-TEXT ASSERTIONS COVER ONLY THE ORACLE, AND THEY GUARD THE
+> ONE THING NO DIFFERENTIAL CAN.** `:190 :196-198 :203 :211 :334` read `scripts/gate-check.mjs`
+> by hardcoded path and assert it *contains* `writeAtomic` and `withFileLock`, and does *not*
+> filter arguments by index arithmetic. Those are structural invariants about the
+> implementation, not behaviour — which is exactly why they matter here: **a port that skipped
+> the lock passes every behavioural differential in a single-process test and corrupts under
+> concurrency.** The earlier risk ranking put timing/lifecycle third precisely because no
+> differential in this repo can reach it; these assertions are the only thing that can, and they
+> currently say nothing about `gate_check.py`.
+>
+> **DO NOT ADD THEM YET, and the reason is a real one rather than deferral:** the port's boundary
+> is `gate-check.mjs:295` and the write path is past it, so a `write_atomic`/`with_file_lock`
+> assertion against `gate_check.py` would fail today for the honest reason that the code is not
+> there. They land WITH the write path — the runtime-selector shape `run-tests.mjs` established
+> in `e5578a3` is additive and applies here too (the oracle's ASSERTIONS stay fixed; only which
+> file is read varies). The Python spellings are `write_atomic` / `with_file_lock`.
+>
 > **⚠ THE REVIEW LOOP WENT SELF-SUSTAINING, AND THE COUNT IS THE ARGUMENT (2026-09-07).**
 > Of the ten commits `b525af2`..`33a3b3a`, exactly **ONE** advanced a ported script's behaviour
 > — `7bcace8` (Number() accepting Unicode digits and PEP-515 underscores). One was a
