@@ -30,12 +30,40 @@ ledger**, so the section ported last had no coverage from the 8 runners at all.
 **Same-directory is mandatory** — a first attempt ran the two runtimes in separate temp dirs and
 showed two diffs (the approval token, and EVIDENCE's `cwd=`), both of which BIND to the path.
 The harness produced them, not the port.
-**The stale row is non-vacuous:** the fixture is built by running to green (box → `[x]`, automatic
-EVIDENCE written), then CHANGING the CHECK so the recorded `definition-sha256` no longer matches,
-and the oracle's output then contains "stale" — so the branch is entered, not skipped.
-**Still unexercised:** exit 3 (lease conflict — `lease-diff.sh` covers the lease machinery, not
-this exit path), concurrent ledger rewrites under the file lock, dispatch aggregation with real
-dispatch state, and ABANDON handling.
+
+> **TWO CORRECTIONS TO THE PARAGRAPH THAT STOOD HERE, both found by measuring a claim rather
+> than re-reading it. Neither changes a table row; both change what a row MEANS.**
+>
+> **1. The stale row did not test staleness, and its non-vacuity check could not have shown that
+> it did.** The fixture ran to green, then edited the CHECK before re-running — so the second run
+> READ the already-edited ledger, computed `definitionDigest` from that text, and the lock-time
+> re-read matched it. `staleResults` stayed EMPTY; the branch never ran. The guard offered was
+> `grep -c stale` = 1, and MEASURED the oracle emits that substring from three unrelated places
+> (the `stale-unmet` state literal `gate-check.mjs:842`, the ":888 evidence is stale or unbound"
+> report line, and the branch's own message), so with one gate every reading predicts exactly 1.
+> **A substring shared with a state label cannot discriminate a branch** — the third instance
+> this session of a guard satisfied by something other than the property it named.
+> The branch is a TOCTOU detector: it fires only when the ledger changes *during* the run. It is
+> now covered by **`tests/stale-diff.sh`**, whose CHECK is a script that rewrites its own ledger
+> and then succeeds — deterministic, no sleep, no background writer. CASE 2 is the control that
+> was missing: the identical fixture with a non-mutating CHECK must print NO stale message.
+> `mutate-probe.sh` confirms it reddens when the branch is disabled.
+>
+> **2. "exit 3 is still unexercised" was FALSE, and understated the suite.** `lease-diff.sh:87-95`
+> runs BOTH CLIs through claim/claim/release/release with `echo "exit=$?"` after each and diffs
+> the whole transcript, so the conflicting second claim compares the exit code directly.
+> MEASURED independently: oracle 0 then 3, port 0 then 3. The original sentence was written from
+> the runner's *design* ("driver pairs emit JSON") without opening the file, which was wrong about
+> this one — it has a CLI section added precisely because the drivers bypass `gate_check.py`.
+
+**Still unexercised**, revised: the `(stale result discarded)` label
+(`gate-check.mjs:925` / `gate_check.py:1374`) — it needs `staleResults` non-empty AND the
+reloaded gate to still read `met`, i.e. a concurrent writer landing VALID evidence for the new
+definition mid-run, which is a genuine race rather than a scripted mutation; concurrent ledger
+rewrites under the file lock; dispatch aggregation with real dispatch state; and ABANDON
+handling. Also NOT isolated by `stale-diff.sh`: the branch's three disjuncts are redundant for
+this fixture — a probe that disabled only the digest comparison stayed green because the
+approval-oracle signature detects the same edit.
 
 **WHERE THE PORT ACTUALLY IS (`d4a1acc`, superseded above; kept for the boundary history).** `gate_check.py` is 851 lines against a 950-line oracle. `PORT_INCOMPLETE_EXIT`
 (90) fires from exactly ONE site, `:847`, now standing at `gate-check.mjs:775` — up from `:295`.

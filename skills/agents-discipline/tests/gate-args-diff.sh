@@ -18,10 +18,18 @@
 # something other than the property it named.
 #
 #   reject_case  the argument layer MUST reject this. Asserts both exit 2 with byte-identical
-#                stdout and stderr. A port exit of 90 here is a MISSED VALIDATION.
-#   accept_case  the argument layer MUST pass this through. Asserts the port reaches 90, and
-#                that the oracle's own message is NOT one of the argument layer's -- which is
-#                what proves the oracle cleared it too, rather than assuming so.
+#                stdout and stderr.
+#   full_case    the argument layer MUST pass this through, and both programs then run to a
+#                deterministic exit. Asserts byte-identical (exit, stdout, stderr), and that
+#                the oracle's own message is NOT one of the argument layer's -- which is what
+#                proves the oracle cleared it too, rather than assuming so.
+#
+# THE PORTING-BOUNDARY SENTINEL IS GONE. Until the CHECK-execution port landed, the port exited
+# 90 wherever it stopped short, and the two halves keyed on that: accept_case asserted "the port
+# reached 90". Nothing emits 90 any more (verified: no exit-90 site remains in scripts/), so
+# accept_case could never have passed and every one of its vectors moved to full_case. It is
+# removed rather than kept as a no-op -- a helper that cannot fire is a green row waiting to be
+# miscounted as coverage.
 #
 # The accept half is not decoration: without it every vector could be rejected by the port for
 # the wrong reason and the suite would still be green.
@@ -44,7 +52,7 @@ ORACLE="$HERE/../scripts/gate-check.mjs"
 PORT="$HERE/../scripts/gate_check.py"
 export PYTHONDONTWRITEBYTECODE=1
 
-# Every message gate-check.mjs:85-179 can emit. Used ONLY by accept_case, to prove the oracle
+# Every message gate-check.mjs:85-179 can emit. Used ONLY by full_case, to prove the oracle
 # left the argument layer rather than inferring it from an exit code.
 ARG_LAYER_RE='unknown option |duplicate option | needs a value|pipeline actions are mutually exclusive|--status and --reverify|--status never approves|cannot be combined with|explicit files and --scope|--leaf is only valid|execution options only|needs an integer from|does not exist: |is not a directory: |cannot inspect '
 
@@ -80,11 +88,6 @@ reject_case() {
   local o_out o_err o_code p_out p_err p_code
   _both "$@"
   _crashed "$label" && return
-  if [ "$p_code" = 90 ]; then
-    printf '  MISSED   %-42s port cleared the argument layer; oracle rejected it\n' "$label"
-    printf '    oracle: %s\n' "$(printf '%s' "$o_err" | head -1)"
-    fail=$((fail + 1)); FAILED+=("$label"); return
-  fi
   if [ "$o_code" = "$p_code" ] && [ "$o_out" = "$p_out" ] && [ "$o_err" = "$p_err" ]; then
     pass=$((pass + 1)); return
   fi
@@ -97,36 +100,22 @@ reject_case() {
   return 0
 }
 
-accept_case() {
-  local label="$1"; shift
-  local o_out o_err o_code p_out p_err p_code
-  _both "$@"
-  _crashed "$label" && return
-  if printf '%s' "$o_err" | grep -qE "$ARG_LAYER_RE"; then
-    printf '  REJECTED %-42s oracle rejected it in the argument layer\n' "$label"
-    printf '    oracle: %s\n' "$(printf '%s' "$o_err" | head -1)"
-    fail=$((fail + 1)); FAILED+=("$label"); return
-  fi
-  if [ "$p_code" = 90 ]; then pass=$((pass + 1)); return; fi
-  printf 'DIVERGE  %-42s port did not clear the argument layer (exit %s)\n' "$label" "$p_code"
-  printf '    port  : %s\n' "$(printf '%s' "$p_err" | head -1)"
-  fail=$((fail + 1)); FAILED+=("$label")
-  return 0
-}
-
-# The target-discovery / ledger-resolution port (gate-check.mjs:181-297) made several former
-# accept_case vectors fully comparable past the argument layer: both programs now run all the
-# way to a deterministic exit, so "the port reached 90" is no longer the right assertion --
-# 90 would be a REGRESSION (it would mean this newly-ported code stopped running). full_case
-# asserts byte-identical (exit, stdout, stderr) like reject_case, but names the failure for
-# what it now means: the port fell BACK to the porting boundary on code that used to run.
+# full_case is the ACCEPT half: the vector must clear the argument layer in BOTH programs and
+# then run to a deterministic exit that agrees byte for byte.
+#
+# THE ORACLE-CLEARED-IT GUARD IS LOAD-BEARING, and it is the one thing accept_case did that
+# byte-comparison alone does not. If the oracle rejects a vector in the argument layer and the
+# port rejects it identically, the exit/stdout/stderr all match and the case passes -- while
+# proving the exact opposite of what its label claims. The vector would be counted as accept
+# coverage of code neither program ever reached. So the oracle's stderr is checked against the
+# argument layer's own message set FIRST, and a match is a failure, not a pass.
 full_case() {
   local label="$1"; shift
   local o_out o_err o_code p_out p_err p_code
   _both "$@"
   _crashed "$label" && return
-  if [ "$p_code" = 90 ]; then
-    printf '  REGRESSED %-41s port fell back to the porting boundary; it used to run this\n' "$label"
+  if printf '%s' "$o_err" | grep -qE "$ARG_LAYER_RE"; then
+    printf '  REJECTED %-42s oracle rejected it in the argument layer; not an accept vector\n' "$label"
     printf '    oracle: %s\n' "$(printf '%s' "$o_err" | head -1)"
     fail=$((fail + 1)); FAILED+=("$label"); return
   fi
