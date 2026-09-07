@@ -184,6 +184,41 @@ _case() {
   fail=$((fail + 1)); FAILED+=("$label")
 }
 
+# CASE 3 IS A PIN ONLY WHILE THE TWO CWD SPELLINGS SHARE ONE APPROVAL SIGNATURE, and CASE 3
+# cannot see that itself: it asserts the STALE message fired, which stays true even if the
+# respelling started tripping BOTH disjuncts -- at which point the case silently stops isolating
+# anything and goes on passing. This asserts the premise directly.
+#
+# The approval token's FILENAME is sha256(resolve(file) + "\0" + gate.id + "\0" +
+# approvalOracleSignature(file, gate)) -- gate-check.mjs:372-375. Same file, same gate id, so
+# two approvals land on the SAME filename exactly when their oracle signatures are equal.
+# Approving both spellings into one directory and counting tokens therefore measures signature
+# equality with no access to the hash itself. The control approves a CHECK edit instead, which
+# MUST produce 2 -- otherwise a counter stuck at 1 would "prove" the premise for free.
+_assert_pin() {
+  local root="$1" dir="$2" want="$3" label="$4" first="$5" second="$6"
+  rm -rf "$root" "$dir"; mkdir -p "$root/.agents-discipline/s/gates" "$dir"; chmod 700 "$dir"
+  printf '#!/bin/sh\necho ok\n' > "$root/check.sh"; chmod +x "$root/check.sh"
+  local ledger="$root/.agents-discipline/s/gates/leaf.md" body
+  for body in "$first" "$second"; do
+    printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: %s\n  EXPECT: ok\n  CWD: %s\n' \
+      "${body%%|*}" "${body##*|}" > "$ledger"
+    AGENTS_DISCIPLINE_APPROVAL_DIR="$dir" \
+      "$NODE_ABS" "$ORACLE" --root "$root" --scope s --approve --reverify >/dev/null 2>&1
+  done
+  local n; n=$(find "$dir" -maxdepth 1 -name '*.json' -type f | wc -l | tr -d ' ')
+  if [ "$n" = "$want" ]; then
+    printf '  OK      %-34s %s approval token(s), as required\n' "$label" "$n"
+    pass=$((pass + 1)); return
+  fi
+  printf 'DIVERGE  %-34s %s approval token(s), expected %s\n' "$label" "$n" "$want"
+  fail=$((fail + 1)); FAILED+=("$label")
+}
+
+_assert_pin "$WORK/p1" "$WORK/a1" 1 "PREMISE CWD respelling is signature-equal" './check.sh|.' './check.sh|./'
+_assert_pin "$WORK/p2" "$WORK/a2" 2 "CONTROL a CHECK edit is not"              './check.sh|.' './check.sh -q|.'
+_reset_approvals
+
 _case "self-mutating CHECK is STALE"   mutating       present c1
 _case "CONTROL non-mutating CHECK"     stable         absent  c2
 _case "CWD respelled pins the digest"  cwd-respelled  present c3

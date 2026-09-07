@@ -76,12 +76,39 @@ So `.` and `./` are DIFFERENT to the digest and IDENTICAL to the signature. **CA
 CASE 1 now REDDENS. The earlier note that the disjunct might be unpinnable by construction was
 wrong — it is pinnable, and now pinned.
 
+**CASE 3's PREMISE is asserted, because CASE 3 cannot assert it.** The case checks that the STALE
+message fired — which stays true even if the respelling began tripping BOTH disjuncts, at which
+point it silently stops isolating anything and goes on passing. Erosion is caught in only one
+direction (if `parseGates` ever normalized `gate.cwd`, no STALE would print and `want=present`
+would fail loudly); the other direction is invisible to it. So the premise is measured directly:
+the approval token's FILENAME is `sha256(resolve(file) + "\0" + gate.id + "\0" +
+approvalOracleSignature(file, gate))` (`gate-check.mjs:372-375`), so approving both spellings into
+ONE directory yields ONE file exactly when the signatures are equal. Measured 1; the control,
+approving a CHECK edit instead, measures 2 — without it a counter stuck at 1 would "prove" the
+premise for free.
+
+> **CORRECTION to `246e3e5`'s probe table.** Its two rows are labelled "disable digest disjunct
+> only" and they were NOT the same edit: the earlier probe disabled `fresh is None` **and** the
+> digest comparison; this turn's disabled the digest alone. The conclusion survives *a fortiori*
+> — the earlier mutation disabled a superset, so if it did not diverge, the narrower one could
+> not either — but the table misstates what ran, which is the `_run_approve [a-z]+` defect again:
+> a summary line describing a measurement it does not match.
+
 **ABANDON emission is verified in isolation, not just inside a composite green.** The
 `run-tests.mjs:255` hierarchy case asserts `HANDOFF REQUIRED` on the OUTER run, whose output
-merely echoes the inner one, so a green there is a composite. Run directly on the child ledger,
-`--reverify` on `ABANDON: G1 upstream removed`: both runtimes exit 1 with byte-identical output
-(`HANDOFF REQUIRED: 1 abandoned (met: 0, reran: 0, previously met reverified: 0)`). That is what
-establishes the interpreter was the ONLY problem in `b6be6b4`, rather than one of two.
+merely echoes the inner one, so a green there is a composite. Run directly on the child ledger —
+byte-identical to the one the fixture writes at `run-tests.mjs:258`, not a simplification of it —
+`--reverify` gives exit 1 in both runtimes with identical stdout (`HANDOFF REQUIRED: 1 abandoned
+(met: 0, reran: 0, previously met reverified: 0)`) and identical stderr (both empty), **captured
+as separate streams**: the first measurement merged them with `2>&1`, the shortcut `stale-diff.sh`
+itself documents as making a comparison sensitive to flush order rather than content. Harmless on
+a path that emits no stderr, but it was the wrong shape for the claim. That is what establishes
+the interpreter was the ONLY problem in `b6be6b4`, rather than one of two.
+
+**"No skip path under `AD_RUNTIME`" has a stronger warrant than the grep that first produced it.**
+Absence of the word "skip" does not rule out conditional *registration* (`if (!PY) test(...)`),
+which shrinks the denominator instead of skipping a case. The argument already in hand covers
+both: oracle 19/19 and port 19/19 — the **same denominator** — so no case is dropped.
 
 **Still unexercised**, revised: the `(stale result discarded)` label (`gate-check.mjs:925` /
 `gate_check.py:1374`) — it needs `staleResults` non-empty AND the reloaded gate to still read
