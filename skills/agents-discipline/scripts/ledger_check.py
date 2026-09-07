@@ -771,7 +771,25 @@ complete = (
 # last forgery left in the design: tamper the file afterwards and hand it to someone who reads
 # the stamp instead of re-running, and they see a true statement about a document that no
 # longer exists. No claim can be misread if no claim is made.
-body_for_hash = RECEIPT_RE.sub("\n", text).rstrip() + "\n"
+# `.rstrip(JS_TRIM)`, NOT a bare `.rstrip()`. This mirrors `ledger-check.mjs:691`'s `.trimEnd()`,
+# and the two disagree on exactly the six code points this port has been audited for all along:
+# `trimEnd()` removes U+FEFF and keeps U+001C-U+001F/U+0085; bare `.rstrip()` does the reverse.
+# (JS defines regex `\s` and `trimEnd()` over the SAME set -- WhiteSpace + LineTerminator -- so the
+# `\s`-derived JS_TRIM is the exact argument, not an approximation.)
+#
+# This was the last bare strip in the file, and it was the one that mattered most, because
+# `body_for_hash` is NOT only hashed -- line 813 writes it BACK to the user's ledger. So the bare
+# form did not merely compute a different digest: the two runtimes REWROTE the document
+# differently, python deleting a trailing U+001C that node preserves and preserving a trailing
+# U+FEFF that node deletes. A step the user runs to VERIFY a file was quietly editing it, and
+# editing it differently depending on which runtime they had.
+#
+# The visible symptom was the receipt: sign under one runtime, re-check under the other, and the
+# next run printed `receipt: STALE -- ledger content changed since it was last checked` on a file
+# nobody had touched. Measured in both directions, with an unpadded control that stayed clean.
+# That line is only a `print` and never reaches the exit code, so the stale stamp was the mild
+# half; the divergent rewrite was the real defect.
+body_for_hash = RECEIPT_RE.sub("\n", text).rstrip(JS_TRIM) + "\n"
 digest = hashlib.sha256(body_for_hash.encode("utf-8")).hexdigest()[:16]
 
 prior = PRIOR_RECEIPT.search(text)
