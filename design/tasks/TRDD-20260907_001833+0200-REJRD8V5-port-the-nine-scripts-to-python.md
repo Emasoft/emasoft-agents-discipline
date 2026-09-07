@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T05:06:00+0200
+updated: 2026-09-07T05:14:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -767,7 +767,39 @@ difference — but every call site has to drop the await). One item left:
    That is still worth measuring first — a serialization mismatch breaks every approval — but
    the argument is "two hazards, one of them object-wide", not "seven fields".
 
-   **SPLIT IT IN TWO — the first draft promised the expensive half and priced the cheap one.**
+   **✅ THE SERIALIZATION HALF IS DONE (2026-09-07) — `tests/digest-diff.sh` + `digest-drive.mjs`
+   / `digest_drive.py`, 15 pinned cases, digests identical.** The highest-ranked hazard in this
+   document is settled for the half that could be settled without `gate_check.py`.
+
+   `json.dumps(obj)` is WRONG here in four ways, every one silent, and each is now pinned by a
+   mutation control that reddens:
+
+   | wrong default | JS | control reddens |
+   |---|---|---|
+   | `", "` / `": "` separators | `,` / `:` | **15 of 15 cases** |
+   | `ensure_ascii=True` escapes non-ASCII | never escapes | 4 cases (accented, emoji, U+2028, U+2029) |
+   | `1500.0` | `1500` | 2 cases |
+   | `Infinity` — **not valid JSON at all** | `null` | 2 cases |
+
+   The last is worse than a byte difference: the port would emit a document node cannot parse.
+   `allow_nan=False` is set so a non-finite that escapes the conversion RAISES rather than
+   writing that token. Numbers route through `jsapi._js_number` (the existing Number::toString
+   port) rather than a second copy of that logic.
+
+   Two things worth carrying forward:
+   - **A surrogate PAIR in JS and a single code point in Python must hash identically** — the
+     emoji row asserts exactly that, and it passes.
+   - **A redundant branch was deleted the moment a control could not redden it.** An
+     `if value.is_integer(): return int(value)` fast path looked necessary and was not:
+     `_js_number(1500.0)` already returns `"1500"`. Same rule as `allow_above_root`.
+
+   Non-printing characters in BOTH drivers are built with `String.fromCharCode` / `chr()`,
+   never written literally — a first version was authored with escape sequences that the
+   writing layer INTERPRETED, putting a raw U+2028 and raw control characters into the source.
+   That is the hazard this repo has already been bitten by, and it is invisible in a diff.
+
+   **THE OTHER HALF REMAINS. SPLIT IT IN TWO — the first draft promised the expensive half and
+   priced the cheap one.**
    "Needs no `gate_check.py`, only `oracle()`'s twelve fields" hides two different jobs:
    1. **Does serialization + hashing agree GIVEN identical inputs?** Genuinely small: pin
       twelve literal values, compare `sha256(JSON.stringify(...))` against the Python side.
