@@ -16,6 +16,16 @@ differed=0
 row() {                     # row <label> <source> <flags> <output>
   local label="$1" src="$2" flags="$3" out="$4"
   rows=$((rows + 1))
+  # The pin's keys are ONE LINE EACH and compared after a line-based `sort`, so a SOURCE
+  # containing a newline would split into two entries and misalign the whole set -- the pin
+  # would then fail, or worse pass, for a reason unrelated to divergence. No current row does
+  # (only OUTPUTS are multi-line, which is fine, they are not part of the key), and this keeps
+  # it that way. A regex with a literal newline should be written `\n` anyway.
+  case "$src" in
+    *"
+"*) echo "PROBE FAILED: row '$label' has a newline in its SOURCE, which breaks the key set" >&2
+        exit 1 ;;
+  esac
   local msg o1 o2 e1 e2
   # jq builds the JSON so a backslash-heavy pattern reaches each side unmangled. Hand-rolled
   # string concatenation is how a `\d` becomes a `d` in exactly one of the two paths and the

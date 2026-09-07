@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T03:04:00+0200
+updated: 2026-09-07T03:19:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -495,9 +495,23 @@ difference — but every call site has to drop the await). One item left:
    APPEARED / a row VANISHED", both false, and the correct response to a rename is exactly the
    "do not just update the list" the message forbids — training the reader to distrust it. This
    round RENAMED a row, which escaped the trap only because that row sits in the agreeing set.
-   **CONTROL PAIR, both run:** renaming a DIVERGENT row's label → still passes (a label-keyed
-   pin would have failed); the `$`→`\Z` swap → still caught, now naming
-   `ok$<>` out / `b$<m>` in, which is more diagnostic than the labels were.
+   **CONTROLS — and the first pair I ran was HALF TAUTOLOGY, which is worth more than the
+   result.** I recorded "renaming a divergent row's label → still passes" as a control. But
+   under the new design the label is never read when building the key set, so that outcome is
+   decidable by inspection: it could not have failed. It is a refactor-completeness smoke test
+   (it would catch a surviving `$label` in the key path), not a control in this project's
+   sense. Pairing it with a strong control under one heading let the weak half borrow the
+   strong half's credibility. The three that actually discriminate:
+   - **CONVERSE (the one that was missing):** change a row's INPUTS, keep its label
+     byte-identical → the pin FIRES, naming `\Aok<>` as vanished. This is what establishes
+     "keys on inputs, not prose" in the direction that can fail.
+   - **SWAP:** the `$`→`\Z` recipe → 7 divergent before AND after, count identical, caught
+     anyway, naming `ok$<>` out / `b$<m>` in.
+   - **NEWLINE GUARD:** a row whose SOURCE contains a newline → `PROBE FAILED`. Keys are one
+     line each and compared after a line-based `sort`, so a multi-line source would split into
+     two entries and scatter the set. No current row does this (only OUTPUTS are multi-line),
+     but the file establishes the habit of multi-line arguments, so the next row testing
+     newline handling would land in it.
 
    One row was RELABELLED rather than kept: `lazy quantifier` → `a.*?b matches at all`. The
    worker contract is `{matched: bool}` and lazy-vs-greedy changes WHAT is captured, never
@@ -555,8 +569,48 @@ difference — but every call site has to drop the await). One item left:
    - `JSON.stringify` emits insertion order with NO spaces; `json.dumps` defaults to `", "`
      and `": "`. (The exact class that bit `regex_worker` this round.)
    - JS renders `1.0` as `1`; Python renders `1.0`. Any float field diverges.
-   - `process.platform` vs `sys.platform` happen to agree on `darwin`/`linux`/`win32`, which
-     is luck worth not relying on silently — assert it rather than assume it.
+   - `process.platform` vs `sys.platform` agree on `darwin`/`linux`/`win32` — but **NOT
+     everywhere, and the fix is a MAPPING, not an assertion.** `sys.platform` embeds the OS
+     major version where `process.platform` does not: `freebsd14`/`openbsd7`/`sunos5` against
+     node's `freebsd`/`openbsd`/`sunos`. FreeBSD is an ordinary CI target. Use
+     `sys.platform.rstrip("0123456789")`, which normalises those three and leaves the common
+     values untouched. An earlier draft said "assert it rather than assume it" — an assertion
+     only fires ON the platform where the digest has already silently diverged, which is the
+     failure this bullet exists to prevent. (Documented behaviour; not reproducible on this
+     machine, so verify on the target before relying on it.)
+
+   **`node:path` IS NOT `os.path`, and gate-check imports EIGHT of its functions** (`:13`:
+   `delimiter, dirname, basename, isAbsolute, join, relative, resolve, sep`). Only two have
+   JS-faithful ports today — `_js_join` (rewritten THREE times) and `js_basename` — and that
+   both needed one is the evidence, not a coincidence. Differential over the other six,
+   measured 2026-09-07:
+
+   | function | verdict |
+   |---|---|
+   | `isAbsolute`, `resolve`, `sep`, `delimiter` | **agree** on every probed case |
+   | `relative` | **DIVERGES**: identical paths → JS `""`, Python `"."` |
+   | `dirname` | **DIVERGES on 5 of 7**: `/a/`→`/` vs `/a`; `a`→`.` vs `""`; `""`→`.` vs `""`; `//`→`/` vs `//`; `/a//b//`→`/a/` vs `/a//b` |
+
+   **Both divergent ones are load-bearing, and both currently survive BY LUCK — say so rather
+   than either alarming or dismissing:**
+   - `dirname` is used once, at `:336`, on `resolve(file)` output. `resolve` never returns a
+     trailing slash (except `/`), so every divergent shape above is unreachable *there*. One
+     refactor away, and immediately wrong if `os.path.dirname` is reused anywhere else.
+   - `relative` is used once, at `:363`, inside **`pathIsInside`** — which gates the security
+     check *"AGENTS_DISCIPLINE_APPROVAL_DIR must be outside the repository root"* (`:371`), and
+     is also how `approvalPath` stays confined. The `""` vs `"."` difference lands on the
+     function's FIRST clause (`rel === ""`). MEASURED: a naive `os.path.relpath` port agrees
+     with the oracle on all 10 probed cases — because `"."` also satisfies the third clause, so
+     the first is redundant with it. **The guard is correct today for a reason that is not the
+     one it is written to express.** A port must not "simplify" that first clause away, and
+     must not assume the helper is equivalent.
+
+   Recorded because it happened while measuring the above: the throwaway comparison script
+   reported `VERDICT: DIVERGES` for `pathIsInside` when the two sides were IDENTICAL — Python's
+   `json.dumps` writes `[true, true]` and `JSON.stringify` writes `[true,true]`. That is the
+   same whitespace trap that caused this round's production edit, reproduced in an ad-hoc probe
+   written an hour after documenting it. **Ad-hoc probes need the parse-don't-byte-compare
+   policy as much as the committed differentials do.**
 
    **ALSO: `mutate-probe.sh` does NOT work as the verdict reader for this route.** Its verdict
    greps `^DIVERGE` (`:140`), which only the hand-written differential drivers print. The

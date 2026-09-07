@@ -36,7 +36,6 @@ import sys
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 import atexit
-import importlib.util
 import json
 import pathlib
 import shutil
@@ -168,25 +167,18 @@ regex_case("an ASCII-only \\d against Arabic-Indic digits", r"^\d+$", "١٢٣")
 # 27.2ms), and a coupling is a heavier answer than an equality check. The cost is small against
 # the 5000ms startup budget -- the reason to prefer the check is that it states the invariant
 # where a reader can see it, instead of implying it through an import.
-def _load_lib(alias, filename):
-    """Load one lib module by PATH, under an alias, so neither shadows a later import.
+# PLAIN IMPORTS, with LIB on sys.path -- the idiom this file already uses for `process_tree`.
+# An importlib path-load was tried and dropped for two reasons, both measured: `gates.py` does
+# `from jsapi import ...`, so a path-load without the sys.path insert raises
+# ModuleNotFoundError and aborted the ENTIRE suite (every later section reported as
+# never-completed); and once the insert is there, the alias-loaded module is a SEPARATE object
+# from the one a later `import gates` produces (`m is gates` -> False), so gates.py's
+# module-level code simply ran twice for no benefit.
+if LIB not in sys.path:
+    sys.path.insert(0, LIB)
+import gates as _g  # noqa: E402  # type: ignore[import-not-found]
+import regex_worker as _rw  # noqa: E402  # type: ignore[import-not-found]
 
-    LIB goes on sys.path FIRST and stays: `gates.py` does `from jsapi import ...`, so a
-    path-load alone raises ModuleNotFoundError on its dependency -- measured, and it aborted
-    the whole suite (every later section reported as never-completed). The insert is what the
-    file already does at its process_tree section; it just has to happen before this point too.
-    """
-    if LIB not in sys.path:
-        sys.path.insert(0, LIB)
-    spec = importlib.util.spec_from_file_location(alias, os.path.join(LIB, filename))
-    assert spec is not None and spec.loader is not None, f"cannot load {filename}"
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-_rw = _load_lib("_rw_flagmap", "regex_worker.py")
-_g = _load_lib("_gates_flagmap", "gates.py")
 report(_rw._FLAG_MAP == _g._JS_FLAG_MAP,
        "regex_worker: its flag map equals gates._JS_FLAG_MAP (drift guard)",
        f"worker={_rw._FLAG_MAP} gates={_g._JS_FLAG_MAP}")
