@@ -218,6 +218,19 @@ for file in files:
         # and this call site never used it; gate-lint.mjs:150 interpolates `error.message`,
         # which is precisely what that helper reproduces. Reusing it also inherits its measured
         # scope note: EACCES/ENOENT/ENOTDIR are verified against node, anything rarer is not.
+        # "open" IS THE SYSCALL FOR EVERY SHAPE THAT REACHES HERE, and node genuinely varies it,
+        # so this is a scoped claim rather than a constant nobody checked. MEASURED:
+        #     ENOENT  node: `ENOENT: no such file or directory, open '<path>'`   port: same
+        #     EACCES  node: `EACCES: permission denied, open '<path>'`           port: same
+        #     EISDIR  node: `EISDIR: illegal operation on a directory, read`  <- different
+        #                   syscall AND no path -- but unreachable at this site: a directory is
+        #                   refused by read_stable_regular_file's own kind check first, in BOTH
+        #                   runtimes, with the "must be one unchanged regular single-link file"
+        #                   message. Verified by running gate-lint on /tmp: identical, and
+        #                   neither side reached readFileSync.
+        # A failure at the READ stage rather than the open would name `read`; nothing here can
+        # force one, so treat that as UNCONFIRMED in the same sense _node_fs_message's own
+        # docstring treats errnos outside its measured three.
         message = (_node_fs_message(error, "open")
                    if error.errno is not None else str(error))
         print("gate-lint: cannot read " + terminal_safe(file, 512) + ": " + terminal_safe(message, 1024),

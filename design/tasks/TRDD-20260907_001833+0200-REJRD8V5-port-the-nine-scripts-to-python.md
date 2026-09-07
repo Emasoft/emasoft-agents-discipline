@@ -22,11 +22,25 @@ after an `open`: the oracle prints `ABANDONED w1 …: bad<U+FFFD>reason`, the po
 before editing rather than applying the reflex fix.
 
 **Why this one and not more test work.** It is the last known defect that is IN THE PORT rather
-than in the harness, and it is a crash MID-WRITE to state both runtimes read. Measured over the
-encoding sweep: the first four commits fixed four pre-existing port defects; the next several
-fixed only defects introduced by their immediate predecessor, three of those in test files. That
-ratio inverted, and `encoding-diff.sh` is green with all seven rows proven to redden under a
-mutation. **Stop editing the test file.**
+than in the harness, and it is a crash MID-WRITE to state both runtimes read.
+
+COUNTED FROM `git log`, not from a summary — the first version of this paragraph said "the first
+four commits fixed four pre-existing defects" and both halves were wrong. Over the encoding
+sweep, `87640c8`..`9071a84`:
+
+| pre-existing PORT defects fixed | commits fixing the PRECEDING commit's own defect |
+|---|---|
+| `87640c8` lease `ensure_ascii` | `f993399` (fixture from `873a738`) |
+| `13c2c4e` EXPECT warning | `6637b65` (stderr `strict`, from `64329a5`) |
+| `64329a5` four CLIs crash on an ASCII stdout | `2c98ecc` (one-U+FFFD-per-run, from `d406b47`) |
+| `d406b47` two `terminal_safe` crashes | `bd34d68` (guards from `2c98ecc`) |
+| `9071a84` errno message shape | `114e8d5` (guards from `bd34d68`) |
+
+**Five, not four, and they are NOT all early** — `64329a5`, `d406b47` and `9071a84` are spread
+through. So the honest statement is narrower than the one first committed: the RATE of
+pre-existing finds did not collapse, but the last stretch is dominated by fixing the previous
+commit's own work, and three of those live in test files. `encoding-diff.sh` is green with all
+seven rows proven to redden under a mutation. **Stop editing the test file.**
 
 Second item, lower: the errno fix in `9071a84` has NO differential row. `gate-args-diff.sh`
 drives gate-check only; `lint-tests.mjs` passes both before and after the fix, which is the
