@@ -191,6 +191,28 @@ def _node_message_error(error, syscall):
     return rebuilt
 
 
+def _node_call(syscall, call, *args, **kwargs):
+    """Run ONE fs syscall, re-raising with node's message shape for THAT syscall.
+
+    read_stable_regular_file makes seven more syscalls after its open, and the oracle wraps
+    NONE of them: gates.mjs:152-181 lets fstatSync, lstatSync, realpathSync and readSync throw
+    RAW, so each failure carries its OWN syscall token out to the caller. Every reader's call
+    site hardcodes one constant instead -- `open` at seven sites across three modules -- because
+    a caller cannot know which of the eight syscalls failed. Attaching the token where it IS
+    known is the only fix that does not ask every caller to guess; node_fs_message then prefers
+    the attached message over the constant it was passed.
+
+    MEASURED, node against CPython on the same four failures: realpathSync reports `lstat`, and
+    BOTH runtimes name the failing COMPONENT ('/nonexistent-xyz') rather than the argument
+    ('/nonexistent-xyz/x'); fstat and read carry NO path in either, which node_fs_message's
+    existing suffix branch already renders as a bare ", fstat". So only the token was missing.
+    """
+    try:
+        return call(*args, **kwargs)
+    except OSError as error:
+        raise _node_message_error(error, syscall) from error
+
+
 def _node_lstat(target):
     """os.lstat, re-raising with node's message shape.
 
@@ -338,8 +360,8 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
         raise
 
     try:
-        opened = os.fstat(fd)
-        named = os.lstat(target)
+        opened = _node_call("fstat", os.fstat, fd)
+        named = _node_call("lstat", os.lstat, target)
         _assert_regular_single_link(opened, target, label, limit)
         # The descriptor and the NAME can already be different files: something may have
         # swapped the path between the open and now. Comparing the fd's identity against the
@@ -362,15 +384,16 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
         # JSON would silently DISABLE containment here where the oracle throws. Every caller
         # must pass a root from argv or a computed path, never from a parsed document. Today's
         # do (dispatch takes --root from the CLI); dispatch.py must keep it that way.
-        canonical_root = None if root is None else os.path.realpath(os.path.abspath(root), strict=True)
-        canonical_before = os.path.realpath(target, strict=True)
+        canonical_root = (None if root is None
+                          else _node_call("lstat", os.path.realpath, os.path.abspath(root), strict=True))
+        canonical_before = _node_call("lstat", os.path.realpath, target, strict=True)
         if canonical_root is not None and not _path_is_inside(canonical_root, canonical_before):
             raise OSError(f"{label} resolves outside the allowed root: {target}")
 
         chunks = []
         total = 0
         while True:
-            chunk = os.read(fd, min(64 * 1024, limit + 1 - total))
+            chunk = _node_call("read", os.read, fd, min(64 * 1024, limit + 1 - total))
             if not chunk:
                 break
             chunks.append(chunk)
@@ -378,13 +401,13 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
             if total > limit:
                 raise OSError(f"{label} exceeds {limit} bytes: {target}")
 
-        after = os.fstat(fd)
+        after = _node_call("fstat", os.fstat, fd)
         _assert_regular_single_link(after, target, label, limit)
         if (after.st_ino, after.st_dev, after.st_size, after.st_mtime_ns) != (
             opened.st_ino, opened.st_dev, opened.st_size, opened.st_mtime_ns
         ):
             raise OSError(f"{label} changed while it was read: {target}")
-        if os.path.realpath(target, strict=True) != canonical_before:
+        if _node_call("lstat", os.path.realpath, target, strict=True) != canonical_before:
             raise OSError(f"{label} changed canonical location while it was read: {target}")
         # errors="replace", NOT strict. A ledger is prose a human pasted into, so one byte of
         # it is routinely not UTF-8 -- a latin-1 accent, a smart quote out of a word processor.
@@ -1283,6 +1306,13 @@ def node_fs_message(error, syscall):
     the measured three as UNCONFIRMED rather than assuming the lowercase rule generalizes. Falling back to the errno name alone would
     be a silent, smaller divergence, so an unmatched code still produces this shape.
     """
+    # An ALREADY-ATTACHED message wins over the caller's `syscall`, because the caller guessed
+    # and _node_call knew. Seven sites pass "open" for read_stable_regular_file, which makes
+    # eight syscalls; without this branch a failing fstat/lstat/realpath/read would be
+    # relabelled `open` right here, at the one site whose whole job is the syscall token.
+    attached = getattr(error, "_node_message", None)
+    if attached is not None:
+        return attached
     code = _err_code(error)
     number = getattr(error, "errno", None)
     prose = os.strerror(number).lower() if number is not None else code

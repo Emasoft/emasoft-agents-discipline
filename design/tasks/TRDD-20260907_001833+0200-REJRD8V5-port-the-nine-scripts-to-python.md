@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T09:10:00+0200
+updated: 2026-09-07T10:23:06+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -99,12 +99,17 @@ the one-word constant has never been observed at that line). "DONE" was the earl
 flattened exactly the distinction the per-site comments preserve — and a one-word constant is
 this sweep's own stated risk, so the summary must not round it away.
 
-The enumeration behind that, at `6872006`, bucketed so it can be spot-checked and so its decay is
-visible — five integers hide a mis-sort, line numbers do not:
+The enumeration behind that, bucketed so it can be spot-checked and so its decay is visible —
+five integers hide a mis-sort, line numbers do not. **Every number below is relative to the SHA
+named beside it, and a number without a SHA is unfalsifiable**: recorded that way because the
+first version of this list carried none, and by the next commit all ten had drifted +6/+7 onto
+comment lines while still reading as HEAD-relative. Decay being *visible* was this list's whole
+justification; it is only visible against a fixed origin.
 
-- **guarded** 351 479 513 532 572 596 941 971 1037 1456
-- **errno TEST, not an interpolation** 326 501 815 844 851 929
-- **worker/spawn, unmeasured divergence** 1080 1110 1167
+- **guarded** — re-derived at HEAD 2026-09-07: 358 486 520 539 579 603 948 977 1043 1462
+  (at `6872006` these were 351 479 513 532 572 596 941 971 1037 1456)
+- **errno TEST, not an interpolation** — `6872006`-relative, NOT re-derived: 326 501 815 844 851 929
+- **worker/spawn, unmeasured divergence** — `6872006`-relative, NOT re-derived: 1080 1110 1167
 - **not an exception** (dict keys, literal logging, `str()` on a return code) — the rest
 
 **BINDER NAMES ARE PER-MODULE.** Step 2's alternation must be built from step 1's output, never
@@ -117,9 +122,35 @@ them, which is the spelling grep's failure one level up.
 hardest; it is also where `node_fs_message` and `read_stable_regular_file` live, so a defect
 there is inherited by every site already fixed and the "every OSError escapes from the first
 syscall" argument load-bearing at seven sites is a claim about its internals. Deferring the
-module that defines the contract puts the dependent fixes on unverified ground. Its helper call
-site is done (`:1383`, the last unguarded call in the port); its own remaining call sites and
-`dispatch.py` (7 uses, `read_state` done) are what is left.
+module that defines the contract puts the dependent fixes on unverified ground.
+
+**AND THAT ARGUMENT WAS FALSE — MEASURED, then fixed at source (2026-09-07).**
+`read_stable_regular_file` makes EIGHT syscalls, not one: after its `open` come `fstat`,
+`lstat`, three `realpath`s and a `read` per chunk, and `gates.mjs:152-181` shows the oracle
+wraps NONE of them — `fstatSync`/`lstatSync`/`realpathSync`/`readSync` throw RAW, so each
+failure carries its OWN syscall token out to the caller. Seven call sites across three modules
+were hardcoding `open` for all eight. Node measured against CPython on the same four failures:
+`realpathSync` reports **`lstat`**, and BOTH runtimes name the failing COMPONENT
+(`/nonexistent-xyz`) rather than the argument (`/nonexistent-xyz/x`); `fstat` and `read` carry
+NO path in either, which `node_fs_message`'s existing suffix branch already renders bare. So
+only the token was ever missing. Fixed where the syscall IS known — `_node_call(syscall, …)`
+attaches it via the existing `_node_message_error`, and `node_fs_message` now PREFERS an
+attached message over the constant it was passed — because a caller cannot know which of eight
+syscalls failed, and asking seventeen call sites to guess is the defect, not the spelling.
+Discriminating probe, with its control: via `_node_call` a caller passing `"open"` gets
+`ENOENT: …, lstat '/nonexistent-xyz'`; the same error raw still gets `…, open '…'`.
+`FileNotFoundError` and `.errno` survive the rebuild (ten branches depend on them).
+
+**Unreachable by any static fixture** — every one needs a race or an EIO, which is exactly why
+no differential row catches it and why it survived. Same category as the `scandir` guard, and
+the last six commits are the record of what "unreachable, so it does not matter" costs.
+
+Its helper call sites are done — `:1397` (`scandir`) and the eight inside
+`read_stable_regular_file`. **`gates.py:190` is still an unguarded `node_fs_message` call**
+(inside `_node_message_error` itself), so "the last unguarded call in the port" was wrong;
+it is structurally safe (every caller reaches it from a real syscall, so `errno` is always
+set) and covered by the driver rows, but it is not zero. `gates.py`'s own remaining call sites
+and `dispatch.py` (7 uses, `read_state` done) are what is left.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
 
