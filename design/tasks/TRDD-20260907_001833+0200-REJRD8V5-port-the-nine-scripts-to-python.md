@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T11:46:16+0200
+updated: 2026-09-07T11:53:52+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -605,8 +605,19 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   `read_stable_regular_file` either carries an attached message, came from the open, or is
   authored with no errno.* The boundary guards raise `TypeError`/`ValueError`, which is why the
   qualifier exists. **Derive it by walking the raise sites, never from memory.**
-- **THE ENUMERATION IS FROZEN** — the list is in Round 4. Audit against it to exhaustion;
-  widening it is a NEW class, decided deliberately and once.
+- **THE FROZEN ENUMERATION, inline** — a block that tells readers not to reconstruct state from
+  the rounds must not then delegate its most operational item to one. `os.` + `open stat lstat
+  fstat mkdir makedirs rename replace unlink remove rmdir scandir listdir read write fsync
+  readlink chmod symlink link utime truncate fdopen`, plus the `open()` builtin, `pathlib`,
+  `shutil`, `io.open`, `tempfile`. **Deliberately OUTSIDE it:** `mmap`, `ctypes`,
+  `from os import X` + a bare call, and `open` under an alias — considered and judged implausible
+  in this codebase on 2026-09-07, so a reader can tell "excluded" from "never thought of".
+  Widening it is a NEW class, decided deliberately and once.
+- **PROCESS RULE, adopted to close the loop that produced rounds 5-7:** *no commit that changes
+  zero lines of executable code.* Documentation corrections ride along with the next code change.
+  Each docs-only commit in this class generated its own review round and its own new claims to
+  defend; the code channel (the audit) stayed productive throughout, the prose channel became
+  self-feeding. This rule ends the second without touching the first.
 - **RENAME, so the rounds below stay decodable:** `_node_call` → **`node_call`** (public, at
   `25bd004`). The rounds still say `_node_call` because they record what was true when written
   and the write-side rule above forbids editing them — this line is the decoder, not a licence
@@ -616,9 +627,15 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   `fstat`/`read`, the oracle (`gate-check.mjs:416-447`) wrapping none of them, everything
   escaping to a catch that hardcodes `open`. Six wrapped — `fstat`, `read`, the three
   no-local-try `os.lstat` sites in the approval-dir helpers, and `os.stat(lock)`. The remaining
-  8 carry verdicts: `:321`/`:943` already pass the right constant, `:789`/`:857` genuinely ARE
-  opens, and `:667`/`:912`/`:915` are swallowed without emitting. **The audit was worth doing —
-  it was NOT a formality**, which is the answer to four commits' worth of deferring it.
+  8 carry verdicts, **cited by FUNCTION rather than line because line numbers decay and these
+  already did** — the first published set was taken from a pre-edit snapshot and every one of the
+  eight was off by 1-10 lines the moment the wraps' own comments landed, in the block whose
+  purpose is to be trusted. A function name does not move when a comment is added above it.
+  `_validated_cwd`'s stat and `validated_approval_dir`'s cwd stat already pass the right
+  constant; `read_approval_file`'s open and `with_file_lock`'s lock open genuinely ARE opens; the
+  candidate-scan stat and the lock-release `open`/`os.unlink` are swallowed without emitting.
+  **The audit was worth doing — it was NOT a formality**, which is the answer to four commits'
+  worth of deferring it.
   **USER-VISIBLE, traced not assumed:** `read_approval_file` → `approval_exists` → the catch at
   `:987`, which prints `node_fs_message(exc, "open")`. So a failing `fstat`/`read` reached a user
   labelled `open`. **Evidence grade differs across the six, and the difference is real:** that
@@ -633,9 +650,34 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   real defect. Recording an inferred fix at the same confidence as a measured one is the
   "MEASURED must not outrun measurement" lesson moving up a level, from a docstring to the
   register of findings itself.
-- **REMAINING OPEN:** `ledger_check.py`'s 2 (trivial) and `gates.py`'s remainder (mostly inside
-  functions already audited this session). **Not mechanical** — step 3 (could any other call
-  under this catch raise?) is judgment, and it is where every defect in this class has hidden.
+- **`ledger_check.py` IS AUDITED — 2/2 verdicted, ZERO changes needed.** `:731` (`open(…, "w")`)
+  is swallowed by design (a read-only ledger is not a verification failure). `:364`
+  (`os.stat(hit)`) is race-only behind an `os.path.exists` guard — **and the oracle has the
+  IDENTICAL shape** (`existsSync` guard then a bare `statSync` at `ledger-check.mjs:305`), so
+  both runtimes propagate uncaught on that race. Symmetric, so nothing to fix.
+- **`gates.py` IS AUDITED — all 25 remaining sites verdicted, and it found the THIRD instance of
+  the multi-syscall shape.** `write_atomic`'s `_write_all` and `os.fsync` were unwrapped, the
+  oracle wraps neither (`gates.mjs:707-712`), so both reached a caller guessing `open` — exactly
+  what a review predicted by noting write_atomic had no stated invariant. Also wrapped its
+  pre-check `lstat` (only FileNotFoundError was handled), `with_file_lock`'s `os.stat(lock)`, and
+  `_assert_real_directory`'s `lstat`. Verdicts on the rest: `stat_current_named_file`'s
+  open/fstat pair is **Windows-only** (POSIX returns early) and its POSIX path uses the wrapped
+  `_node_lstat`; `_real_directory_inside`, `_named_entry` and `list_scopes` swallow;
+  `_markdown_discovery` is the already-fixed `scandir` site; `mkdirs`' own calls are wrapped by
+  `_node_mkdir_error`; `_read_leases_unlocked`'s lstat is converted to a verdict, not raised.
+  **THE ENUMERATION IS NOW EXHAUSTED across all three files.**
+
+- ⚠ **GREP SILENTLY SKIPS `ledger-check.mjs` — every grep-based claim about that file has been
+  vacuously empty.** It contains ONE literal NUL byte at line 58, where the oracle uses a raw
+  `"\x00"` as its escaped-pipe sentinel (`replace(/\\\|/g, "\x00")`) instead of the `"\0"`
+  escape. grep/ugrep classifies the file as BINARY and returns no matches and a non-zero exit —
+  looking exactly like "the pattern is absent". Found only because a `statSync` search returned
+  nothing on a 37 KB file that visibly contains it; Python `open().read()` finds it at line 305.
+  **Use a Python read, never grep, when searching that file** — and treat any "not found" from a
+  grep over the oracles as suspect until the file is known to be NUL-free. The port's
+  `ledger_check.py` has no NUL (it uses the `"\0"` escape at `:141`, the same sentinel VALUE, so
+  there is no behavioural divergence) and the 42-site enumeration covered `.py` files only, so
+  that count is unaffected — by luck, not by design.
 - **`node_call` IS PUBLIC**, third time this lesson has been paid: `node_fs_message`, then
   `mkdirs`, now this. A helper the neighbours cannot import is one they re-implement or go
   without — `read_approval_file` went without.

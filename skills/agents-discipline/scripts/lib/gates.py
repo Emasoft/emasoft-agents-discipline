@@ -1767,7 +1767,10 @@ def mkdirs(path, mode=None):
 
 
 def _assert_real_directory(path, message):
-    info = os.lstat(path)
+    # Wrapped for the token: this lstat has no local try, and its callers guard with
+    # os.path.exists -- which swallows EACCES -- so a failure here is race-only and would
+    # otherwise reach a catch guessing `open`. Same category as gate_check's lstat trio.
+    info = node_call("lstat", os.lstat, path)
     if statmod.S_ISLNK(info.st_mode) or not statmod.S_ISDIR(info.st_mode):
         raise OSError(message)
 
@@ -1820,7 +1823,9 @@ def write_atomic(file, text, root=None):
         mkdirs(parent)
         _assert_real_directory(parent, parent + " must be a real directory")
     try:
-        if statmod.S_ISLNK(os.lstat(target).st_mode):
+        # Wrapped for the token: only FileNotFoundError is handled below, so any other errno
+        # (EACCES on an unsearchable parent) escapes to a caller that guesses `open`.
+        if statmod.S_ISLNK(node_call("lstat", os.lstat, target).st_mode):
             raise OSError("refusing to replace symlink " + target)
     except FileNotFoundError:
         pass
@@ -1852,8 +1857,14 @@ def write_atomic(file, text, root=None):
         # writing Node's lossy U+FFFD substitution of it would silently corrupt a file. The
         # difference from the other two sites is that there the ORACLE loses nothing (it
         # escapes) while here the oracle DOES lose (it substitutes).
-        _write_all(fd, str(text).encode("utf-8"))
-        os.fsync(fd)
+        # THE THIRD INSTANCE of the multi-syscall shape, after read_stable_regular_file and
+        # read_approval_file, and the one a review predicted by noting write_atomic has no stated
+        # invariant. The oracle wraps neither (gates.mjs:707-712 calls writeFileSync then
+        # fsyncSync raw), so each carries its own token out; unwrapped, both reached a caller
+        # guessing `open`. The os.close below stays bare deliberately -- mjs:710 does not swallow
+        # it either, and that polarity was checked per-site.
+        node_call("write", _write_all, fd, str(text).encode("utf-8"))
+        node_call("fsync", os.fsync, fd)
         os.close(fd)
         fd = None
         _replace_atomic(temp, target)
@@ -1937,7 +1948,9 @@ def with_file_lock(root, target, fn, timeout_ms=30000):
             # the timeout and a human removes it after reading its JSON metadata.
             missing = False
             try:
-                os.stat(lock)
+                # `stat`, matching the same probe in gate_check's lock loop: ENOENT is absorbed
+                # below, anything else re-raises to a caller that would otherwise guess `open`.
+                node_call("stat", os.stat, lock)
             except OSError as stat_error:
                 if stat_error.errno == errno.ENOENT:
                     missing = True
