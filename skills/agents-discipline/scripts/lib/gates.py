@@ -209,6 +209,10 @@ def _node_message_error(error, syscall, filename=_KEEP_FILENAME) -> OSError:
     # A SENTINEL, not None: None is a REAL filename here (an fd-based failure -- fstat, read --
     # has no path in either runtime, and node_fs_message renders that as a bare ", fstat").
     rebuilt.filename = error.filename if filename is _KEEP_FILENAME else filename
+    # filename2 carries the DESTINATION of a two-path call (rename/link/symlink) and must survive
+    # the rebuild, or node_fs_message loses the `-> '<dest>'` clause it now emits. Not covered by
+    # the `filename` override: that override exists for mkdir, which has no destination.
+    rebuilt.filename2 = getattr(error, "filename2", None)
     rebuilt._node_message = node_fs_message(rebuilt, syscall)
     # `base` IS type(error) and error is an OSError, so every subclass built here derives from
     # OSError -- a fact the dynamic type() call hides from the checker but not from the runtime.
@@ -288,7 +292,15 @@ def _node_realpath(target):
 
     ELOOP is exactly the errno this module cares most about -- read_stable_regular_file has a
     dedicated branch for it -- so the flat `lstat` was wrong in the one case most likely to be
-    hit. The map below is measured for the four cases above it.
+    hit.
+
+    THE ERRNO IS A PROXY, NOT THE MECHANISM, and saying so is the point: realpath lstats each
+    COMPONENT and stats a RESOLVED LINK TARGET, so the token follows the WALK STEP that failed.
+    ELOOP and the dangling link both report `stat` because both fail at target resolution, not
+    because of anything about their codes. The map below fits the five measured samples; an
+    EACCES on a link TARGET would report `stat` where it returns `lstat`. Keying on the real
+    variable means re-walking the path as libuv does -- so this stays a proxy, deliberately, and
+    a reader must not mistake it for the rule.
 
     UNCLOSED, and stated rather than buried: the DANGLING-SYMLINK case still diverges twice
     over. It is ENOENT, so this returns `lstat` where node says `stat`; and node reports the
@@ -1395,6 +1407,24 @@ def _js_join(*parts):
 # The lowercase-strerror rule was inferred from the three COMMON codes, which happen to be the
 # three that agree -- a sample that could not have revealed the rule was wrong. EEXIST matters
 # most: it is reachable through mkdirs, so it is not a theoretical entry.
+#
+# KEYED ON THE ERRNO ALONE, AND THAT WAS MEASURED RATHER THAN ASSUMED -- the question this table
+# would otherwise repeat from _node_realpath, whose bug was a string measured through one syscall
+# and generalized. Each entry here was ALSO first measured through one syscall, so the same doubt
+# applied. Re-forced through several:
+#     EEXIST  mkdir / symlink / open  -> "file already exists"              (identical)
+#     EISDIR  open / read             -> "illegal operation on a directory" (identical)
+#     ELOOP   stat / open             -> "too many symbolic links encountered" (identical)
+# So libuv's table is per-CODE, not per-call, and one string per errno is the right shape.
+# THE MECHANISM, which is why the measurement had to come out that way: uv_strerror() is a pure
+# errno -> static-string lookup and uvException() composes `<code>: <prose>, <syscall> ...` around
+# it, so the prose cannot depend on the call. The right answer was reached before this argument
+# existed, which is its own hazard -- a right answer with no mechanism is inherited as a method.
+#
+# THE FALLBACK IS LOCALE-DEPENDENT and the overrides are not: os.strerror goes through libc and
+# honours LC_MESSAGES, while libuv's table is fixed English. Under a non-English locale EVERY
+# non-overridden code diverges. Latent (CI is the C locale), and an argument for GROWING this
+# table by measurement rather than trusting strerror to keep agreeing.
 # STILL INCOMPLETE, and deliberately not guessed: codes that could not be forced here (EMFILE,
 # ENFILE, ENOMEM, EOVERFLOW, ENOSPC, EROFS, EPERM) are UNCONFIRMED either way. An absent entry
 # falls back to strerror, which is a coin flip on this evidence -- so add measurements, never
@@ -1436,7 +1466,21 @@ def node_fs_message(error, syscall):
     prose = ((_LIBUV_PROSE.get(number) or os.strerror(number).lower())
              if number is not None else code)
     path = getattr(error, "filename", None)
-    suffix = ", " + syscall + " '" + str(path) + "'" if path is not None else ", " + syscall
+    # TWO-PATH OPERATIONS have their own grammar in node, and omitting it is a divergence no
+    # syscall token can fix: uvException builds `<code>: <prose>, <syscall> '<path>' -> '<dest>'`
+    # for rename/link/symlink. MEASURED on a failing rename into an unwritable directory --
+    #     node    EACCES: permission denied, rename '<src>' -> '<dst>'
+    #     one-arg EACCES: permission denied, rename '<src>'
+    # -- and CPython populates `filename2` for exactly these calls, so the destination was always
+    # available here and simply never read. Found by review, not by the sweep: the sweep looks at
+    # sites that INTERPOLATE an error, and this is a defect in the interpolation's own grammar.
+    destination = getattr(error, "filename2", None)
+    if path is None:
+        suffix = ", " + syscall
+    elif destination is None:
+        suffix = ", " + syscall + " '" + str(path) + "'"
+    else:
+        suffix = ", " + syscall + " '" + str(path) + "' -> '" + str(destination) + "'"
     return code + ": " + prose + suffix
 
 
@@ -1712,7 +1756,9 @@ def _replace_atomic(temp, target):
     delay = 0.005
     while True:
         try:
-            os.replace(temp, target)
+            # `rename`, which is what node's renameSync reports and what os.replace performs;
+            # the two-path form comes from filename2, which CPython sets for this call.
+            _node_call("rename", os.replace, temp, target)
             return
         except OSError as error:
             remaining = deadline - time.monotonic()

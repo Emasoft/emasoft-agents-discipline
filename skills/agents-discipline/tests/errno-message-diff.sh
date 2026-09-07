@@ -401,9 +401,11 @@ _row "gates.py unreadable gate dir (scandir)" "$WORK/scan-o" "$WORK/scan-p" \
 # 0o700 to the FINAL component only, leaving an intermediate at the umask default under an
 # approval tree; both defects are gone with one call to the shared `mkdirs`.
 #
-# HONEST ABOUT ITS EVIDENCE: this row was written AFTER its fix, so unlike the rows above it was
-# never observed red against the real defect in place -- only against a re-planted one. That is
-# the weaker form, and it is the reason to prefer writing the row first.
+# HONEST ABOUT ITS EVIDENCE, in both directions: the DEFECT was measured directly before the fix
+# (the node/python pair above is that measurement), so it was never hypothetical. What was never
+# observed is THIS ROW reddening against it -- the row was written afterwards and is proven only
+# against a re-planted mutation. That is the weaker form, and the reason to write the row first;
+# stated precisely because the previous wording read as though the defect itself were unproven.
 for rt in o p; do
   R="$WORK/mkroot-$rt"; mkdir -p "$R/.agents-discipline/s/gates" "$WORK/mk-$rt"
   printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: echo ok\n  EXPECT: ok\n' \
@@ -419,6 +421,28 @@ AGENTS_DISCIPLINE_APPROVAL_DIR="$WORK/mk-p/child" \
 chmod 700 "$WORK/mk-o" "$WORK/mk-p"
 _row "gate-check unwritable approval PARENT (mkdir)" "$WORK/mkroot-o" "$WORK/mkroot-p" \
   "could not record approval" _scrub_mkdir
+
+# --- ROW 13: the first row to exercise an OVERRIDDEN PROSE code -------------------------------
+# EVERY OTHER ROW DELIVERS EACCES, ENOTDIR OR ENOENT -- the three codes where os.strerror() and
+# libuv's table AGREE. So none of them can see _LIBUV_PROSE at all, and the four codes it
+# overrides (EEXIST, EISDIR, ELOOP, ENAMETOOLONG) were verified only against hand-built OSErrors
+# compared to separately-measured node strings. That is the same "correct but uncovered" shape
+# this file exists to close.
+# A FILE where the locks DIRECTORY belongs, so _lock_directory's mkdirs hits EEXIST. The prose is
+# the whole point: libuv says "file already exists" where os.strerror says "file exists", so a
+# regression that dropped the override reddens HERE and nowhere else.
+for rt in o p; do
+  R="$WORK/lockfile-$rt"; mkdir -p "$R/.agents-discipline/s/gates"
+  printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: echo ok\n  EXPECT: ok\n' \
+    > "$R/.agents-discipline/s/gates/leaf.md"
+  : > "$R/.agents-discipline/locks"
+done
+"$NODE_ABS" "$HERE/../scripts/gate-check.mjs" --root "$WORK/lockfile-o" --scope s --claim \
+  > /dev/null 2> "$WORK/.o"
+"$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/lockfile-p" --scope s --claim \
+  > /dev/null 2> "$WORK/.p"
+_row "gate-check locks path is a file (EEXIST prose)" "$WORK/lockfile-o" "$WORK/lockfile-p" \
+  "cannot claim leases"
 
 echo
 if [ "$fail" = 0 ]; then

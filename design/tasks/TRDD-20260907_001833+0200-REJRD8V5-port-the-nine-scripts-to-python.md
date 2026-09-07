@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T10:59:14+0200
+updated: 2026-09-07T11:09:25+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -212,9 +212,23 @@ binder name added later (the alternation is not regenerated automatically), by a
 interpolation site, or by a call whose helper makes more than one syscall. Re-run step 1 before
 trusting it; do not inherit it.
 
-**AND IT WAS ALREADY INCOMPLETE IN A WAY THE 98 LINES COULD NOT SHOW** — see the next section:
-the sweep enumerates sites that INTERPOLATE an error, so it is structurally blind to a site that
-never binds one. `gate_check.py:756` was a bare `os.makedirs` with no `except` at all. `:1774` interpolates `_err_code(error)` — the errno NAME,
+**AND IT WAS ALREADY INCOMPLETE — BUT NOT FOR THE REASON FIRST WRITTEN HERE.** The first version
+said the sweep is "structurally blind to a site that never binds an error", which describes the
+symptom at `gate_check.py:756` (a bare `os.makedirs`) and would send the next reader hunting for
+unbound errors. That is the one thing that was not the problem.
+
+**THE MECHANISM: the sweep enumerated CATCH sites, but the syscall identity is decided at the
+RAISE site.** A site that DOES bind an error is equally broken when the bound error came from a
+call its catch cannot name — which is exactly the seven `open` constants, all at catches that
+bind correctly. So the right enumeration for this defect class is not "errors that are
+interpolated" but **every fs call whose node counterpart reports a syscall**:
+
+    os.open  stat  lstat  fstat  mkdir  makedirs  rename  replace  unlink  rmdir
+    scandir  read  write  fsync  readlink  realpath  chmod  symlink  link
+
+each of which must be either WRAPPED, or provably the only syscall its catch can see. That grep
+is mechanical, and it would have found both `:756` and the `os.replace` in `write_atomic` that a
+review found instead. `:1774` interpolates `_err_code(error)` — the errno NAME,
 which is what the oracle's `error.code` gives — not a message, so it is correct as written.
 
 **The runtime-message class has a SECOND member, found by this sweep:** `parse_regex` at
@@ -301,6 +315,59 @@ because `None` is a REAL filename for fd-based failures). The override is a DATA
 a message change: the returned `.filename` is the directory asked for, not the one that failed.
 Measured that `node_fs_message` is the port's only reader of `.filename`, and documented that the
 failing path lives on the unmutated `__cause__`.
+
+## Round 3 — the helper's own output grammar was incomplete (2026-09-07)
+
+**1. `node_fs_message` COULD NOT EXPRESS NODE'S TWO-PATH FORM.** For rename/link/symlink node
+builds `<code>: <prose>, <syscall> '<path>' -> '<dest>'`. The helper read `.filename` and ignored
+`.filename2`, which CPython populates for exactly those calls — so the destination was always
+available and simply never read. MEASURED on a rename into an unwritable directory:
+
+    node     EACCES: permission denied, rename '<src>' -> '<dst>'
+    one-arg  EACCES: permission denied, rename '<src>'
+
+This is a defect in the INTERPOLATION'S GRAMMAR, so no syscall token could have fixed it, and no
+amount of sweeping catch sites would have found it — the sweep looks at sites that interpolate an
+error, and here the interpolator itself was wrong. `write_atomic`'s `os.replace` was also
+unwrapped; it is now `_node_call("rename", os.replace, ...)`, and `_node_message_error` carries
+`filename2` through the rebuild. Verified byte-identical to node.
+
+**2. THE INVARIANT THE LAST FOUR COMMITS ACTUALLY BOUGHT, named here because it was never
+stated:** *every error escaping `read_stable_regular_file` either carries an attached message, or
+came from the open.* The open is deliberately left unwrapped and everything after it is wrapped —
+which is what finally makes the seven hardcoded `open` constants TRUE, where 75a63eb's message
+could only assert it. **`write_atomic` has no equivalent invariant**, which is why its rename was
+missed; anything else with a multi-syscall body needs one stated the same way.
+
+**3. TWO RIGHT ANSWERS THAT WERE MISSING THEIR ARGUMENT** — recorded because a right answer
+reached by a bad route is inherited as a good route:
+- *Why one syscall per errno sufficed for `_LIBUV_PROSE`*: `uv_strerror()` is a pure
+  errno→static-string table and `uvException()` composes the rest, so the prose cannot vary by
+  call. Re-measured anyway across `mkdir`/`symlink`/`open` (EEXIST), `open`/`read` (EISDIR) and
+  `stat`/`open` (ELOOP) — identical every time. The answer was right before the argument existed.
+- *Why `_node_realpath`'s map is a proxy, not the mechanism*: realpath is a WALK that `lstat`s
+  components and `stat`s a resolved target. ELOOP and the dangling link both report `stat`
+  because both fail at the TARGET-RESOLUTION step — not because of their errno. Keying on errno
+  fits five samples; an EACCES on a link target would report `stat` where the map says `lstat`.
+  The docstring now has to say errno is a PROXY for the walk step, or it teaches the same
+  over-generalization it was written to correct.
+
+**4. `no code reads the tail` IS GREP-SCOPED, not an enumeration.** It rests on `read_state`'s
+`startswith` plus greps over `scripts/` and `tests/`. Nothing ruled out a splitter taking `[1]`,
+a doc example checked by self-check, or a lint rule matching message content. Probably true, and
+far better grounded than the version it replaced — but it should read "no consumer found by grep
+over scripts/ and tests/", not "a claim about the PROGRAM".
+
+**5. `_LIBUV_PROSE`'S FALLBACK IS LOCALE-DEPENDENT.** `os.strerror` goes through libc and honours
+`LC_MESSAGES`, while libuv's table is fixed English — so under a non-English locale EVERY
+non-overridden code diverges. The four entries are immune; the fallback is not. CI runs in the C
+locale, so this is latent, and it argues for growing the table rather than trusting strerror.
+
+**6. ROW 13 — the first row to exercise an OVERRIDDEN code.** Every other row delivers EACCES,
+ENOTDIR or ENOENT: the three codes where strerror and libuv AGREE, so none of them could see
+`_LIBUV_PROSE` at all. A FILE where the locks directory belongs makes `_lock_directory`'s
+`mkdirs` hit EEXIST through a CLI. Mutation-tested by deleting the EEXIST override: exactly one
+row reddens. The table is no longer verified only against hand-built errors.
 
 **COVERAGE FACT, recorded because it is easy to misread:** there are SEVEN suites, and only FOUR
 honour `AD_RUNTIME` — `run-tests`, `dispatch-tests`, `ledger-tests`, `lint-tests`.
