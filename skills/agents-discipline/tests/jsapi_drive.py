@@ -119,7 +119,12 @@ _NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3", "1e
                 # See jsapi-drive.mjs for what each of these pins in the numeric grammar.
                 "0.", "1.e3", " +0x10", "0X", "1e+3", "1e999", "+", "-", ".", "1.2.3",
                 "0.0e0", "+.5", "-.5", "00", "010", ".e3", "0b", "0o", "0xg", " 0x10 ",
-                "+0x10", "1 2"]
+                "+0x10", "1 2",
+                # See jsapi-drive.mjs for the defect these close and the two mutations that
+                # isolate them. chr(), never a literal character: both drivers must hold the
+                # same bytes.
+                chr(0x0661) + chr(0x0662), chr(0xFF11), chr(0x06F4),
+                "0x1_0", "0x" + chr(0x0661)]
 for _s in _NUM_STRINGS:
     _n = js_to_number(_s)
     # ensure_ascii=False, because the JS side labels with JSON.stringify, which NEVER escapes

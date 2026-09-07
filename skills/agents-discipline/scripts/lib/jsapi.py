@@ -62,8 +62,22 @@ def js_trim(value):
 
 # The JS numeric-literal grammar `Number(str)` accepts, MINUS the extensions Python's float()
 # adds. Anchored, so nothing trails. `5.` and `.5` are both legal; an exponent needs digits.
-_JS_DECIMAL_RE = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
+#
+# `[0-9]`, NEVER `\d`. Python's `\d` matches every Unicode decimal digit -- Arabic-Indic
+# U+0661, fullwidth U+FF11, Extended Arabic-Indic U+06F4 -- while JS's `\d` is ASCII-only in
+# every mode. That made `Number("١٢")` 12 in the port and NaN in the oracle. Measured against
+# node, not deduced. It survived a 202-row differential because every row's digits were ASCII:
+# case count is not coverage, and the corpus was blind in a direction nobody had varied.
+_JS_DECIMAL_RE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\Z")
 _JS_RADIX_PREFIX = {"0x": 16, "0X": 16, "0b": 2, "0B": 2, "0o": 8, "0O": 8}
+# The radix path cannot reuse the regex, and int(digits, radix) has the SAME hole plus one of
+# its own: it accepts Unicode digits plus the PEP 515 underscore, so `0x1_0` was 16 in the port
+# and NaN in the oracle. Digits are therefore checked against this ASCII table first.
+_RADIX_DIGITS = {
+    16: "0123456789abcdefABCDEF",
+    8: "01234567",
+    2: "01",
+}
 
 
 def js_to_number(value):
@@ -115,10 +129,13 @@ def js_to_number(value):
         digits = text[2:]
         if not digits:
             return float("nan")                      # "0x" alone
-        try:
-            return float(int(digits, radix))
-        except ValueError:
+        # EVERY digit checked against an ASCII table BEFORE int(). int(s, 16) accepts both
+        # Unicode decimal digits and the PEP 515 underscore, so "0x١٢" returned 18.0 and
+        # "0x1_0" returned 16.0 where the oracle gives NaN for both. try/except ValueError
+        # cannot catch either, because int() does not consider them errors.
+        if any(c not in _RADIX_DIGITS[radix] for c in digits):
             return float("nan")
+        return float(int(digits, radix))
     if not _JS_DECIMAL_RE.match(text):
         return float("nan")                          # rejects 1_000, 12abc, 1e, 1,000, --5
     return float(text)

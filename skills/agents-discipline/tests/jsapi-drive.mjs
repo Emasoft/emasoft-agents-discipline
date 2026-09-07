@@ -140,7 +140,27 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   // else -- and a corpus that admits unbounded documentation rows has no stopping condition at
   // all. The enumeration is what closes it: adding a shape means adding it in both places.
   "0.", "1.e3", " +0x10", "0X", "1e+3", "1e999", "+", "-", ".", "1.2.3", "0.0e0", "+.5",
-  "-.5", "00", "010", ".e3", "0b", "0o", "0xg", " 0x10 ", "+0x10", "1 2"];
+  "-.5", "00", "010", ".e3", "0b", "0o", "0xg", " 0x10 ", "+0x10", "1 2",
+  // NON-ASCII DIGITS AND THE PEP-515 UNDERSCORE -- ground ONE, and they close a REAL defect the
+  // 202-row corpus was blind to: `Number("١٢")` is NaN, but the port returned 12,
+  // because Python's `\d` matches every Unicode decimal digit while JS's is ASCII-only in every
+  // mode. `int(digits, radix)` has the same hole PLUS the underscore, so `0x1_0` was 16 to the
+  // port and NaN to the oracle. Case count is not coverage: every one of those 202 rows had
+  // ASCII digits, so the corpus was blind in a direction nobody had varied.
+  //
+  // Written with String.fromCharCode, never as literal characters. Both drivers must hold the
+  // same bytes, and a literal Arabic-Indic digit in a source file is invisible to a reader and
+  // one careless re-encode away from silently becoming a different code point.
+  //
+  // Mutations that isolate them (each reddens ONLY its own rows; both mutants still IMPORT):
+  //   `[0-9]` -> `\d` in _JS_DECIMAL_RE   reddens the three unicode-digit rows
+  //   drop the _RADIX_DIGITS guard        reddens "0x1_0" and the radix unicode-digit row
+  String.fromCharCode(0x0661, 0x0662),  // Arabic-Indic -- the pair that shipped as 12
+  String.fromCharCode(0xFF11),          // fullwidth ONE
+  String.fromCharCode(0x06F4),          // Extended Arabic-Indic FOUR
+  "0x1_0",                              // int("1_0", 16) is 16; Number is NaN
+  "0x" + String.fromCharCode(0x0661),   // the same hole reached through the radix path
+];
 for (const s of NUM_STRINGS) {
   const n = Number(s);
   out.push(["Number(string) " + JSON.stringify(s), Number.isNaN(n) ? "NaN" : String(n)]);

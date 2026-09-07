@@ -130,8 +130,12 @@ echo "-- REJECT: the argument layer must refuse these, identically --"
 
 help_case   "help long"                    --help
 help_case   "help short"                   -h
-help_case   "help wins over a usage error" --help --bogus
 help_case   "both help spellings"          --help -h
+# NOT a help_case: parseArgs scans the WHOLE argv before main() ever tests opt.help, so an
+# unknown option anywhere makes it return an error and --help never prints. Filed here as a
+# reject to record that ordering, which is the opposite of what the name suggested when this
+# row was written as a help_case and reported a false divergence.
+reject_case "unknown option beats --help"  --help --bogus
 
 reject_case "unknown long"                 --bogus
 reject_case "unknown short"                -x
@@ -164,7 +168,16 @@ reject_case "timeout negative"             --timeout -1
 reject_case "timeout above range"          --timeout 86401
 reject_case "timeout non-numeric"          --timeout abc
 reject_case "timeout Infinity"             --timeout Infinity
+# The three Unicode/underscore rows below each isolate a DIFFERENT hole, confirmed by mutation:
+#   "١٢"     _JS_DECIMAL_RE using `\d` (Python matches every Unicode decimal digit; JS is
+#            ASCII-only in every mode) -- this row alone reddens when [0-9] reverts to \d
+#   "0x١٢"   int(digits, radix) accepting Unicode digits, which no try/except can catch
+#            because int() does not consider them an error
+#   "0x1_0"  int(digits, radix) accepting the PEP 515 underscore -- a SEPARATE acceptance from
+#            the one above, so removing the guard for only one of them still reddens the other
 reject_case "timeout unicode digits"       --timeout "١٢"
+reject_case "timeout radix unicode digits" --timeout "0x١٢"
+reject_case "timeout radix underscore"     --timeout "0x1_0"
 reject_case "jobs zero"                    --jobs 0
 reject_case "jobs above range"             --jobs 65
 reject_case "jobs non-numeric"             --jobs abc
