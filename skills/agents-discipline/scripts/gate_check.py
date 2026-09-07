@@ -1344,6 +1344,15 @@ def main(argv):
             # was a read. It was picked next precisely because the syscall constant looked most
             # likely to break here, and MEASURED it does not: node still says `open`, because
             # writeAtomic's failing call is the open of its TEMP file.
+            #
+            # MEASURED FOR A FAILURE AT THE TEMP OPEN, WHICH IS NOT THE WHOLE WRITE PATH.
+            # write_atomic opens a temp, writes, fsyncs, then RENAMES; the fixture (an unwritable
+            # gates directory) fails at the first step. A failure at the rename would plausibly
+            # name `rename` and carry TWO paths, and no fixture here reaches it -- the pre-flight
+            # read rejects the shapes that would (a directory target, a symlink loop) before any
+            # write begins. So the claim is "open, for a failure at the open", not "open for
+            # every write failure", and the difference is exactly what the read-side sites got
+            # wrong when gate_lint's argument was reused at read_state.
             #     oracle  ... : EACCES: permission denied, open '<file>.<pid>.<hex>.tmp'
             #     port    ... : [Errno 13] Permission denied: '<file>.<pid>.<hex>.tmp'
             # THE PATH IS THE TEMP FILE, NOT `result["file"]`, and that is the durable finding: a

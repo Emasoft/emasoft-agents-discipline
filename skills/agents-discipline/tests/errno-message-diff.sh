@@ -72,18 +72,24 @@ _unreadable() {  # path -> creates it, unreadable
 # ROOT SCRUBBED BUT NOT CANONICALISED AWAY: /private/var and /var are the same directory under two
 # spellings on macOS, and mapping both to one token would hide a lexical-vs-realpath divergence
 # (encoding-diff.sh records the incident). Normalise the spelling, then substitute.
-# The temp suffix is scrubbed for row 6 and harmless everywhere else: write_atomic names its
-# temporary `<target>.<pid>.<16 hex>.tmp`, so the two runtimes CANNOT produce equal text on any
-# write failure -- different pids, different random bytes. Without this, that row would fail for
-# a reason unrelated to what it measures.
-_scrub() {
-  sed -e 's|/private/var/|/var/|g' -e "s|$1|<ROOT>|g" \
-      -e 's/\.[0-9][0-9]*\.[0-9a-f][0-9a-f]*\.tmp/.<TMP>/g'
+_scrub() { sed -e 's|/private/var/|/var/|g' -e "s|$1|<ROOT>|g"; }
+
+# THE TEMP SCRUB IS ROW 6's ALONE, and that scoping is the point. write_atomic names its temporary
+# `<target>.<pid>.<16 hex>.tmp`, so the two runtimes cannot produce equal text on a write failure
+# -- different pids, different random bytes -- and row 6 would fail for a reason unrelated to what
+# it measures without this.
+# APPLIED GLOBALLY IN THE FIRST DRAFT, which is the /private failure's exact shape: a rule added
+# to remove noise from ONE row, running on all of them, able to eat signal in a row nobody was
+# thinking about. `.[0-9]+.[0-9a-f]+.tmp` also matches plain decimals (0-9 is inside 0-9a-f), so a
+# future fixture naming a file `data.12.34.tmp` would have its differences normalised away
+# silently. Inert across today's six rows -- and "inert today" is what the /private scrub was too.
+_scrub_tmp() {
+  _scrub "$1" | sed -e 's/\.[0-9][0-9]*\.[0-9a-f][0-9a-f]*\.tmp/.<TMP>/g'
 }
 
-_row() {  # label  oracle-cmd-file  port-cmd-file  required-substring
-  local label="$1" o p needle="$4"
-  o="$(_scrub "$2" < "$WORK/.o")"; p="$(_scrub "$3" < "$WORK/.p")"
+_row() {  # label  oracle-root  port-root  required-substring  [scrub-fn]
+  local label="$1" o p needle="$4" scrub="${5:-_scrub}"
+  o="$("$scrub" "$2" < "$WORK/.o")"; p="$("$scrub" "$3" < "$WORK/.p")"
   # NON-VACUITY: the oracle must have produced the message this row is about. Without it a
   # fixture that failed earlier (a bad flag, a missing arg) leaves both sides equal on some other
   # error and reports agreement about a branch neither reached.
@@ -200,7 +206,7 @@ AGENTS_DISCIPLINE_APPROVAL_DIR="$WORK/approvals-p" \
   "$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/wr-p" --scope s --approve \
   > /dev/null 2> "$WORK/.p"
 chmod 700 "$WORK/wr-o/.agents-discipline/s/gates" "$WORK/wr-p/.agents-discipline/s/gates"
-_row "gate-check unwritable ledger dir" "$WORK/wr-o" "$WORK/wr-p" "cannot update"
+_row "gate-check unwritable ledger dir" "$WORK/wr-o" "$WORK/wr-p" "cannot update" _scrub_tmp
 
 echo
 if [ "$fail" = 0 ]; then
