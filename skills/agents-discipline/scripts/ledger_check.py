@@ -134,7 +134,21 @@ EXIT_CODE = re.compile(r"exit\s+[0-9]+", re.I)
 # NO WHITESPACE in the span: `node test/run-tests.mjs` is a COMMAND that happens to name a
 # path, and demanding that string exist as a file is nonsense. Only a bare path is a citation.
 CITATION = re.compile(r"`([^`\s]*/[^`\s]*\.[A-Za-z0-9]{1,6})`")
-UNIT_HEADER = re.compile(r"^\*\*unit" + JS_WS_CLASS + r"+([0-9]+)" + NOT_WORD_AFTER, re.I)
+# `re.A` is not cosmetic here: bare `re.I` folds U+017F/U+0131/U+0130/U+212A onto ASCII, so
+# `**UNIT 1` (dotted-I) matched the literal `unit` in Python and NOT in node -- this finder
+# decides evidence ATTRIBUTION, so over-matching reports a row BACKED that the oracle reports
+# UNBACKED. JS `/i` without `u` refuses every non-ASCII->ASCII fold; `re.A` is how Python says
+# the same thing. Safe on THIS pattern only because no case-bearing element is non-ASCII, and
+# NOTHING ENFORCES THAT -- it is an eyeball check, so do NOT copy the flag onto another pattern
+# on this comment's authority. `re.A` also narrows `\s`, `\d`, `\w` and `\b`, so "the pattern is
+# pure ASCII" is not the test either; a pattern carrying `\d` would pass that reading and still
+# be changed underneath you.
+#
+# NOT_WORD_AFTER stands in for the oracle's `\b` (`ledger-check.mjs:270`), and that rewrite is
+# only valid while the quantifier is `+`. `\b` is two-sided; the lookahead is one-sided, and
+# they agree solely because `[0-9]+` guarantees a word char to the left. Change it to `*` and
+# `**Unit ` with no number matches here and not in node.
+UNIT_HEADER = re.compile(r"^\*\*unit" + JS_WS_CLASS + r"+([0-9]+)" + NOT_WORD_AFTER, re.I | re.A)
 
 # The table-header FINDER, mirroring `ledger-check.mjs:47`'s `/^\|\s*#\s*\|/`. JS_WS_CLASS, never
 # Python `\s` -- this is the single most consequential of the class's sites, because it does not
