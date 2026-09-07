@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T11:29:45+0200
+updated: 2026-09-07T11:39:41+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -594,6 +594,12 @@ reconstructs the current state by applying them in sequence will get it wrong �
 alone appears there in three different states. Everything currently true about this class is in
 this block; the rounds explain only how it was arrived at.
 
+**WRITE-SIDE RULE, because this block deliberately DUPLICATES facts the rounds also state, and
+two homes for one fact is how drift starts:** a new fact is written HERE and nowhere else. Never
+edit a round to reflect it — a round records what was believed at the time, and rewriting it
+destroys the only evidence of how the belief changed. On any disagreement THIS BLOCK WINS, and
+the round is left standing as wrong-at-the-time rather than corrected in place.
+
 - **THE INVARIANT** (load-bearing for seven hardcoded `open` constants; corrected three times,
   and the `OSError` scoping is not optional): *every **OSError** escaping
   `read_stable_regular_file` either carries an attached message, came from the open, or is
@@ -601,11 +607,20 @@ this block; the rounds explain only how it was arrived at.
   qualifier exists. **Derive it by walking the raise sites, never from memory.**
 - **THE ENUMERATION IS FROZEN** — the list is in Round 4. Audit against it to exhaustion;
   widening it is a NEW class, decided deliberately and once.
-- **OPEN ITEM, and the only one in this class:** the call×catch audit of the remaining fs-call
-  sites. `gate_check.py`'s 14 are the risky set (ten catches with hardcoded constants);
-  `ledger_check.py`'s 2 are trivial; `gates.py`'s remainder are mostly in functions already
-  audited. **Not mechanical** — step 3 (could any other call under this catch raise?) is
-  judgment, and it is where every defect in this class has hidden. One focused pass.
+- **`gate_check.py` IS AUDITED (`b9a6ccc`+1) — 14 sites → 8, and it found a real defect.**
+  `read_approval_file` had the SAME shape as `read_stable_regular_file`: an open followed by
+  `fstat`/`read`, the oracle (`gate-check.mjs:416-447`) wrapping none of them, everything
+  escaping to a catch that hardcodes `open`. Six wrapped — `fstat`, `read`, the three
+  no-local-try `os.lstat` sites in the approval-dir helpers, and `os.stat(lock)`. The remaining
+  8 carry verdicts: `:321`/`:943` already pass the right constant, `:789`/`:857` genuinely ARE
+  opens, and `:667`/`:912`/`:915` are swallowed without emitting. **The audit was worth doing —
+  it was NOT a formality**, which is the answer to four commits' worth of deferring it.
+- **REMAINING OPEN:** `ledger_check.py`'s 2 (trivial) and `gates.py`'s remainder (mostly inside
+  functions already audited this session). **Not mechanical** — step 3 (could any other call
+  under this catch raise?) is judgment, and it is where every defect in this class has hidden.
+- **`node_call` IS PUBLIC**, third time this lesson has been paid: `node_fs_message`, then
+  `mkdirs`, now this. A helper the neighbours cannot import is one they re-implement or go
+  without — `read_approval_file` went without.
 - **STOPPING RULE:** close a divergence when something CONSUMES it, or when it is cheap and
   mechanical; RECORD it when nothing consumes it and closing means reimplementing a runtime's
   algorithm. Stop auditing when a round **against the same frozen enumeration** produces no CODE

@@ -103,6 +103,16 @@ if ls "$_dprobe" >/dev/null 2>&1; then
   echo "  compare two success paths instead of two errors. Re-run as an unprivileged user." >&2
   chmod 700 "$_dprobe"; exit 2
 fi
+# BOTH HALVES ARE ASSERTED, because the sentence above promises both and a probe that checks one
+# of them is the comment-overstates-the-code defect this suite exists to catch. The write half is
+# not decoration: row 14 needs the lock file CREATED (write) and only the scan denied. If a
+# platform refused the write too, row 14 would fail at the filelock open instead -- row 8's path,
+# a different syscall -- and would be measuring something other than what it says.
+if ! : > "$_dprobe/.writable" 2>/dev/null; then
+  echo "errno-message-diff: chmod 300 denies WRITES here as well as scans, so row 14 would fail" >&2
+  echo "  at the filelock open instead of the directory scan it exists to measure." >&2
+  chmod 700 "$_dprobe"; exit 2
+fi
 chmod 700 "$_dprobe"
 _unreadable() {  # path -> creates it, unreadable
   printf '%s' "${2:-x}" > "$1"

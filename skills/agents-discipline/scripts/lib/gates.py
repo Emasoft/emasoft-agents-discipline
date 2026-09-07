@@ -168,7 +168,7 @@ def _node_message_error(error, syscall, filename=_KEEP_FILENAME) -> OSError:
 
     Annotated `-> OSError` at the ROOT rather than at each consumer: the subclass is built by a
     dynamic `type(...)` call, so the checker sees an opaque `_` and reads every `raise` of it --
-    here, in _node_call, _node_lstat and mkdirs -- as raising a non-exception. One annotation
+    here, in node_call, _node_lstat and mkdirs -- as raising a non-exception. One annotation
     plus one suppression at the return below settles all of them; annotating the consumers
     instead just moves the same complaint outward, one copy per hop.
 
@@ -219,8 +219,13 @@ def _node_message_error(error, syscall, filename=_KEEP_FILENAME) -> OSError:
     return rebuilt  # pyright: ignore[reportReturnType]
 
 
-def _node_call(syscall, call, *args, **kwargs):
+def node_call(syscall, call, *args, **kwargs):
     """Run ONE fs syscall, re-raising with node's message shape for THAT syscall.
+
+    PUBLIC for the third time on the same lesson, after node_fs_message and mkdirs: gate_check's
+    read_approval_file is a SECOND multi-syscall reader with the exact shape this fixes, and it
+    could not import the helper while the name was underscored. A helper the neighbours cannot
+    import is one they will re-implement -- or, here, simply go without.
 
     read_stable_regular_file makes seven more syscalls after its open, and the oracle wraps
     NONE of them: gates.mjs:152-181 lets fstatSync, lstatSync, realpathSync and readSync throw
@@ -474,8 +479,8 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
         raise
 
     try:
-        opened = _node_call("fstat", os.fstat, fd)
-        named = _node_call("lstat", os.lstat, target)
+        opened = node_call("fstat", os.fstat, fd)
+        named = node_call("lstat", os.lstat, target)
         _assert_regular_single_link(opened, target, label, limit)
         # The descriptor and the NAME can already be different files: something may have
         # swapped the path between the open and now. Comparing the fd's identity against the
@@ -507,7 +512,7 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
         chunks = []
         total = 0
         while True:
-            chunk = _node_call("read", os.read, fd, min(64 * 1024, limit + 1 - total))
+            chunk = node_call("read", os.read, fd, min(64 * 1024, limit + 1 - total))
             if not chunk:
                 break
             chunks.append(chunk)
@@ -515,7 +520,7 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
             if total > limit:
                 raise OSError(f"{label} exceeds {limit} bytes: {target}")
 
-        after = _node_call("fstat", os.fstat, fd)
+        after = node_call("fstat", os.fstat, fd)
         _assert_regular_single_link(after, target, label, limit)
         if (after.st_ino, after.st_dev, after.st_size, after.st_mtime_ns) != (
             opened.st_ino, opened.st_dev, opened.st_size, opened.st_mtime_ns
@@ -1481,7 +1486,7 @@ def node_fs_message(error, syscall):
     be a silent, smaller divergence, so an unmatched code still produces this shape.
     """
     # An ALREADY-ATTACHED message wins over the caller's `syscall`, because the caller guessed
-    # and _node_call knew. Seven sites pass "open" for read_stable_regular_file, which makes
+    # and node_call knew. Seven sites pass "open" for read_stable_regular_file, which makes
     # eight syscalls; without this branch a failing fstat/lstat/realpath/read would be
     # relabelled `open` right here, at the one site whose whole job is the syscall token.
     attached = getattr(error, "_node_message", None)
@@ -1790,7 +1795,7 @@ def _replace_atomic(temp, target):
             # which is what renameSync does, since uv_fs_rename maps to MoveFileExW with
             # MOVEFILE_REPLACE_EXISTING. On POSIX the two are identical, so the wrong choice would
             # have passed every test run on this machine.
-            _node_call("rename", os.replace, temp, target)
+            node_call("rename", os.replace, temp, target)
             return
         except OSError as error:
             remaining = deadline - time.monotonic()
@@ -2031,7 +2036,7 @@ def append_status(root, scope, line):
     fd = None
     try:
         try:
-            before = _node_call("lstat", os.lstat, path)
+            before = node_call("lstat", os.lstat, path)
             if (not statmod.S_ISREG(before.st_mode) or statmod.S_ISLNK(before.st_mode)
                     or before.st_nlink != 1):
                 raise OSError("refusing non-file or linked status log " + path)
@@ -2049,10 +2054,10 @@ def append_status(root, scope, line):
         # comparison below IS the check the secondary descriptor exists to approximate. The
         # POSIX branch the oracle actually runs does exactly this, too.
         no_follow = 0 if sys.platform == "win32" else getattr(os, "O_NOFOLLOW", 0)
-        fd = _node_call("open", os.open, path, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+        fd = node_call("open", os.open, path, os.O_WRONLY | os.O_APPEND | os.O_CREAT
                         | getattr(os, "O_NONBLOCK", 0) | no_follow, 0o600)
-        opened = _node_call("fstat", os.fstat, fd)
-        named = _node_call("lstat", os.lstat, path)
+        opened = node_call("fstat", os.fstat, fd)
+        named = node_call("lstat", os.lstat, path)
         # The NAMED entry's own type/link failure carries assertRegularSingleLink's message, not
         # "refusing non-file or replaced". In the oracle that check lives inside
         # statCurrentNamedFile and throws before line 179 is reached, so the two conditions
@@ -2065,9 +2070,9 @@ def append_status(root, scope, line):
         if (not statmod.S_ISREG(opened.st_mode) or opened.st_nlink != 1
                 or (opened.st_ino, opened.st_dev) != (named.st_ino, named.st_dev)):
             raise OSError("refusing non-file or replaced status log " + path)
-        _node_call("write", _write_all, fd,
+        node_call("write", _write_all, fd,
                    (re.sub(r"[\r\n]+", " ", str(line)) + "\n").encode("utf-8"))
-        _node_call("fsync", os.fsync, fd)
+        node_call("fsync", os.fsync, fd)
         return path
     finally:
         if fd is not None:
@@ -2105,7 +2110,7 @@ def _read_leases_unlocked(root):
     # ONE CONSTANT IS SOUND HERE, unlike realpath, and that was checked rather than assumed --
     # the realpath bug WAS one errno generalized to a whole call. readdirSync reports `scandir`
     # for EACCES, ENOTDIR and ENOENT alike, and CPython names the same path in all three.
-    for name in sorted(_node_call("scandir", os.listdir, directory), key=js_sort_key):
+    for name in sorted(node_call("scandir", os.listdir, directory), key=js_sort_key):
         if not name.endswith(".lease"):
             continue
         file = _js_join(directory, name)

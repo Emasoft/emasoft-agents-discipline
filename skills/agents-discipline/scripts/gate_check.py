@@ -106,7 +106,8 @@ sys.path.insert(0, _LIB_DIR)
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
     AGENTS_DISCIPLINE_DIR, MAX_AUTOMATIC_EVIDENCE_CHARS, MAX_CHECK_OUTPUT_BYTES,
     automatic_evidence_prefix, claim_leases, format_document, gate_definition_digest,
-    gate_state, js_basename, js_dirname, js_resolve, list_scopes, mkdirs, parse_gates, qualify,
+    gate_state, js_basename, js_dirname, js_resolve, list_scopes, mkdirs, node_call, parse_gates,
+    qualify,
     read_stable_regular_file, release_leases, resolve_target, same_file_identity, sha256,
     sleep, stat_current_named_file, append_status, validate_scope_id, with_file_lock,
     write_atomic,
@@ -765,18 +766,22 @@ def main(argv):
             mkdirs(directory, 0o700)
         elif not os.path.exists(directory):
             return None
-        info = os.lstat(directory)
+        # The lstat trio below (here, the canonical one, and assert_approval_dir_unchanged) has no
+        # local try, so each escapes to an approval catch that hardcodes `open` -- the same shape
+        # as read_approval_file above. Reachable on EACCES from an unsearchable parent; the
+        # os.path.exists guard one line up only covers absence.
+        info = node_call("lstat", os.lstat, directory)
         assert_private_approval_entry(directory, info, "directory")
         canonical = os.path.realpath(directory)
         if _path_is_inside(canonical_root, canonical):
             raise RuntimeError("approval directory resolves inside the repository root: " + canonical)
-        canonical_info = os.lstat(canonical)
+        canonical_info = node_call("lstat", os.lstat, canonical)
         assert_private_approval_entry(canonical, canonical_info, "directory")
         return {"path": canonical, "dev": canonical_info.st_dev, "ino": canonical_info.st_ino}
 
     def assert_approval_dir_unchanged(store):
         """gate-check.mjs:408-414."""
-        current = os.lstat(store["path"])
+        current = node_call("lstat", os.lstat, store["path"])
         assert_private_approval_entry(store["path"], current, "directory")
         if not same_file_identity(current, store):
             raise RuntimeError("approval directory changed during use: " + store["path"])
@@ -786,8 +791,13 @@ def main(argv):
         fd = None
         try:
             no_follow = 0 if sys.platform == "win32" else getattr(os, "O_NOFOLLOW", 0)
+            # THE SAME SHAPE read_stable_regular_file had, found by the call-site audit rather
+            # than by the sweep: this body makes several syscalls after its open, the oracle
+            # (gate-check.mjs:416-447) wraps NONE of them -- openSync/fstatSync/readSync throw
+            # raw, each carrying its own token -- and everything escaping here reaches a catch
+            # that hardcodes `open`. So an fstat or read failure was reported as `open`.
             fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | no_follow)
-            opened = os.fstat(fd)
+            opened = node_call("fstat", os.fstat, fd)
             named = stat_current_named_file(
                 path, {"maxBytes": MAX_APPROVAL_BYTES, "label": "approval record"})
             assert_private_approval_entry(path, opened, "file")
@@ -799,7 +809,7 @@ def main(argv):
                 raise RuntimeError("refusing linked or replaced approval record " + path)
             chunks = []
             while True:
-                chunk = os.read(fd, 65536)
+                chunk = node_call("read", os.read, fd, 65536)
                 if not chunk:
                     break
                 chunks.append(chunk)
@@ -862,7 +872,7 @@ def main(argv):
                 # Fail closed instead of trying to steal by path -- same reasoning as the
                 # oracle's own comment at this exact site.
                 try:
-                    os.stat(lock)
+                    node_call("stat", os.stat, lock)
                 except OSError as stat_exc:
                     if stat_exc.errno != _errno.ENOENT:
                         raise
