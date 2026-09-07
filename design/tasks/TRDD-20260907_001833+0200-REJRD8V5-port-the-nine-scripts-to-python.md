@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T16:39:25+0200
+updated: 2026-09-07T19:37:04+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -695,6 +695,119 @@ set) and covered by the driver rows, but it is not zero. `gates.py`'s own remain
 and `dispatch.py` (7 uses, `read_state` done) are what is left.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
+
+### REGEX-WHITESPACE CLASS — OPEN. The port transliterated the oracle's `\s`, and the two
+### languages do not agree on what `\s` means.
+
+**SETTLED, exhaustively, do not re-derive.** Full `0..0x10FFFF` scan (surrogates skipped) run in
+node and in Python on 2026-09-07:
+
+| set | members |
+|---|---|
+| node `\s` | **exactly 25** |
+| `ledger_check.JS_TRIM` | **exactly 25 — the SAME 25**, both difference directions empty |
+| JS-only (`js` yes, `py` no) | `U+FEFF` |
+| Python-only (`py` yes, `js` no) | `U+001C U+001D U+001E U+001F U+0085` |
+
+So **`JS_WS_CLASS` (built from `_JS_TRIM_CODEPOINTS`) is a PROVEN-EXACT substitute for JS `\s`**,
+over the whole range rather than a sample — verified by asserting it matches every member of
+node's own `\s` set and none of the five Python-only ones. That is the precondition for the sweep
+below, and it is now measured, not assumed.
+
+**Consequence: every port site still spelling Python `\s` differs from its oracle at exactly those
+six code points.** `d750a3d` fixed ONE (`UNIT_HEADER`). NINE remain in `ledger_check.py`:
+
+`:66` MEASURED_RESULT · `:69` EXIT_CODE · `:72` CITATION *(negated `[^`\s]` — polarity INVERTS)* ·
+`:110` CREATED · `:144` header finder · `:243` + `:433` code-span whitespace test ·
+`:275`/`:276` heading · `:464` no-op scan.
+
+**FIVE have a MEASURED, user-visible divergence** (fixtures built and run, both runtimes):
+
+- `:144` **the worst** — U+001C after the leading pipe of the table header: node **exit 2**
+  "not a DELEGATION.md ledger" vs python **exit 0** "ledger complete: every unit verified". Same
+  bytes; the port declares the work done on a file the oracle refuses outright.
+- `:66`, `:69` — exit-code splits in BOTH directions (`evidence: present` vs `MISSING`).
+- `:72` — U+001C: node `artifacts: 1 cited, PROBLEMS` + `missing artifacts:` (exit 1) vs python
+  `none cited` (exit 0). The negated class inverts which runtime is strict.
+- `:275` — diverges ONLY once a `## Rules of this ledger` section exists, which is the only thing
+  the heading decision gates. My first fixture had none and printed "same".
+
+**THAT LAST LINE IS THE METHOD WARNING, and it cost three rows.** A fixture that never reaches
+its site prints "same" and reads as evidence of soundness. `:110`, `:243` and `:433` are currently
+"same" — that is UNDETERMINED, never "sound". Two reviewers predicted `:243` is masked by its own
+fixture (its `12 passed` satisfies the evidence check by a second path, independent of the code
+span under test); untested. `:433`/`:464` need the re-run loop ON to reach at all.
+
+**TWO DESIGN DECISIONS BEFORE ANY EDIT — this is NOT a mechanical sweep:**
+
+1. **`:464` must be converted LAST and deliberately, if at all.** It is a REJECTION predicate (is
+   this acceptance a no-op cheat?), where the safe error direction is matching MORE. Today
+   `echo<U+001C>ok` is flagged as a no-op; with JS semantics it would NOT be. No exploit exists —
+   the same bytes break the shell command, so the acceptance fails anyway — but fidelity to the
+   oracle weakens a cheat detector here, and that is worth a comment rather than a transliteration.
+2. **CITATION's `\s` is inside a NEGATED class**, so `JS_WS_CLASS` cannot be substituted in.
+   Factor the escaped BODY out — `JS_WS_CHARS = "".join(map(re.escape, JS_TRIM))` — and derive
+   both `JS_WS_CLASS = "[" + JS_WS_CHARS + "]"` and `[^\`" + JS_WS_CHARS + "]` from it so they
+   cannot drift. `re.escape` already neutralises `-`, `]`, `^` and `\` inside a class; the trap is
+   splicing the RAW joined string instead of the escaped one.
+
+**SCOPE FINDING, larger than this class:** `\w`, `\d`, `\b` and `.` diverge between JS and Python
+the same way. `:433` already spells `^[A-Za-z0-9_./-]+` where the oracle writes `/^[\w./-]+/` —
+JS `\w` is ASCII-only, Python's is Unicode — so someone already hit the `\w` version of this bug.
+The port's own `:55-59` comment says `re.ASCII` was rejected because it ALSO narrows `\s`. Verify
+mechanically that no pattern combines `re.ASCII` with `\s`, and that every non-`re.ASCII` pattern
+spells `\d`/`\b`/`\w` out.
+
+**THE TEST THAT DISCRIMINATES — not 54 differential vectors.** A differential can only test a site
+its fixture reaches, and one site is reachable today, so 9 sites × 6 code points would be a great
+deal of green proving little. Instead: (a) the property assertion above, over all 25 members plus
+the 5 excluded — deterministic, covers all nine sites at once; (b) ONE regression guard: `\s` no
+longer occurs in any `re.compile` argument in the module, which cannot pass vacuously and catches
+a transliteration-back at a site no fixture reaches; (c) its control — revert one site and confirm
+(b) reddens, which unlike most controls here is genuinely constructible; (d) exactly ONE
+differential, for `:144`, the site whose reachability is measured. Add others as reachability is
+demonstrated, not before.
+
+### OPEN DEFECT IN `tests/whitespace-diff.sh` — the anchor added by `1198f2b` is exploitable
+
+Review found a constructible edit that passes ALL FOUR of `_control`'s checks and leaves the six
+evidence-header vectors vacuous. **NOT YET VERIFIED FIRST-HAND — verify before acting.** Move
+`_write_ledger_ev`'s `%s` PAST the digit:
+
+    '**Unit 2%s —** the upstream API was withdrawn; the work cannot finish.'
+
+agreement passes · `verified: +1` passes · inequality passes (pad `X` is a word char, so the
+trailing `\b` / `(?![0-9A-Za-z_])` fails, no block opens, the marker fires, verdict differs) ·
+anchor `\*\*Unit` passes (the line still starts `**Unit`). But with a WHITESPACE pad after the
+digit, all six code points are non-word, both runtimes' lookaheads hold, both open the block —
+identical to identical, asserting nothing. The whitespace class is consulted ONLY in the gap
+between `**Unit` and the digits; a pad after the digits never touches it.
+
+Settle it by applying that edit and running the suite (a `/tmp` copy will NOT work — the script
+derives `HERE` from `BASH_SOURCE` and would resolve the oracle to `/scripts/ledger-check.mjs`).
+**exit 0 confirms the hole.** Revert either way.
+
+**The proposed replacement removes the anchor entirely rather than sharpening it.** Assert the
+property directly with a pad BOTH runtimes agree is whitespace (`U+0020`, measured earlier this
+session as matching in both) and require the verdict to EQUAL the unpadded control: a pad in a
+trimmed region is invisible, a pad outside one changes the parse. Keep the `X` inequality
+alongside it — X proves the pad LANDED, space proves the position is TRIMMED. That deletes the
+third parameter and all three hand-written regexes, which are today two places that must agree
+with nothing checking them. Unverified caveat carried from the review: for `_write_ledger_hdr`
+the pad is a TRAILING space after the final `|`, and whether that yields a trailing empty cell is
+unknown — if the space-verdict differs there, that is INFORMATION (the trailing position is not
+trimmed, so those six vectors are not testing trimming either), not a false positive.
+
+Two further defects in the same check, both unverified:
+- **`\*\*Unit` is ambiguous across two lines** — `_write_ledger_ev` emits unit 1's and unit 2's
+  evidence headers, so the anchor is an existential over a two-member set while its message makes
+  a universal claim. Only inequality saves a pad moved to unit 1's line today.
+- **`diff` needs `-a` and stderr captured.** `|| true` swallows diff's exit 2 (trouble) exactly
+  like exit 1 (difference): a missing `$padded` yields empty `added` and the check blames the
+  writer's format string, while `diff` goes BINARY on control characters and prints no `>` lines
+  at all. `NON_WS_PAD` is `X` today so it is safe — but control characters are this suite's whole
+  subject, so it is one constant away from being unable to read its own input. Same trap as
+  `grep` on `ledger-check.mjs`, which reads as binary and silently returns nothing without `-a`.
 
 ### ERRNO-MESSAGE CLASS — CURRENT STATE, in final form. Do NOT reconstruct it from the rounds.
 
