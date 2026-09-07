@@ -739,7 +739,14 @@ elif prior:
 # changes, which was the whole defect.
 if complete:
     print("  -> ledger complete: every unit verified.")
-elif abandoned:
+# `and not unverified` is load-bearing: TERMINAL is a claim about the WHOLE ledger, and one
+# abandoned row among four pending ones does not make the ledger terminal. Without it this branch
+# outranks every other incomplete reason and prints TERMINAL over work in flight -- the same
+# over-claim as the defect this change fixes, with the sign flipped. Both facts still reach the
+# reader on separate lines (the HANDOFF REQUIRED section above is unconditional), which is
+# gate_check's shape: it prints HANDOFF REQUIRED and UNMET independently, never one instead of
+# the other.
+elif abandoned and not unverified:
     print("  -> ledger TERMINAL: HANDOFF REQUIRED — abandoned unit(s) will not be finished.")
 else:
     print("  -> ledger INCOMPLETE.")

@@ -59,19 +59,54 @@ const cases = [
     //   4. the closing line says TERMINAL, not INCOMPLETE
     // No `rerun: true`: the status branch sits outside the re-run block, and this case proves
     // that by passing with the skip on rather than by my having read where the block starts.
+    // The fixture carries PASSING evidence and has no `pending`/`done` row, so the abandonment is
+    // the ONLY thing between it and `complete`. That makes TERMINAL beat `complete`, not merely
+    // beat `INCOMPLETE` — a weaker fixture failing for two reasons at once could not show which
+    // one the closing line was responding to.
     name: "abandoned row is terminal, not incomplete",
     file: "tests/fixtures/abandoned-row.md",
     want: 1,
     expect: [
       "abandoned:   1",
+      "evidence:    present",
       "HANDOFF REQUIRED: 1 abandoned unit(s)",
-      "- #2 finance",
       "-> ledger TERMINAL: HANDOFF REQUIRED",
     ],
     reject: [
       "other:",                        // (1) swept into the unknown bucket
-      "- #2 finance [abandoned]",      // (3) listed under "unverified rows"
+      // The TRAILING BRACKET is the whole assertion. A bare `- #2 finance` is VACUOUS: it appears
+      // in the BROKEN output too, because the unverified-rows form `- #2 finance [abandoned]` is
+      // a superstring of it. Measured against a mutant whose status read `abandonedX` — the plain
+      // substring was present in output that got every other thing wrong. Only the unverified
+      // form appends ` [`, so this discriminates where the plain string cannot.
+      "- #2 finance [",                // (3) listed under "unverified rows" in ANY status spelling
+      "unverified rows",               //     ... and that section should not exist here at all
       "-> ledger INCOMPLETE.",         // (4) "still coming" claim on terminal work
+    ],
+  },
+  {
+    // The case above CANNOT see this, and the direction it misses is the dangerous one. Its rows
+    // are verified + abandoned, so `unverified` is empty and TERMINAL is correct. Swap one row to
+    // `pending` and TERMINAL becomes an over-claim: the ledger is NOT terminal, somebody is still
+    // working unit 3. Without the `&& !unverified.length` conjunct the abandoned branch outranks
+    // every other incomplete reason and prints TERMINAL anyway — the same over-claim as the
+    // `INCOMPLETE`-on-terminal-work defect this whole item fixes, with the sign flipped.
+    // Both facts must still reach the reader, on SEPARATE lines: the handoff section above (which
+    // is unconditional) and `INCOMPLETE` below. That is gate-check's shape — it prints HANDOFF
+    // REQUIRED and UNMET independently, never one instead of the other.
+    name: "one abandoned row does not make a ledger with pending work terminal",
+    file: "tests/fixtures/abandoned-and-pending.md",
+    want: 1,
+    expect: [
+      "abandoned:   1",
+      "pending:     1",
+      "- #3 strings [pending]",             // the pending row stays in "unverified rows"
+      "HANDOFF REQUIRED: 1 abandoned unit(s)",  // ... and the handoff is still announced
+      "-> ledger INCOMPLETE.",              // ... because work IS still coming
+    ],
+    reject: [
+      "- #2 finance [",                     // the abandoned row does not join the unverified list
+      "ledger TERMINAL",                    // the over-claim this case exists to catch
     ],
   },
   // rerun: true — see the SKIP_RERUN note below. These exercise the half of the
