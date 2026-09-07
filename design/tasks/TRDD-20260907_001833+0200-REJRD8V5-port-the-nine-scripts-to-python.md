@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T11:09:25+0200
+updated: 2026-09-07T11:16:05+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -332,12 +332,25 @@ error, and here the interpolator itself was wrong. `write_atomic`'s `os.replace`
 unwrapped; it is now `_node_call("rename", os.replace, ...)`, and `_node_message_error` carries
 `filename2` through the rebuild. Verified byte-identical to node.
 
-**2. THE INVARIANT THE LAST FOUR COMMITS ACTUALLY BOUGHT, named here because it was never
-stated:** *every error escaping `read_stable_regular_file` either carries an attached message, or
-came from the open.* The open is deliberately left unwrapped and everything after it is wrapped —
-which is what finally makes the seven hardcoded `open` constants TRUE, where 75a63eb's message
-could only assert it. **`write_atomic` has no equivalent invariant**, which is why its rename was
-missed; anything else with a multi-syscall body needs one stated the same way.
+**2. THE INVARIANT THE LAST FOUR COMMITS ACTUALLY BOUGHT — AND IT WAS PUBLISHED FALSE.** As first
+written it read: *every error escaping `read_stable_regular_file` either carries an attached
+message, or came from the open.* A review found two counterexamples and both were confirmed
+first-hand, so the version that shipped in 8078182 asserted as ESTABLISHED something the code did
+not do — strictly worse than the earlier state, where it was only asserted. Corrected:
+
+> Every error escaping `read_stable_regular_file` either carries an attached message, came from
+> the open, or is authored with no errno (which the `errno is not None` guard already handles).
+
+Three cases, not two — and it became true only after fixing the two holes:
+- **the ENOENT probe's `os.lstat`** (a second escape hatch, wrapped now), and
+- **the `finally`'s `os.close`**, which was a BEHAVIOUR divergence rather than a message one: the
+  oracle SWALLOWS a close failure (`gates.mjs:192`), the port re-raised — and a raise from
+  `finally` also REPLACES the in-flight exception, so a genuine read error could be overwritten
+  by an EIO on the way out. All six close sites in the module were checked against their
+  counterparts; **the polarity is per-function** (`mjs:114` and `:710` deliberately do NOT
+  swallow) and this was the only one that disagreed.
+
+**`write_atomic` still has no equivalent invariant**, which is why its rename was missed.
 
 **3. TWO RIGHT ANSWERS THAT WERE MISSING THEIR ARGUMENT** — recorded because a right answer
 reached by a bad route is inherited as a good route:
@@ -368,6 +381,64 @@ ENOTDIR or ENOENT: the three codes where strerror and libuv AGREE, so none of th
 `_LIBUV_PROSE` at all. A FILE where the locks directory belongs makes `_lock_directory`'s
 `mkdirs` hit EEXIST through a CLI. Mutation-tested by deleting the EEXIST override: exactly one
 row reddens. The table is no longer verified only against hand-built errors.
+
+## Round 4 — the enumeration was prescribed and then not run, and the STOPPING RULE (2026-09-07)
+
+**1. I PRESCRIBED A METHOD AND SHIPPED UNVERIFIED AGAINST IT.** Round 3 wrote out the correct
+enumeration — every fs call whose node counterpart reports a syscall — and committed without
+running it. Run now:
+
+    grep -rnE "os\.(open|stat|lstat|fstat|mkdir|makedirs|rename|replace|unlink|remove|rmdir|
+               scandir|read|write|fsync|readlink|chmod|symlink|link|utime|truncate)\(" scripts/
+
+**38 unwrapped call sites remain**, in three files: `gates.py` 24, `gate_check.py` 13,
+`ledger_check.py` 1. Each must be shown WRAPPED or provably the only syscall its catch can see;
+that audit is NOT done, and this is the honest state of the sweep. **Correcting the review that
+prompted this:** `process_tree.py`, `check_supervisor.py`, `regex_worker.py` and `jsapi.py` were
+predicted to be unswept liabilities — measured, they contain ZERO matching fs calls, so their
+absence from the sweep costs nothing on this axis. `process_tree._err_code` remains a deliberate
+duplicate and now differs from its sibling by the prose table; that is a real divergence between
+the two copies, but it is about `_err_code`, not about unwrapped syscalls.
+
+**2. TWO ROWS COULD NOT PROTECT THEMSELVES.** Rows 12 and 13 used the OUTER prefix as their
+non-vacuity needle (`could not record approval`, `cannot claim leases`). Both survive any authored
+message replacing the inner clause — and this path was MEASURED doing exactly that under a
+different fixture (`must be a real directory`). Both runtimes would then agree on text proving
+nothing, and the row would pass. Needles are now the thing each row exists to prove: `, mkdir '`
+and `file already exists`. The file's own header states this rule; row 10 follows it and the two
+new rows did not.
+
+**3. THREE OVERCLAIMS CORRECTED IN PLACE**, each the same shape as the defect this sweep keeps
+fixing, one level down:
+- The link-target EACCES sentence in `_node_realpath` was a PREDICTION printed beside five
+  measured lines. Now split into MEASURED and INFERRED, because a reader could not tell which
+  was which — in the very docstring whose lesson is that "MEASURED" must not outrun measurement.
+- The locale caveat had the right conclusion and an INVENTED mechanism: CPython does not call
+  `setlocale(LC_MESSAGES)` at startup, so a plain `python3` stays in the C locale whatever the
+  environment says. The durable reason is PLATFORM: glibc and BSD word several codes differently
+  while libuv's table is one fixed English one. Conclusion kept, mechanism replaced.
+- `rename` for `os.replace` was fitted to an assumption about the oracle; verified — `replaceAtomic`
+  at `gates.mjs:220-225` calls `renameSync`. Also recorded WHY `os.replace` and not `os.rename`:
+  the difference is Windows-only and silent (`os.rename` raises on an existing target,
+  `renameSync` overwrites via `MOVEFILE_REPLACE_EXISTING`), so the wrong choice would have passed
+  every test run on this machine.
+
+**4. THE STOPPING RULE, which every call in this TRDD already followed without stating it:**
+
+> Close a divergence when something CONSUMES it, or when it is CHEAP AND MECHANICAL. Record it
+> when nothing consumes it AND closing it means reimplementing a runtime's algorithm.
+
+That is consistent with every decision here: JSON and regex parser prose — nothing consumes,
+expensive → RECORDED. Errno tokens and libuv prose — nothing consumes them either, but they are a
+fixed table and mechanically closable → CLOSED. The dangling-symlink realpath case — nothing
+consumes, needs a walk reimplementation → RECORDED. Written down so the next session can stop
+without re-deriving it.
+
+**By that rule this class is CLOSED after the 38-site audit**, which is mechanical and therefore
+in scope. Five commits on error text for a port whose CLI behaviour was already correct is past
+the point of diminishing returns: commits 1–2 fixed user-visible divergences, 3–5 increasingly
+fixed the REASONING around them. The remaining budget belongs to the port's untested surface, not
+to this.
 
 **COVERAGE FACT, recorded because it is easy to misread:** there are SEVEN suites, and only FOUR
 honour `AD_RUNTIME` — `run-tests`, `dispatch-tests`, `ledger-tests`, `lint-tests`.

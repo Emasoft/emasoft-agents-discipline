@@ -419,8 +419,13 @@ AGENTS_DISCIPLINE_APPROVAL_DIR="$WORK/mk-p/child" \
   "$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/mkroot-p" --scope s --approve \
   > /dev/null 2> "$WORK/.p"
 chmod 700 "$WORK/mk-o" "$WORK/mk-p"
+# THE NEEDLE IS THE SYSCALL TOKEN, not the outer prefix, and that choice is load-bearing. This
+# very path was MEASURED substituting an authored `must be a real directory` message under a
+# different fixture -- and `could not record approval` would still match it, so both runtimes
+# would agree on text that says nothing about mkdir and the row would pass while testing nothing.
+# Row 10's comment states this rule; the first version of this row broke it.
 _row "gate-check unwritable approval PARENT (mkdir)" "$WORK/mkroot-o" "$WORK/mkroot-p" \
-  "could not record approval" _scrub_mkdir
+  ", mkdir '" _scrub_mkdir
 
 # --- ROW 13: the first row to exercise an OVERRIDDEN PROSE code -------------------------------
 # EVERY OTHER ROW DELIVERS EACCES, ENOTDIR OR ENOENT -- the three codes where os.strerror() and
@@ -441,8 +446,12 @@ done
   > /dev/null 2> "$WORK/.o"
 "$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/lockfile-p" --scope s --claim \
   > /dev/null 2> "$WORK/.p"
+# THE NEEDLE IS THE OVERRIDDEN PROSE ITSELF, for the reason spelled out on row 12: `cannot claim
+# leases` is the outer prefix and would survive any authored message replacing the inner clause,
+# leaving this row green while proving nothing about _LIBUV_PROSE. `file already exists` is
+# precisely the string the override supplies and strerror does not.
 _row "gate-check locks path is a file (EEXIST prose)" "$WORK/lockfile-o" "$WORK/lockfile-p" \
-  "cannot claim leases"
+  "file already exists"
 
 echo
 if [ "$fail" = 0 ]; then

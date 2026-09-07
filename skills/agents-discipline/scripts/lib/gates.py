@@ -297,10 +297,13 @@ def _node_realpath(target):
     THE ERRNO IS A PROXY, NOT THE MECHANISM, and saying so is the point: realpath lstats each
     COMPONENT and stats a RESOLVED LINK TARGET, so the token follows the WALK STEP that failed.
     ELOOP and the dangling link both report `stat` because both fail at target resolution, not
-    because of anything about their codes. The map below fits the five measured samples; an
-    EACCES on a link TARGET would report `stat` where it returns `lstat`. Keying on the real
-    variable means re-walking the path as libuv does -- so this stays a proxy, deliberately, and
-    a reader must not mistake it for the rule.
+    because of anything about their codes. The map below fits the five MEASURED samples.
+
+    INFERRED, NOT MEASURED -- flagged separately because the five lines above were, and a reader
+    cannot otherwise tell which is which: an EACCES on a link TARGET should report `stat` where
+    this returns `lstat`. That follows from the walk-step model, which is itself inferred from
+    two `stat` results; no such case was ever forced. Keying on the real variable means
+    re-walking the path as libuv does -- so this stays a proxy, deliberately.
 
     UNCLOSED, and stated rather than buried: the DANGLING-SYMLINK case still diverges twice
     over. It is ENOENT, so this returns `lstat` where node says `stat`; and node reports the
@@ -457,7 +460,13 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
             except OSError as probe_error:
                 if probe_error.errno == errno.ENOENT:
                     raise err from None          # a genuine absence: the oracle's `throw error`
-                raise
+                # WRAPPED, because this is the second escape hatch out of this function and it
+                # broke the invariant the seven hardcoded `open` constants rest on. The oracle's
+                # `throw probeError` re-throws a RAW node fs error, whose message already names
+                # `lstat`; a bare `raise` here re-threw a Python-shaped one that a caller guessing
+                # `open` would then mislabel. Found by an adversarial review of the invariant, not
+                # by the sweep -- the sweep reads sites that INTERPOLATE, and this one only raises.
+                raise _node_message_error(probe_error, "lstat") from probe_error
             _assert_regular_single_link(named, target, label, limit)
             raise OSError(f"{label} appeared after its open reported it missing: {target}") from err
         # ENOENT is deliberately the ONLY errno exposed unchanged, and only above: callers that
@@ -522,7 +531,19 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
         # under test. Measured: `caf\xe9` in a unit name turned a complete ledger into exit 2.
         return b"".join(chunks).decode("utf-8", errors="replace")
     finally:
-        os.close(fd)
+        # SWALLOWED, matching gates.mjs:192 `try { closeSync(fd); } catch { /* ignore */ }`.
+        # This was a bare os.close, and the divergence was BEHAVIOURAL rather than cosmetic: on a
+        # close failure the oracle ignores it and returns the content it already read, while the
+        # port raised -- and a raise from `finally` also REPLACES the in-flight exception, so a
+        # real read error could be overwritten by an EIO on the way out.
+        # THE POLARITY IS PER-FUNCTION, so it cannot be applied by habit: stat_current_named_file
+        # deliberately does NOT swallow (mjs:114, "a close failure is an infrastructure failure"),
+        # and write_atomic's main path does not either (mjs:710). Checked all six close sites in
+        # this module against their counterparts; this was the only one that disagreed.
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 # Port of the gates.mjs parsing half: parse_gates, normalize_owns_glob and parse_regex.
@@ -1421,10 +1442,15 @@ def _js_join(*parts):
 # it, so the prose cannot depend on the call. The right answer was reached before this argument
 # existed, which is its own hazard -- a right answer with no mechanism is inherited as a method.
 #
-# THE FALLBACK IS LOCALE-DEPENDENT and the overrides are not: os.strerror goes through libc and
-# honours LC_MESSAGES, while libuv's table is fixed English. Under a non-English locale EVERY
-# non-overridden code diverges. Latent (CI is the C locale), and an argument for GROWING this
-# table by measurement rather than trusting strerror to keep agreeing.
+# THE FALLBACK IS PLATFORM-DEPENDENT and the overrides are not: os.strerror reads the C library's
+# table, which differs BETWEEN libcs -- glibc and BSD/macOS word several codes differently -- while
+# libuv's is one fixed English table compiled in. That is the durable reason to grow this table by
+# measurement rather than trust strerror to keep agreeing, and it is first-hand: the four entries
+# above were measured on Darwin.
+# NOT the locale, which an earlier version of this note claimed: CPython does not call
+# setlocale(LC_MESSAGES) at startup, so a plain python3 stays in the C locale for messages whatever
+# the environment says. The conclusion was right and the mechanism was invented -- worth correcting
+# in place, because a wrong mechanism sends the next reader chasing a bug that cannot happen.
 # STILL INCOMPLETE, and deliberately not guessed: codes that could not be forced here (EMFILE,
 # ENFILE, ENOMEM, EOVERFLOW, ENOSPC, EROFS, EPERM) are UNCONFIRMED either way. An absent entry
 # falls back to strerror, which is a coin flip on this evidence -- so add measurements, never
@@ -1756,8 +1782,14 @@ def _replace_atomic(temp, target):
     delay = 0.005
     while True:
         try:
-            # `rename`, which is what node's renameSync reports and what os.replace performs;
-            # the two-path form comes from filename2, which CPython sets for this call.
+            # `rename` VERIFIED against the oracle rather than assumed: replaceAtomic at
+            # gates.mjs:220-225 calls renameSync(temp, target), which reports syscall `rename`.
+            # The two-path form comes from filename2, which CPython sets for this call.
+            # os.replace, NOT os.rename, and the difference is Windows-only and silent: os.rename
+            # raises FileExistsError there when the target exists, while os.replace overwrites --
+            # which is what renameSync does, since uv_fs_rename maps to MoveFileExW with
+            # MOVEFILE_REPLACE_EXISTING. On POSIX the two are identical, so the wrong choice would
+            # have passed every test run on this machine.
             _node_call("rename", os.replace, temp, target)
             return
         except OSError as error:
