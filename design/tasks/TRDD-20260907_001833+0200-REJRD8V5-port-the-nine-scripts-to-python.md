@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T04:39:00+0200
+updated: 2026-09-07T04:52:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -25,13 +25,34 @@ other than the property it names. Mutate the implementation, confirm the intende
 revert. If no mutation isolates a row, that row does not earn its place.
 
 > **⚠ THE SUITE IS NOT ALL-GREEN, WHATEVER THE TALLY SAYS.** `regex-worker-diff.sh` exits 0
-> while **7 port divergences remain UNRESOLVED**, five of them ways the PORT differs from the
-> ORACLE — including `EXPECT: /ok$/`, which fails in the oracle and PASSES in the port on
+> while **7 port divergences remain UNRESOLVED — ALL SEVEN, not "five of them", are ways the
+> PORT differs from the ORACLE.** The earlier count understated it and contradicted this
+> document's own method line four paragraphs up: *the JS suite is held FIXED as the ORACLE;
+> any divergence is a porting defect, never a re-specified test.* Under that rule there is no
+> "the engines differ and neither is wrong" category — a `(?<y>…)` the oracle accepts and the
+> port rejects is a defect, and so is a `(?P<y>…)` the port accepts and the oracle rejects.
+> Worst is `EXPECT: /ok$/`, which fails in the oracle and PASSES in the port on
 > output `gate-check` assembles without trimming. Exit 0 there means *no regression since the
 > set was pinned*, never *the port is correct*. Earlier commit messages in this TRDD's history
 > report "11 suites PASS"; **that number is wrong in the way that matters** — it converted the
 > document's own headline finding into green. The script's passing message now says so itself.
 > Read it as **10 PASS + 1 green-with-known-defects**.
+
+**WHEN TO STOP REVIEWING AND WRITE CODE.** Rounds 13-22 produced almost no port code; five of
+nine rounds corrected the previous round, three of those correcting the round immediately
+before. Part of that was self-inflicted: every review fork was told *"assume this one is
+defective"*, and a reviewer that cannot return "correct" without appearing to have failed will
+produce a finding. Ask instead: *is this correct, and what is the strongest evidence against
+your answer?*
+
+The stop criterion, **amended** — a first version said "if a round's findings would change no
+executable behaviour, the loop has converged", and that is wrong as stated: it licenses
+ignoring a FALSE CLAIM in this TRDD, which is the class that has done the most damage here (a
+resuming session acts on this file). Correct form:
+
+- A finding that corrects a **false factual claim** — even pure prose — MUST be fixed. Wrong
+  provenance, an inflated count, an unexecutable instruction: all misdirect the next session.
+- A finding that only **rewords an already-accurate claim** is the converged case. Log it, stop.
 
 ### DONE — but THE VERIFICATION STANDARD VARIES; read the per-bullet notes
 **NO bullet below was verified under the FINISHED harness. Not one.** That is the honest

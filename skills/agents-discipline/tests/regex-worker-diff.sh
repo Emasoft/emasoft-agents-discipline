@@ -173,6 +173,16 @@ fi
 # PASSES in the port, on output gate-check assembles without trimming. The emulate-vs-document
 # decision is still open, so those are UNRESOLVED DEFECTS, not neutral facts about two
 # runtimes. A pin is the right tool here; asserting health in its passing message was not.
+# WHY STILL EXIT 0, having considered the alternatives:
+#   exit 1  -> permanently red. Rejected earlier in this file for the reason that still holds:
+#             a check that is always red gets ignored, then "fixed" by weakening it.
+#   exit 3  -> a distinct "known defects, no regression" code IS the right shape, and a machine
+#             could then never tally this as PASS. NOT added, because nothing in this repo
+#             invokes this script: an exit-code protocol with no reader was added here once
+#             before and deleted for exactly that (R7). Add it in the SAME change that writes a
+#             batch runner, never speculatively.
+#   exit 0 + a message that refuses to claim health -> what is here. It relies on a human
+#             reading the message, which is a real weakness and is why the wording is blunt.
 echo "--- $differed KNOWN PORT DIVERGENCES, UNRESOLVED (see TRDD) — set unchanged, no regression ---"
 echo "    exit 0 means NOTHING NEW, not 'the port is correct'. Do not tally this as a plain PASS."
 exit 0
