@@ -51,6 +51,18 @@ if ! printf '%s' "$NON_ASCII" | LC_ALL=C grep -q '[^ -~]'; then
   exit 1
 fi
 
+# THIS FILE'S OWN SOURCE MUST BE PURE ASCII, and that is not tidiness. Every non-ASCII value
+# here is built from code points (printf byte escapes, String.fromCharCode, chr) precisely
+# because a literal character or a backslash-u escape has been silently normalised on the way
+# into this file four times -- twice producing a "divergence" whose two sides rendered
+# identically. A literal that creeps back in is invisible to every case above, so it is checked
+# directly. Tabs and newlines are ASCII and pass; only bytes >= 0x80 fail.
+if LC_ALL=C grep -qP '[^\x00-\x7F]' "${BASH_SOURCE[0]}"; then
+  echo "DIVERGE  this script's source carries a literal non-ASCII byte; build it from code points" >&2
+  LC_ALL=C grep -nP '[^\x00-\x7F]' "${BASH_SOURCE[0]}" >&2
+  exit 1
+fi
+
 # DIFFERENT ROOTS PER RUNTIME ARE SAFE HERE, and that needs saying because stale-diff.sh
 # documents the opposite for ITS cases: there, both runtimes must share one directory because
 # the approval token and the EVIDENCE line bind to the resolved path, so separate roots
@@ -186,6 +198,70 @@ else
   printf 'DIVERGE  %-38s\n' "non-UTF-8 stdout"
   diff <(printf '%s\n' "$o_lint") <(printf '%s\n' "$p_lint")
   fail=$((fail + 1)); FAILED+=("non-UTF-8 stdout")
+fi
+
+# --- CASE 4: the STREAM HANDLER itself, on lone surrogates -----------------------------------
+# The one surface here that needs no CLI, so it is not contaminated by either defect that keeps
+# the other cases narrow (gate-lint's errno message shape, write_atomic raising into
+# dispatch.json). It was skipped for that reason anyway, and it is the fix with the WORST
+# regression history in this suite: shipped as a crash, then as a silently-reset `strict`
+# handler, then as one U+FFFD for a whole run where node emits one PER code point. Three
+# regressions, zero coverage, until now.
+#
+# Every string is built from CODE POINTS on both sides -- String.fromCharCode in JS, chr() in
+# Python -- never as a literal character and never as a backslash-u escape. Both of those
+# spellings were silently normalised on the way into this file, four times while it was written,
+# each time producing a "divergence" whose two sides were byte-identical. The script asserts its
+# own source is pure ASCII below, so a literal that creeps back in fails loudly.
+#
+# The last two rows are CONTROLS. An astral character is a surrogate PAIR to UTF-16 and ONE code
+# point to Python, so it must pass through untouched; if the handler ever mangles it, every emoji
+# in every message breaks. A plain non-ASCII character must likewise be emitted raw. Without
+# them, a handler that replaced everything with U+FFFD would satisfy the first four rows.
+_surrogate_bytes() {  # exe -> hex bytes of the whole corpus
+  if [ "$1" = node ]; then
+    "$NODE_ABS" -e '
+      // String.fromCharCode / fromCodePoint on BOTH the surrogate and the plain non-ASCII row,
+      // so this file stays pure ASCII. A raw character here was silently normalised on the way
+      // in four times while this suite was written; the source is grepped for non-ASCII bytes
+      // as part of the run below, and a literal would fail that grep.
+      const rows = [
+        "a" + String.fromCharCode(0xd800) + "b",
+        "a" + String.fromCharCode(0xdfff) + "b",
+        String.fromCharCode(0xdc00) + String.fromCharCode(0xd800),
+        String.fromCharCode(0xd800) + String.fromCharCode(0xd801) + String.fromCharCode(0xd802),
+        "x" + String.fromCodePoint(0x1f600) + "y",
+        "caf" + String.fromCharCode(0xe9),
+      ];
+      process.stdout.write(rows.join("|"));'
+  else
+    "$PY_ABS" -c '
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath("'"$PORT"'")), "lib"))
+from jsapi import force_utf8_streams
+force_utf8_streams()
+rows = ["a" + chr(0xD800) + "b", "a" + chr(0xDFFF) + "b",
+        chr(0xDC00) + chr(0xD800), chr(0xD800) + chr(0xD801) + chr(0xD802),
+        "x" + chr(0x1F600) + "y", "caf" + chr(0xE9)]
+sys.stdout.write("|".join(rows))'
+  fi | od -An -tx1 | tr -s ' \n' ' '
+}
+o_sur="$(_surrogate_bytes node)"
+p_sur="$(_surrogate_bytes py)"
+# NON-VACUITY: the oracle must actually have emitted a U+FFFD (ef bf bd). If node ever stopped
+# substituting, every row would still compare equal against a port that also stopped, and the
+# case would pass while testing nothing.
+if ! printf '%s' "$o_sur" | grep -q 'ef bf bd'; then
+  printf 'DIVERGE  %-38s oracle emitted no U+FFFD; the corpus reached no surrogate\n' \
+    "lone surrogates on the stream"
+  fail=$((fail + 1)); FAILED+=("lone surrogates on the stream")
+elif [ "$o_sur" = "$p_sur" ]; then
+  printf '  OK      %-38s U+FFFD per code point, astral pair intact\n' "lone surrogates on the stream"
+  pass=$((pass + 1))
+else
+  printf 'DIVERGE  %-38s\n' "lone surrogates on the stream"
+  printf '    oracle: %s\n    port  : %s\n' "$o_sur" "$p_sur"
+  fail=$((fail + 1)); FAILED+=("lone surrogates on the stream")
 fi
 
 echo

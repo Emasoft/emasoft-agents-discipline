@@ -594,12 +594,26 @@ def _js_surrogate_replacement(error):
     than the character or a backslash-u escape, for the reason _JS_WHITESPACE gives above: both
     of those spellings have been silently transformed on the way into this file before.
 
-    One replacement for the whole unencodable RUN (error.start..error.end), which is what node
-    does per unpaired surrogate; a valid astral character is a surrogate PAIR to UTF-16 but a
-    single code point to Python, never reaches an error handler, and is emitted identically by
-    both runtimes -- MEASURED on U+1F600, both write F0 9F 98 80.
+    ONE REPLACEMENT PER CODE POINT, not one per error. CPython groups a CONSECUTIVE run of
+    unencodable characters into a SINGLE handler call spanning start..end, so returning one
+    U+FFFD for the run under-replaces exactly when more than one lone surrogate is adjacent.
+    MEASURED on chr(0xDC00) + chr(0xD800) -- a LOW followed by a HIGH, which cannot pair:
+
+        node        for-of yields 2 items, writes EF BF BD EF BF BD   (two U+FFFD)
+        run form    one call, start=0 end=2, wrote EF BF BD           (one U+FFFD)
+        this form   one call, start=0 end=2, writes it twice          (matches node)
+
+    The first version of this function returned the run form while its own docstring claimed it
+    was "what node does per unpaired surrogate" -- the claim and the code disagreed, and the
+    corpus could not tell because every fixture had at most one surrogate.
+
+    A valid astral character is a surrogate PAIR to UTF-16 but a single code point to Python, so
+    it never reaches this handler at all -- MEASURED on U+1F600 (F0 9F 98 80) and U+10000
+    (F0 90 80 80), both runtimes identical. Nor can two lone surrogates recombine at write time
+    in the oracle: `for...of` yields code points, so an unpaired high followed by an unpaired low
+    would already have been yielded as ONE astral code point rather than two units.
     """
-    return chr(0xFFFD).encode("utf-8"), error.end
+    return chr(0xFFFD).encode("utf-8") * (error.end - error.start), error.end
 
 
 codecs.register_error(_JS_SURROGATE_ERRORS, _js_surrogate_replacement)
