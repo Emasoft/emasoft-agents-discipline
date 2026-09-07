@@ -238,7 +238,7 @@ _case() {
 NON_WS_PAD='\x58'
 
 _control() {
-  local writer="$1" label="$2" led o p padded po
+  local writer="$1" label="$2" anchor="$3" led o p padded po added
   led="$WORK/control-$writer.md"
   "$writer" "$led" ''
   o="$(_verdict node "$led")"
@@ -285,17 +285,44 @@ _control() {
   "$writer" "$padded" "$NON_WS_PAD"
   po="$(_verdict node "$padded")"
   if [ "$po" = "$o" ]; then
-    printf 'DIVERGE  %-38s pad never reached this writer surface; its cases are vacuous\n' "$label"
+    printf 'DIVERGE  %-38s pad had no effect on the verdict; its cases are vacuous\n' "$label"
     printf '    unpadded: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
     printf '    padded  : %s\n' "$(printf '%s' "$po" | tr '\n' '|')"
     exit 1
   fi
-  printf '  OK      %-38s counts it verified, and the pad moves the verdict\n' "$label"
+  # AND the pad must land on the SURFACE this writer exists to exercise -- inequality alone
+  # proves only that the pad had SOME effect, which is a weaker claim than the OK line used to
+  # make. MEASURED, and this is why the anchor exists: move `_write_ledger_hdr`'s `%s` from the
+  # end of the header-line format to the FRONT and the whole suite still exits 0. The control
+  # passes (unpadded exits 0, `X|` at the front exits 2 -- an effect, just the wrong one), while
+  # all six header vectors compare exit-2-to-exit-2, because `^\|` fails on the first byte before
+  # any whitespace class is consulted and the trim semantics never run. Six vacuous OKs, green
+  # control. "Difference is placement" is the same error as "agreement is coverage".
+  #
+  # `diff`'s `>` lines are the PADDED file's, so the anchor asks: did the byte land on a line
+  # that still looks like the surface named? A pad in front of `|` leaves `X| # |`, which no
+  # longer matches `^\| # \|`, and the check fires.
+  # `diff` is captured, NOT piped: this file runs under `set -o pipefail`, and `diff` exits 1
+  # whenever the files differ -- which is ALWAYS here, that being the point. Piped straight into
+  # `grep -q`, the pipeline therefore reports 1 even on a match, and `if !` fires on every writer.
+  # Measured: the anchor was correct and the check still failed for all three.
+  added="$(diff "$led" "$padded" || true)"
+  if ! printf '%s' "$added" | grep -qE "^> ${anchor}"; then
+    printf 'DIVERGE  %-38s pad landed outside this writer surface\n' "$label"
+    printf '    anchor  : %s\n' "$anchor"
+    printf '    changed : %s\n' "$(printf '%s' "$added" | grep -a '^>' | tr '\n' '|')"
+    exit 1
+  fi
+  printf '  OK      %-38s counts it verified; pad lands on its surface and moves the verdict\n' "$label"
   pass=$((pass + 1))
 }
 
-_control _write_ledger     "control: cell writer"
-_control _write_ledger_hdr "control: header writer"
+# The third argument is the ANCHOR: a regex the padded file's CHANGED line must still match, so
+# the pad is pinned to the surface the writer names rather than merely having some effect
+# somewhere. Each is the line-initial shape that survives a correctly-placed pad and is destroyed
+# by a pad moved in front of it.
+_control _write_ledger     "control: cell writer"   '\| 1 \|'
+_control _write_ledger_hdr "control: header writer" '\| # \|'
 
 for i in "${!CASE_NAME[@]}"; do
   _case "cell ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}"
@@ -308,7 +335,7 @@ for i in "${!CASE_NAME[@]}"; do
   _case "header ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_hdr
 done
 
-_control _write_ledger_ev "control: evidence-header writer"
+_control _write_ledger_ev "control: evidence-header writer" '\*\*Unit'
 
 # The same six code points inside the `**Unit N —**` evidence header. This surface is parsed by
 # UNIT_HEADER, not by the table parser, so the twelve cases above cannot reach it -- and it is the
