@@ -13,8 +13,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts", "lib"))
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
-    js_json_object, js_length, js_object_key_order, js_slice, js_string, js_trim, locale_compare_key,
-    parse_date,
+    js_json_object, js_length, js_object_key_order, js_slice, js_string, js_to_number, js_trim,
+    locale_compare_key, parse_date,
 )
 
 out = []
@@ -108,6 +108,22 @@ _NUMS = [1.0, 0.5, 1e21, 1.5e21, 1e22, 1e-7, 1e-6, 1e-5, 1 / 3, -0.0, float("inf
          1.2430862257523161e-06, 3.4040019134427085e-06, -4.7746763818860036e-05, -1.8366746337768764e-05, 2.7810433130305134e-05, -3.85325871109577e-06, 9.999999999999999e-07, 1.0000000000000002e-06]
 for _n in _NUMS:
     out.append(["String(number) " + json.dumps(js_string(_n)), js_string(_n)])
+# See jsapi-drive.mjs. The three whitespace cases at the end are the point of routing through
+# js_trim rather than a hand-typed strip set: U+FEFF is stripped by JS and NOT by str.strip(),
+# so "﻿12" is 12 to the oracle and NaN to a naive port.
+_NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3", "1e-3",
+                "0x1f", "0X1F", "-0x10", "0x", "0b101", "0o17", "1_000", "nan", "NaN", "inf",
+                "Infinity", "-Infinity", "+Infinity", "infinity", "12abc", "abc", "  12  ",
+                "1,000", "0.1", "1e400", "-0", "--5", "1e", "+-1",
+                chr(0xFEFF) + "12", chr(0x2028) + "12", chr(0x00A0) + "12"]
+for _s in _NUM_STRINGS:
+    _n = js_to_number(_s)
+    # ensure_ascii=False, because the JS side labels with JSON.stringify, which NEVER escapes
+    # non-ASCII where json.dumps escapes by default. Without it the three whitespace rows report
+    # DIVERGE on their LABELS while their values agree -- the same ensure_ascii trap the digest
+    # differential exists to police, reproduced in the harness written after establishing it.
+    out.append(["Number(string) " + json.dumps(_s, ensure_ascii=False),
+                "NaN" if _n != _n else js_string(_n)])
 for _label, _v in [["null", None], ["true", True], ["false", False], ["empty array", []],
                    ["array one", ["pending"]], ["array null", [None, 1]],
                    ["nested", [[1, 2], [3]]], ["object", {}], ["array of object", [{}]]]:

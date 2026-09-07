@@ -112,6 +112,17 @@ const NUMS = [1.0, 0.5, 1e21, 1.5e21, 1e22, 1e-7, 1e-6, 1e-5, 1 / 3, -0.0, Infin
   // a randomized differential over 4314 doubles, not by any hand-picked value.
   1.2430862257523161e-06, 3.4040019134427085e-06, -4.7746763818860036e-05, -1.8366746337768764e-05, 2.7810433130305134e-05, -3.85325871109577e-06, 9.999999999999999e-07, 1.0000000000000002e-06];
 for (const n of NUMS) out.push(["String(number) " + JSON.stringify(String(n)), String(n)]);
+// Number(string) -- the OTHER direction, needed by timeoutValue/jobCount which coerce an argv
+// string before range-checking it. Every case here either differs from Python's float() or
+// would raise in it, which is the whole reason js_to_number exists rather than a float() call.
+const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3", "1e-3",
+  "0x1f", "0X1F", "-0x10", "0x", "0b101", "0o17", "1_000", "nan", "NaN", "inf", "Infinity",
+  "-Infinity", "+Infinity", "infinity", "12abc", "abc", "  12  ", "1,000", "0.1", "1e400",
+  "-0", "--5", "1e", "+-1", "\u{FEFF}12", "\u{2028}12", "\u{00A0}12"];
+for (const s of NUM_STRINGS) {
+  const n = Number(s);
+  out.push(["Number(string) " + JSON.stringify(s), Number.isNaN(n) ? "NaN" : String(n)]);
+}
 for (const [label, v] of [["null", null], ["true", true], ["false", false], ["empty array", []],
   ["array one", ["pending"]], ["array null", [null, 1]], ["nested", [[1, 2], [3]]],
   ["object", {}], ["array of object", [{}]]]) {
