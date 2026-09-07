@@ -97,6 +97,18 @@ if ! "$@" >/tmp/mutate-baseline.out 2>&1; then
   tail -3 /tmp/mutate-baseline.out
   exit 1
 fi
+baseline_out=$(cat /tmp/mutate-baseline.out)
+# GUARD 0 TRUSTED THE EXIT STATUS, AND THAT IS NOT THE SAME AS "not already diverging".
+# regex-worker-diff.sh prints SEVEN DIVERGE lines and deliberately exits 0, because its port
+# divergences are known and unresolved -- so guard 0 passed, and EVERY probe run against it
+# scored those seven as its own catch. Measured: mutating an unrelated line of jsapi.py (the
+# "0x" alone return, which regex-worker-diff cannot reach) reported REDDENS (7 diverging
+# variant(s)). A free catch for a mutation with no relationship to the code under test, which
+# is precisely the false positive guard 0 exists to prevent.
+#
+# The fix is to count the baseline's own DIVERGE lines and report the DELTA. Exit status is a
+# summary the runner is free to define; the lines are the measurement.
+baseline_diverged=$(printf '%s\n' "$baseline_out" | grep -cE '^DIVERGE')
 # A success-marker grep ("--- all identical ---") sat here and was REMOVED. Both runners print
 # that banner IFF they exit 0, so it was exactly redundant with the check above; its only
 # effect that was not redundant was rejecting any OTHER differential runner, and the realistic
@@ -134,10 +146,34 @@ import $(basename "$target" .py)" 2>/tmp/mutate-import.err; then
 esac
 
 output=$("$@" 2>&1)
+# THE RUNNER MUST SPEAK THIS SCRIPT'S VOCABULARY, and until this guard existed nothing checked
+# it. The verdict below is `grep -cE '^DIVERGE'` over the runner's stdout, so ANY runner that
+# reports divergence some other way scores zero and lands in the NOTHING REDDENED branch --
+# indistinguishable from a mutation with genuinely no coverage.
+#
+# MEASURED, not hypothetical: `mutate-probe.sh M1 scripts/lib/jsapi.py <regex> <regex>
+# python3 tests/python-lib-checks.py` reported NOTHING REDDENED for a mutation independently
+# measured to redden two rows. python-lib-checks prints `FAIL <name>`, never `DIVERGE`. The
+# comment above already warned "do not read a NOTHING REDDENED as proof of no coverage without
+# a canary" -- a file documenting its own hazard did not stop its author walking into it, which
+# is the argument for a guard over a warning.
+#
+# A first version of this guard grepped the runner's SOURCE for the token, and DID NOT FIRE:
+# python-lib-checks.py contains the word DIVERGE once, in a COMMENT. Searching source text for
+# a string is the weak-predicate mistake this project keeps making -- a comment is not a
+# behaviour. The test has to be over what the runner PRINTS.
+if [ "$(printf '%s\n' "$baseline_out" | grep -cE '^(ok|DIVERGE) ')" = 0 ]; then
+  echo "$label -> PROBE FAILED (runner printed no 'ok'/'DIVERGE' lines, so the verdict grep"
+  echo "    below can only ever say NOTHING REDDENED. Use a *-diff.sh runner.)"
+  exit 1
+fi
 # VARIANTS, not rows. These runners print one DIVERGE line per tree, and a corpus row is
 # identical in every tree -- so ONE divergence in a shared row reports as nine. Calling them
 # rows is how "reddens 9" got quoted forward as nine independent catches.
-diverged=$(printf '%s\n' "$output" | grep -cE '^DIVERGE')
+# THE DELTA, not the count. See guard 0 above: a runner may carry known divergences and still
+# exit 0, and counting absolutely awards those to every probe.
+diverged=$(( $(printf '%s\n' "$output" | grep -cE '^DIVERGE') - baseline_diverged ))
+[ "$diverged" -lt 0 ] && diverged=0   # a mutation that FIXES a known divergence reddens nothing
 crashed=$(printf '%s\n' "$output" | grep -cE '^(CRASH|BUILD-FAILED|VACUOUS)')
 # NO exit-code protocol for the verdicts. A 0/1/2/3 scheme was added here and then REMOVED:
 # nothing in this repo invokes this script, so the codes had no reader -- and the DIFFERS

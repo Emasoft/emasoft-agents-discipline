@@ -496,7 +496,12 @@ _unnamed = [s for s in _corpus if s not in _named]
 # number. Nothing stops the latter -- I changed it 31 -> 29 -> 30 myself in one session. What it
 # buys is that the edit must be MADE and appear in a diff, which an unnamed row otherwise never
 # does. It is a speed bump with a paper trail, not a gate.
-report(len(_unnamed) <= 30,          # control: 29 FAILs, naming the count in its detail string
+# THE BOUND ENCODES A DELETION, NOT A DOCUMENTATION GAIN -- and the check cannot tell those
+# apart, which is why the detail string prints BOTH numbers. When fd88492 deleted a row the
+# count went 31-of-65 to 30-of-64: the deleted row was itself unnamed, so the "improvement" was
+# a subtraction. fd88492 was then reverted (the deletion was wrong), and the bound is back at
+# 31. Read the pair, never the bound alone.
+report(len(_unnamed) <= 31,          # control: 30 FAILs, naming the count in its detail string
        "jsapi: the count of corpus rows named nowhere in the docstring has not grown",
        "%d unnamed of %d rows" % (len(_unnamed), len(_corpus)))
 completed.append("jsapi")

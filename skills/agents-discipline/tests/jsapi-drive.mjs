@@ -154,7 +154,7 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   //
   // GROUNDS, MEASURED -- and the first version of this comment got them wrong twice.
   //
-  //   M1  `[0-9]` -> `\d` in _JS_DECIMAL_RE   reddens the TWO unicode-digit rows, together
+  //   M1  `[0-9]` -> `\d` in _JS_DECIMAL_RE   reddens the THREE unicode-digit rows, together
   //   M2' revert the radix whitelist to the   reddens "0x1_0" and "0x<U+0661>", together
   //       pre-fix `try/except ValueError`
   //
@@ -175,33 +175,38 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   // call chr(), so a non-ASCII shape can never be enumerated there. These rows were structurally
   // groundless.
   //
-  // So the method gains a THIRD GROUND, declared rather than smuggled -- EQUIVALENCE-CLASS
-  // COVERAGE, with its own bound:
-  //   a mutation that reddens N rows together grounds ONE of them. A sibling is kept only when
-  //   a MECHANISM is named that would separate it -- and "named" means an implementation you
-  //   can write down, not a story about one.
+  // So the method gains a THIRD GROUND -- EQUIVALENCE-CLASS COVERAGE. It took three drafts to
+  // state without smuggling something, and both failures are worth keeping:
   //
-  // APPLIED HONESTLY, THAT BOUND COST A ROW -- and the first version of this comment broke it
-  // in the sentence after stating it, keeping three siblings on "cost" while admitting no
-  // mechanism could be named. A bound its own first case violates is not a bound; "cost" would
-  // have been a FOURTH ground, unnamed, one paragraph after declaring the third. So each
-  // sibling was tested against the bound instead of excused from it:
+  //   DRAFT 1 kept three siblings on "cost" while admitting no mechanism could be named. A
+  //     bound its own first case violates is not a bound; "cost" was a FOURTH ground, unnamed.
+  //   DRAFT 2 fixed that by hunting a mechanism per sibling -- and the test it used, "an
+  //     implementation you can WRITE DOWN", is satisfied by `if (s === "１") return 1`.
+  //     A test nothing fails distinguishes nothing. Worse, it was applied ASYMMETRICALLY: the
+  //     search for a mechanism ran until it found one for U+FF11 (NFKC normalization), stopped,
+  //     and U+06F4 -- evidentially identical -- was DELETED. Motivated stopping, dressed as
+  //     rule-following. The NFKC "mechanism" does not even survive its own test: JS's Number()
+  //     performs no normalization, so a port adding it is not a partial fix on the way to
+  //     correct, it is an unrelated defect from a different codebase.
   //
-  //   U+FF11 (fullwidth) STAYS -- MECHANISM NAMED AND MEASURED. NFKC normalizes U+FF11 to
-  //     ASCII "1" and leaves U+0661 and U+06F4 unchanged (verified: NFKC of the three gives
-  //     "1", "<U+0661>", "<U+06F4>"). So a port written as
-  //     `_JS_DECIMAL_RE.match(unicodedata.normalize("NFKC", text))` -- an ordinary thing to
-  //     write -- ACCEPTS this row and rejects the other two. It catches a real implementation.
-  //   U+06F4 (Extended Arabic-Indic) IS GONE. No mechanism separates it from U+0661: every
-  //     implementation anyone would write -- `[0-9]`, `\d`+re.ASCII, str.isascii, str.isdecimal,
-  //     category(c) == "Nd", and NFKC -- treats the two identically. Under the bound it does not
-  //     earn its place, so it was deleted rather than kept on a story. (7bcace8 has it if a
-  //     mechanism is ever found.)
-  //   "0x1_0" and "0x<U+0661>" BOTH STAY -- they are different defects, and
-  //     `if "_" in digits: return nan` before `int()` fixes the underscore alone while leaving
-  //     the Unicode-digit hole open. That implementation greens one row and not the other.
+  // THE RULE THAT SURVIVES, and it is shorter than either draft:
+  //   A mutation reddening N rows grounds ONE of them. The others are kept as CHEAP REDUNDANCY
+  //   against a named hazard class, and are LABELLED redundant -- never re-described as
+  //   grounded. A row costs one array entry; the rule exists to stop unbounded growth and false
+  //   coverage claims, not to force deletion of a cheap probe.
+  //
+  // That is exactly how `["a//","b"]` is already treated in path-api-drive.mjs. Applying a
+  // stricter rule here than there, over a spelling technicality (that clause needs a docstring
+  // name, and non-ASCII cannot appear in one), was the inconsistency.
+  //
+  // So: U+0661U+0662 GROUNDS the decimal class; U+FF11 and U+06F4 are REDUNDANT and restored.
+  // "0x1_0" GROUNDS the radix class; "0x<U+0661>" is separated from it by a mechanism that DOES
+  // pass the reachability test -- `if "_" in digits: return nan` before `int()` is a plausible
+  // partial fix, someone patching the PEP 515 bug they read about and stopping. That greens one
+  // row and leaves the other red. Reachable-partial-fix is the test; expressibility is not.
   String.fromCharCode(0x0661, 0x0662),  // Arabic-Indic -- the pair that shipped as 12
-  String.fromCharCode(0xFF11),          // fullwidth ONE -- separated by NFKC, see above
+  String.fromCharCode(0xFF11),          // fullwidth ONE -- REDUNDANT, kept as cheap coverage
+  String.fromCharCode(0x06F4),          // Extended Arabic-Indic FOUR -- likewise redundant
   "0x1_0",                              // int("1_0", 16) is 16; Number is NaN
   "0x" + String.fromCharCode(0x0661),   // the same hole reached through the radix path
 ];
