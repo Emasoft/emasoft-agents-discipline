@@ -55,6 +55,10 @@ export AGENTS_DISCIPLINE_APPROVAL_DIR="$APPROVALS"
 trap 'rm -rf "$WORK" "$APPROVALS"' EXIT
 
 pass=0; fail=0
+assertions=0   # rows that check ONE runtime against itself, counted so the summary can keep
+               # them apart from the differentials. A hardcoded literal here goes stale the
+               # moment a row is added, and reports a wrong differential count while staying
+               # green -- which is the defect class this file is about.
 declare -a FAILED=()
 
 STALE_MSG="definition or runtime approval oracle changed"
@@ -210,6 +214,7 @@ _case() {
 # been measured.
 _assert_pin() {
   local exe="$1" script="$2" dir="$3" want="$4" label="$5" check1="$6" cwd1="$7" check2="$8" cwd2="$9"
+  assertions=$((assertions + 1))
   # THE SAME ROOT CASE 3 USES. The token hashes resolve(file), so a scratch root would measure
   # signature equality for a DIFFERENT file path and attach the conclusion to c3 by inference.
   # _case rebuilds this directory from scratch before its own run, so there is no interference.
@@ -260,7 +265,7 @@ if [ "$fail" = 0 ]; then
   # cross-runtime comparison: the PREMISE/CONTROL rows count approval tokens within a SINGLE
   # runtime and compare nothing between them. A single denominator invites the summary to be
   # quoted as N oracle-vs-port comparisons, which over-reads it by four.
-  echo "--- $((pass - 4)) differential(s) identical; 4 premise/control assertion(s) held ---"
+  echo "--- $((pass - assertions)) differential(s) identical; $assertions premise/control assertion(s) held ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"

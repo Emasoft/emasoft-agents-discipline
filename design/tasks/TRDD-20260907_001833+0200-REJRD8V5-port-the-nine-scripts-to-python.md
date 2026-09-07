@@ -94,7 +94,12 @@ premise for free.
 > more to the point, was inferred from the adjacent `if sys.platform != "win32"` rather than
 > measured. MEASURED with the discriminator: `pyright --pythonplatform Darwin scripts/gate_check.py`
 > reports **ZERO** diagnostics, so the hint comes from the editor's LSP with a non-default rule
-> (`reportUnreachable`) enabled, not from the project's own settings. Under
+> (`reportUnreachable`) enabled, not from the project's own settings. And "the project's own
+> settings" is not a guess about which config the CLI happened to load: `pyproject.toml:62-66`
+> carries a `[tool.pyright]` block pinning `typeCheckingMode = "basic"`, under which
+> `reportUnreachable` is off — which is exactly why the CLI is silent and the editor is not.
+> Checking WHICH config produced a clean run matters as much as the clean run: without it,
+> "zero diagnostics" could just as easily mean the CLI found no config at all. Under
 > `--pythonplatform Windows` two DIFFERENT findings appear — `os.geteuid`/`os.getuid` "not a
 > known attribute" at `:645` — and those are false positives too, for a reason worth recording:
 > the calls are guarded by `hasattr(os, "geteuid")`, mirroring the oracle's own
