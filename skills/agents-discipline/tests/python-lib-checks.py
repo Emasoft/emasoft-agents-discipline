@@ -262,28 +262,51 @@ else:
     #
     # So: print, then hang; read for a bounded window; kill; assert what was pumped BEFORE the
     # kill. This is the only row in the file that observes the supervisor mid-stream.
-    kill_path = []
+    kill_path, kill_infra_error = [], None
     for argv in (["node", os.path.join(LIB, "check-supervisor.mjs"), "/bin/bash", "echo hi; sleep 30"],
                  [sys.executable, os.path.join(LIB, "check_supervisor.py"), "/bin/bash", "echo hi; sleep 30"]):
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                 stdin=subprocess.DEVNULL, start_new_session=True)
         try:
-            time.sleep(2.0)                     # long enough for `echo` to have been forwarded
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            # The pipe keeps whatever was written before the writer died; read it after the kill.
-            kill_path.append((proc.stdout.read() if proc.stdout else b"").decode("utf-8", "replace").strip())
+            time.sleep(2.0)   # generous: echo + one read1/write/flush is sub-100ms even loaded
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except OSError as exc:
+                # INFRASTRUCTURE, NOT A PORT DEFECT. A container denying killpg, or an odd PID
+                # namespace, must not surface as a suite CRASH -- that is the exact conflation
+                # gate-args-diff.sh keeps a CRASH guard for, and this row had no equivalent.
+                kill_infra_error = f"{type(exc).__name__}: {exc}"
+                break
+            # Bounded: if the kill silently no-ops, an unbounded read() waits on the CHECK's own
+            # `sleep 30` for EOF. The reader thread is not the thing under test, so cap it.
+            try:
+                out, _ = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                kill_infra_error = "the killed group did not reach EOF within 10s"
+                break
+            kill_path.append((out or b"").decode("utf-8", "replace").strip())
         finally:
             # Constraint: no process this suite spawns may outlive the case that spawned it.
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
+            except OSError:
                 pass
             if proc.stdout:
                 proc.stdout.close()
-            proc.wait(timeout=10)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+    if kill_infra_error is not None:
+        report(False, "check_supervisor: mid-stream KILL row could not run (INFRASTRUCTURE)",
+               kill_infra_error)
+        kill_path = ["<infra>", "<infra>"]
     js_killed, py_killed = kill_path
+    # NAMED FOR WHAT IT OBSERVES. `_pump` runs for BOTH streams; this spawns with stderr=DEVNULL
+    # and watches stdout only, so a stderr-only pump regression is NOT covered. The first name
+    # said "output ... is pumped", which promises both.
     report(js_killed == py_killed,
-           "check_supervisor: output printed before a mid-stream KILL is pumped — port matches oracle",
+           "check_supervisor: STDOUT printed before a mid-stream KILL is pumped — port matches oracle",
            f"js={js_killed!r} py={py_killed!r}")
     # Vacuity control: the row above passes trivially if BOTH strand the output (both ""), which
     # is exactly the pre-fix state. The oracle is the specification, so assert it really pumped.
