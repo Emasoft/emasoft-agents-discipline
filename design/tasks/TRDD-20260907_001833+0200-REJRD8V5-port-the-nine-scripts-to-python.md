@@ -822,6 +822,33 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
 - **COVERAGE:** 14 differential rows; only 4 of the 7 suites honour `AD_RUNTIME`
   (`contract-tests`, `hardening-tests`, `stress-tests` are node-only and cannot exercise the
   port). Rows 12-14 depend on DIRECTORY permission bits and are gated by their own probe.
+- **THE THREE `node_call` ROWS, MUTATION-TESTED rather than argued** (2026-09-07). I had written
+  that the third row "fails if the guard is widened to `if not error.errno`". It does not, and
+  the table is the reason to run these instead of reasoning about them:
+
+  | mutation in `gates.py` | errno-less row | smoke row | third row |
+  |---|---|---|---|
+  | guard REMOVED | **FAIL** | pass | pass |
+  | guard WIDENED to `not error.errno` | pass | pass | pass |
+  | guard INVERTED (`is not None: raise`) | **FAIL** | **FAIL** | **FAIL** |
+  | `prose` prefers `error.strerror` over `_LIBUV_PROSE` | pass | pass | **FAIL** |
+
+  Row 2 of that table is the correction: **NO row covers `is None` vs `not errno`**, because the
+  discriminating input is errno 0 and no site produces one. Row 4 is what the third row uniquely
+  catches, and it only catches it since the `"authored" not in` clause was added — before that,
+  prefix and suffix were both determined by the errno and the syscall token, so the row asserted
+  nothing the smoke row did not.
+
+  The same mutation exposed a gap in the SMOKE row: it printed `EBADF: Bad file descriptor,
+  fstat` — CPython's capitalized strerror, a shape node never emits — and passed. Lowercase
+  prose is now asserted there by slicing the prose out from between the code and the syscall.
+  **Both fixes came from running a mutation, not from re-reading the assertion.**
+- **`node_fs_message`'s docstring was stale and said the OPPOSITE of the code below it** — it
+  declared ELOOP "unverified" and any errno outside EACCES/ENOENT/ENOTDIR "UNCONFIRMED", while
+  `_LIBUV_PROSE` three lines above already carried the measured libuv wording for ELOOP,
+  EEXIST, EISDIR and ENAMETOOLONG. Rewritten to state the real finding: the lowercase rule was
+  inferred from three codes that happen to agree, and **four of the seven forceable codes break
+  it**. `os.strerror().lower()` is the fallback, not the rule.
 
 ---
 

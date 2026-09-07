@@ -1501,15 +1501,19 @@ def node_fs_message(error, syscall):
     everywhere else, which is what _err_code is for). Node's shape is
     `CODE: lowercase prose, syscall 'path'`; Python's str() is `[Errno N] Prose: 'path'`.
 
-    MEASURED against node for EACCES, ENOENT and ENOTDIR, where `os.strerror(n).lower()`
-    reproduces libuv's prose exactly. Those three are the COMMON cases, NOT the complete set:
-    a scan can also raise ELOOP, EMFILE, ENFILE, ENOMEM and EOVERFLOW, and ELOOP looks like a
-    live counterexample -- macOS strerror says "Too many levels of symbolic links" where
-    libuv's own table reads "too many symbolic links encountered", a different sentence rather
-    than a different case. Unverified against node (hard to force through this call, since
-    _real_directory_inside rejects a symlinked directory first), so treat any errno outside
-    the measured three as UNCONFIRMED rather than assuming the lowercase rule generalizes. Falling back to the errno name alone would
-    be a silent, smaller divergence, so an unmatched code still produces this shape.
+    `os.strerror(n).lower()` is the FALLBACK, not the rule, and this docstring said otherwise
+    until the table above existed. What was measured, and what it overturned:
+
+      - EACCES, ENOENT, ENOTDIR -- strerror's lowercase MATCHES libuv. These three were the
+        original evidence, and they are why the lowercase rule looked general.
+      - EEXIST, EISDIR, ELOOP, ENAMETOOLONG -- strerror DISAGREES with libuv, in wording rather
+        than case ("Too many levels of symbolic links" vs "too many symbolic links
+        encountered"). They are in _LIBUV_PROSE for exactly that reason.
+
+    So the rule was inferred from three codes that happen to agree, and four of the seven
+    forceable codes break it. An errno in NEITHER group still falls through to strerror: a
+    smaller, quieter divergence than dropping the prose, but a divergence -- extend the table
+    rather than assume the fallback is right for a code nobody has forced.
     """
     # An ALREADY-ATTACHED message wins over the caller's `syscall`, because the caller guessed
     # and node_call knew. Seven sites pass "open" for read_stable_regular_file, which makes

@@ -1009,15 +1009,35 @@ try:
     _errno_text = "NO ERROR"
 except OSError as _error:
     _errno_text = str(_error)
-report(_errno_text.startswith("EBADF: ") and _errno_text.endswith(", fstat"),
+# The LOWERCASE clause is not decoration. Found by mutating node_fs_message to prefer
+# error.strerror over the libuv table: the row printed "EBADF: Bad file descriptor, fstat" --
+# Python's capitalized strerror, which node NEVER produces -- and passed, because prefix and
+# suffix were both intact. Lowercase prose IS the shape this row claims to check, and the
+# `.lower()` comparison is the only clause here that distinguishes libuv's table from
+# CPython's. Sliced rather than substring-matched so it cannot be satisfied by a lowercase
+# fragment sitting next to a capitalized one.
+_errno_prose = _errno_text[len("EBADF: "):-len(", fstat")] if _errno_text.endswith(", fstat") else ""
+report(_errno_text.startswith("EBADF: ") and _errno_text.endswith(", fstat")
+       and _errno_prose != "" and _errno_prose == _errno_prose.lower(),
        "node_call still applies node's shape when errno IS set (smoke)", _errno_text)
 
 
-# THE REAL CONTROL FOR THE GUARD, and the row above is NOT one: os.fstat never raises an
-# errno-less error, so it passes with the guard, without it, and with it inverted -- it proves
-# node_call still works, not that the guard is correctly scoped. This row fails if the guard is
-# widened to `if not error.errno` or to any provenance test, because THIS error is authored AND
-# carries an errno, so it must still be reshaped.
+# WHAT THIS ROW ACTUALLY LOCKS -- and it is NOT what its first version claimed. That version said
+# it "fails if the guard is widened to `if not error.errno`". MEASURED, it does not: EACCES is
+# truthy, so a widened guard still reshapes and all three rows stay green. The full mutation
+# table, because a claim about what a test catches has to be run, not reasoned:
+#     guard REMOVED   -> only the errno-less row fails
+#     guard WIDENED   -> nothing fails   (so NO row here covers `is None` vs `not errno`;
+#                                         the discriminating input is errno 0, which no site makes)
+#     guard INVERTED  -> all three fail
+# What this row uniquely locks is the PROSE SOURCE: the message is built from
+# os.strerror(errno), NOT from error.strerror, so an authored `strerror` is DISCARDED --
+# "EACCES: permission denied", never "EACCES: authored, but carrying an errno". That is correct
+# for a syscall-shaped error (node uses libuv's table, not the caller's text) and no other row
+# would notice if it changed.
+# ITS INPUT IS SYNTHETIC, said plainly: no production site authors an OSError WITH an errno -- the
+# only one in the port is a test stub in process_tree.py, which never reaches node_call. The row
+# guards a property of the helper, not a shape the port produces.
 def _authored_with_errno(*_a, **_k):
     raise OSError(errno.EACCES, "authored, but carrying an errno")
 
@@ -1027,7 +1047,12 @@ try:
     _both_text = "NO ERROR"
 except OSError as _error:
     _both_text = str(_error)
-report(_both_text.startswith("EACCES: ") and _both_text.endswith(", lstat"),
+# The `"authored" not in` clause is the ONLY assertion here that the errno does not already
+# determine: prefix and suffix are built from EACCES and "lstat", so without it a future
+# _node_message_error that APPENDED the caller's text would keep this row green. That is the
+# whole property the row claims to lock, and its first version did not assert it.
+report(_both_text.startswith("EACCES: ") and _both_text.endswith(", lstat")
+       and "authored" not in _both_text,
        "node_call reshapes an authored error that DOES carry an errno (control)", _both_text)
 
 # returns emptyState() on ENOENT, so a port that re-raised the raw error would hand back an
