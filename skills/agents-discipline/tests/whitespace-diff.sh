@@ -54,13 +54,16 @@ declare -a FAILED=()
 # records a case where exactly that path turned an escape into a raw character. Bytes cannot
 # round-trip into something else.
 #   U+FEFF -> ef bb bf     U+001C..U+001F -> 1c..1f     U+0085 -> c2 85
+# Code point only -- each loop below prepends the SURFACE it puts the bytes on. The names used to
+# end in "around status", which stayed in the label when the header loop reused the array and
+# produced "header U+FEFF (BOM) around status": a label naming two different surfaces at once.
 declare -a CASE_NAME=(
-  "U+FEFF (BOM) around status"
-  "U+001C (file separator) around status"
-  "U+001D (group separator) around status"
-  "U+001E (record separator) around status"
-  "U+001F (unit separator) around status"
-  "U+0085 (NEL) around status"
+  "U+FEFF (BOM)"
+  "U+001C (file separator)"
+  "U+001D (group separator)"
+  "U+001E (record separator)"
+  "U+001F (unit separator)"
+  "U+0085 (NEL)"
 )
 declare -a CASE_BYTES=(
   '\xef\xbb\xbf'
@@ -97,6 +100,27 @@ _write_ledger() {
   } > "$dest"
 }
 
+# Same ledger, but the whitespace goes on the HEADER line instead of a Status cell. This is the
+# strictly worse vector and it is why one cell case was not enough coverage: the header decides
+# `column_count` (`ledger-check.mjs:58`, `ledger_check.py:144`), which every row is then held to.
+# So a code point one runtime trims and the other does not shifts the count by one there, and the
+# consequence is not a mis-read cell -- it is EVERY row reported malformed in one runtime and
+# parsed normally in the other, from a byte no editor displays.
+# shellcheck disable=SC2329  # invoked indirectly as "$writer" from _case
+_write_ledger_hdr() {
+  local dest="$1" ws="$2" pad
+  pad="$(printf '%b' "$ws")"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n\n'
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |%s\n' "$pad"
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '\n## Evidence\n\n'
+    printf '**Unit 1 —** ran the suite by hand; 12 passed.\n'
+  } > "$dest"
+}
+
 # Runs one runtime against its OWN COPY. Separate copies are load-bearing, not hygiene: the
 # checker APPENDS a receipt to the ledger it reads, so a shared file would hand the second
 # runtime a document the first had already modified, and the comparison would be of two
@@ -116,9 +140,9 @@ _verdict() {
 }
 
 _case() {
-  local name="$1" ws="$2" led o p
+  local name="$1" ws="$2" writer="${3:-_write_ledger}" led o p
   led="$WORK/$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '-').md"
-  _write_ledger "$led" "$ws"
+  "$writer" "$led" "$ws"
   o="$(_verdict node "$led")"
   p="$(_verdict py "$led")"
   if [ "$o" = "$p" ]; then
@@ -159,12 +183,19 @@ printf '  OK      %-38s both runtimes count it verified\n' "control: plain verif
 pass=$((pass + 1))
 
 for i in "${!CASE_NAME[@]}"; do
-  _case "${CASE_NAME[$i]}" "${CASE_BYTES[$i]}"
+  _case "cell ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}"
+done
+
+# The same six code points on the header line. Kept as a separate loop rather than folded into the
+# one above so a failure names which SURFACE diverged -- a header divergence and a cell divergence
+# have different blast radii and would otherwise be indistinguishable in the output.
+for i in "${!CASE_NAME[@]}"; do
+  _case "header ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_hdr
 done
 
 echo
 if [ "$fail" = 0 ]; then
-  echo "--- $pass cell-trim vector(s) identical ---"
+  echo "--- $pass trim vector(s) identical (cell + header surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"
