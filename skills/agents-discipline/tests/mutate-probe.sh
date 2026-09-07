@@ -31,6 +31,24 @@ label="$1"; target="$2"; old="$3"; new="$4"; shift 4
 # NOTHING REDDENED about code it never executed. A typo that drops the runner must be an
 # error, not a negative result.
 if [ $# -lt 1 ]; then echo "$label -> PROBE FAILED (no runner given)" >&2; exit 1; fi
+
+# LEADING WHITESPACE TOLERATED, and this replaced a guard rather than adding one.
+# gate-args-diff.sh printed "  DIVERGE" INDENTED, so the previously column-0-anchored verdict
+# grep could not see it: every probe against that runner reported NOTHING REDDENED whatever was
+# mutated. Guard -1 cannot catch that -- it reads the runner's SOURCE, and `printf '  DIVERGE'`
+# contains the token perfectly well; source emission is not column-0 emission.
+#
+# THE FIRST FIX WAS A GUARD REFUSING A BASELINE THAT PRINTED AN INDENTED DIVERGE, AND IT WAS
+# USELESS: guard 0 requires the baseline to be GREEN, and six of the seven runners print no
+# DIVERGE line at all when green -- including gate-args-diff.sh, the runner that motivated it.
+# The indented lines appear only AFTER mutation, which that guard never inspected. It checked
+# the wrong sample and would never have fired.
+#
+# Tolerating the whitespace deletes the whole class instead: indentation cannot matter anywhere,
+# no runner has to remember a column-0 convention, and one fragile output-shape contract is
+# gone. The anchor existed to avoid matching DIVERGE inside prose; the only prose near it is
+# lease-diff.sh's `diff | head -20`, whose lines begin with <, >, - or a digit.
+DIVERGE_RE='^[[:space:]]*DIVERGE'
 backup=$(mktemp)
 cp "$target" "$backup"
 # PRINTED, because a SIGKILL skips the trap and leaves the mutant in place; without this the
@@ -138,19 +156,7 @@ baseline_out=$(cat "$backup.baseline")
 #
 # The fix is to count the baseline's own DIVERGE lines and report the DELTA. Exit status is a
 # summary the runner is free to define; the lines are the measurement.
-baseline_diverged=$(printf '%s\n' "$baseline_out" | grep -cE '^DIVERGE')
-# AN INDENTED "  DIVERGE" IS INVISIBLE TO THE ANCHORED VERDICT GREP, and guard -1 cannot see it:
-# that guard reads the runner's SOURCE for the token, and `printf '  DIVERGE ...'` contains it
-# perfectly well. gate-args-diff.sh printed exactly that -- so every probe ever run against it
-# reported NOTHING REDDENED no matter what was mutated, and the seven-runner acceptance sweep
-# read that vacuity as "the mutation does not reach this runner". Source emission is not
-# column-0 emission; only the OUTPUT can answer it.
-if printf '%s\n' "$baseline_out" | grep -qE '^[[:space:]]+DIVERGE'; then
-  echo "$label -> PROBE FAILED (runner prints INDENTED DIVERGE lines; the verdict grep is"
-  echo "    anchored at column 0, so they are invisible and every verdict would be a false"
-  echo "    NOTHING REDDENED. Fix the runner to print DIVERGE at column 0.)"
-  exit 1
-fi
+baseline_diverged=$(printf '%s\n' "$baseline_out" | grep -cE "$DIVERGE_RE")
 # A success-marker grep ("--- all identical ---") sat here and was REMOVED. Both runners print
 # that banner IFF they exit 0, so it was exactly redundant with the check above; its only
 # effect that was not redundant was rejecting any OTHER differential runner, and the realistic
@@ -237,13 +243,13 @@ output=$("$@" 2>&1)
 # in the baseline and once after yields a phantom "healed"; once then twice yields a phantom
 # "newly diverging" for a label that was already red. One character, and it makes the operator
 # actually be the set difference the comment above claims it is.
-printf '%s\n' "$output" | grep -E '^DIVERGE' | sort -u > "$backup.after"
-printf '%s\n' "$baseline_out" | grep -E '^DIVERGE' | sort -u > "$backup.before"
+printf '%s\n' "$output" | grep -E "$DIVERGE_RE" | sort -u > "$backup.after"
+printf '%s\n' "$baseline_out" | grep -E "$DIVERGE_RE" | sort -u > "$backup.before"
 new_diverged=$(comm -13 "$backup.before" "$backup.after")
-diverged=$(printf '%s\n' "$new_diverged" | grep -cE '^DIVERGE')
+diverged=$(printf '%s\n' "$new_diverged" | grep -cE "$DIVERGE_RE")
 # A divergence the mutation REMOVED is not a catch, but it is not nothing either: it means the
 # mutant is closer to the oracle than the shipped code on that case, which is worth seeing.
-healed=$(comm -23 "$backup.before" "$backup.after" | grep -cE '^DIVERGE')
+healed=$(comm -23 "$backup.before" "$backup.after" | grep -cE "$DIVERGE_RE")
 crashed=$(printf '%s\n' "$output" | grep -cE '^(CRASH|BUILD-FAILED|VACUOUS)')
 # NO exit-code protocol for the verdicts. A 0/1/2/3 scheme was added here and then REMOVED:
 # nothing in this repo invokes this script, so the codes had no reader -- and the DIFFERS
