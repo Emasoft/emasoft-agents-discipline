@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T01:51:36+0200
+updated: 2026-09-07T02:03:45+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -25,20 +25,43 @@ other than the property it names. Mutate the implementation, confirm the intende
 revert. If no mutation isolates a row, that row does not earn its place.
 
 ### DONE — but THE VERIFICATION STANDARD VARIES; read the per-bullet notes
-**Do not read this heading as uniform.** The bullets carrying explicit control counts were
-verified to the current standard. **The first three below carry none, and predate
-`tests/mutate-probe.sh` entirely** — their controls were run with the inline `probe()` shell
-function, the SAME generation that produced this session's worst false result (a syntax error
-counted as nine catches, because a mutant that would not import was scored as CRASH=catch).
-Those controls are RECORDED, not verified to the standard the rest of this document asserts.
-**Re-run them through `mutate-probe.sh` before building `gate-check.mjs` on top of them.**
-(Raised in review, and left unfixed for two rounds before being written down here — a silent
-skip until now, unlike the two in the DELIBERATELY-NOT-FIXED section.)
+**Do not read this heading as uniform, and note the boundary is EARLIER than a first pass
+suggests.** `tests/mutate-probe.sh` was created in `f3a4c86`. **Every bullet below except the
+lease one predates it** — measured: `ec565d6` (format_document/qualify), `1598e34`
+(globs_overlap), `673356a` (discovery) all land before `f3a4c86`. So ALL of their controls,
+including the ones quoting counts like "six mutation controls all redden", were run with the
+inline `probe()` shell function — the SAME generation that produced this session's worst false
+result (a syntax error counted as nine catches, because a mutant that would not import was
+scored as CRASH=catch), and that also ran on `eval echo`-stripped anchors.
+
+**A first attempt at this note marked only three bullets**, which left the others falsely
+reading as current-standard — worse than the undifferentiated heading, because the marking
+implied a verified boundary. The counts are RECORDED, not verified to the standard this
+document asserts elsewhere.
+
+**What to actually do, since "re-run them" is not executable as it stands:** the original
+mutations were typed inline into shell calls and exist only in a transcript that compaction
+discards — nothing in the repo records them. So do NOT go looking for a list. Instead, when
+`gate-check.mjs` work touches one of these functions, write a FRESH control for it through
+`mutate-probe.sh` at that point. The differentials themselves (`discovery-diff.sh`,
+`lease-diff.sh`, `python-lib-checks.py`, the oracle's own suite for `dispatch.py`) are
+unaffected by any of this and still pass — what is uncertain is only whether each recorded
+CONTROL discriminated, not whether the port matches the oracle.
+
+**`dispatch.py` is deliberately NOT marked, and its bullet says why.** It predates
+`mutate-probe.sh` like the rest, but its evidence is not a mutation control at all: the
+ORACLE'S OWN test suite was run against the port. That suite was written against the JS with
+no knowledge of a Python port, so it cannot have been tuned to pass — which makes it STRONGER
+evidence than a control the same session wrote for a differential the same session designed.
+Marking it would have sent a resuming session to re-verify the best-evidenced item in this
+file, and to do it with a weaker method.
 
 - ⚠ OLD-STANDARD — `lib/gates.py`: `read_stable_regular_file`, `write_atomic`, `with_file_lock`,
   `append_status`, `parse_gates`, `validate_scope_id`, `scope_root`, `normalize_owns_glob`,
   `_write_all`
-- ⚠ OLD-STANDARD — `lib/dispatch.py` + `dispatch_check.py` — 21/21 under the oracle's own suite
+- `lib/dispatch.py` + `dispatch_check.py` — 21/21 under the ORACLE'S OWN suite. Not marked, and
+  not because it is newer: see the paragraph above. Different evidence class, and the strongest
+  one here.
 - ⚠ OLD-STANDARD — `lib/jsapi.py`: `js_object_key_order`, `js_json_object`, `js_length`,
   `js_slice`, `locale_compare_key`, `parse_date`, `js_trim`, `js_truthy`,
   `js_string`/`_js_number`
@@ -278,8 +301,15 @@ difference — but every call site has to drop the await). One item left:
 
    `runRolling(tasks, limit)` is the first place the sync-vs-async choice stops being free:
    it is bounded concurrency over promises, so a synchronous port needs threads or processes
-   and the interleaving of check output becomes a NEW divergence surface. Decide that before
-   writing it, not during.
+   and the interleaving of check output becomes a NEW divergence surface.
+
+   **The choice is HALF-MADE, not open, and in the direction that makes concurrency harder.**
+   MEASURED 2026-09-07: `gates.py` has ZERO `async def`, while the oracle has `async function`
+   at `gates.mjs:754` (`withFileLock`), `:895` (`claimLeases`) and `:931` (`releaseLeases`).
+   So the entire lock and lease layer this runner sits on top of was already ported
+   synchronously. Picking threads for `runRolling` means driving a synchronous lock layer
+   concurrently — decide THAT, not the abstract question. An earlier phrasing here said only
+   "decide before writing it, not during", which read as though both options were still open.
 
 **Completeness, re-measured soundly (2026-09-07).** `gate-check.mjs` imports **23** names from
 `lib/gates.mjs` and **none** is missing from `gates.py`. The presence test is now
