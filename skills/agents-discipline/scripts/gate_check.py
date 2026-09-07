@@ -4,20 +4,52 @@
 Port of gate-check.mjs. The JavaScript suite is the ORACLE: it is held FIXED and only this
 implementation varies, so any divergence is a porting defect and never a re-specified test.
 
-PARTIAL PORT -- THE ARGUMENT FRONT END, TARGET DISCOVERY, LEDGER-EXISTENCE CHECKS, AND THE
---list-scopes/--log/--claim/--release ACTIONS, gate-check.mjs:27-295.
+PARTIAL PORT -- THE ARGUMENT FRONT END, TARGET DISCOVERY, LEDGER-EXISTENCE CHECKS, THE
+--list-scopes/--log/--claim/--release ACTIONS, AND (NEW) THE DEFAULT RUN MODE'S LEDGER
+LOADING, GATE SELECTION, AND FULL APPROVAL-CLASSIFICATION LOOP, gate-check.mjs:27-775.
 
-The boundary now ends exactly where the `--claim`/`--release` action block's closing brace
-ends (:295) and `let ledgers = target.files.map(loadLedger)` begins the un-ported default run
-mode (:297), because :295 is the last point every REACHABLE branch of this file resolves to a
-real exit on its own -- the default run mode (loading every ledger, resolving a shell,
-executing CHECKs) is the only remaining branch, and it needs a resolved command shell and PATH
-inspection this port does not yet have. Every behaviour up to :295 can still be driven
-black-box by running the program and reading its exit code, stdout, and stderr, given only a
-filesystem fixture (an `.agents-discipline/` tree, a lock directory, and/or ledger files) and
-no shell or approval storage at all.
+The boundary sat at :295 (the `--claim`/`--release` block's closing brace) until this pass
+moved it forward. It CANNOT sit at :297 (`ledgers = target.files.map(loadLedger)`, where the
+default run mode begins) plus a "no approval" carve-out, because gate-check.mjs:753-768 shows
+approval STATE feeding the verdict from *inside* the classification loop: an unapproved task
+becomes `notRun` right there via `if (!opt.approve) { ...; notRun.push(task); continue; }`,
+and an approved-and-just-recorded one becomes `runnable`. Approval is not a later phase that
+can be skipped while still reporting a correct MET/UNMET/NOT-RUN verdict -- it is decided
+inline, so porting "up to the verdict" without porting approval would have reproduced this
+project's recurring defect one more time: a port that agrees with the oracle on every
+unapproved fixture (which is what the differential in tests/gate-args-diff.sh exercises) and
+silently diverges the moment `--approve` is passed (which tests/run-tests.mjs:45-47 injects
+into nearly every case) -- exactly the shape of bug a differential run without that flag would
+never catch.
 
-Anything past that boundary exits PORT_INCOMPLETE_EXIT (90) with a message naming the stop.
+The boundary now ends exactly at gate-check.mjs:775, the last line of the RUN-print loop, one
+statement before `results = opt.status ? [] : await runRolling(runnable, jobs)` at :776 --
+the single call that spawns lib/check-supervisor.mjs (via lib/dispatch.mjs's sibling,
+lib/process-tree.mjs, and a `node:worker_threads` Worker pool for regex matching). That is the
+ONLY process/thread-spawning site reachable from this default run mode, so it is where "no
+spawn, no Worker, no process-tree teardown, no timeout machinery" has to draw the line. Ported
+in this pass: ledger loading (:297), the `pending` gate-selection loop with real CWD
+resolution and validation (:716-739), shell resolution and the full approval-token machinery
+-- `resolveShell`/`oracle`/`approvalOracleSignature`/`approvalPath`/`validatedApprovalDir`/
+`assertPrivateApprovalEntry`/`assertApprovalDirUnchanged`/`readApprovalFile`/`approvalExists`/
+`recordApproval`/`printOracle` (:299-519) -- and the classification loop that turns `pending`
+into `runnable`/`notRun` while genuinely reading and writing the on-disk approval store
+(:741-775). These are LOCAL to gate-check.mjs (0 matches for any of them in lib/gates.mjs), so
+they are ported HERE rather than assumed to already exist in lib/gates.py.
+
+PORT_INCOMPLETE_EXIT (90) now fires unconditionally the moment this file reaches the line
+that would call `runRolling` -- not only when `runnable` is non-empty. A tempting shortcut was
+rejected here: when `runnable` and `notRun` are BOTH empty (nothing needed running -- either
+`--status`, or every gate was already met and `--reverify` was not given), `results` really is
+always `[]`, and the oracle's tail (the staleResults ledger-rewrite loop, the reloaded-ledger
+MET/UNMET tally, dispatchStatus aggregation, the extraUnmet bookkeeping across `--reverify` and
+stale results) is complex enough that reproducing it from the empty-`results` case alone would
+have been exactly the kind of "looks complete, is not measured" simplification this project's
+own history keeps warning about. So the sentinel fires every time, and the next porting pass
+inherits a clean, single, textually-obvious boundary instead of a conditional one that would
+need re-auditing later. Anything past that boundary exits PORT_INCOMPLETE_EXIT (90) with a
+message naming the stop.
+
 That is deliberate and load-bearing: a partial port that fell through to a silent success
 would let a differential PASS on a vector it never actually implemented, which is this
 project's recurring defect (an assertion satisfied by something other than the property it
@@ -64,15 +96,23 @@ import os
 import re
 import stat as _stat
 import sys
+import time
 import typing
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
-    AGENTS_DISCIPLINE_DIR, claim_leases, js_resolve, list_scopes, parse_gates,
-    read_stable_regular_file, release_leases, resolve_target, append_status,
-    validate_scope_id,
+    AGENTS_DISCIPLINE_DIR, MAX_CHECK_OUTPUT_BYTES, claim_leases, gate_definition_digest,
+    gate_state, js_dirname, js_resolve, list_scopes, parse_gates, qualify,
+    read_stable_regular_file, release_leases, resolve_target, same_file_identity, sha256,
+    sleep, stat_current_named_file, append_status, validate_scope_id, write_atomic,
+    # Underscore-prefixed: module-private in gates.py, but already the CORRECT port of the
+    # exact primitives gate-check.mjs's own approval machinery needs (path.join,
+    # pathIsInside, and JSON.stringify-as-text). REUSE them rather than re-derive a second,
+    # driftable copy -- the standing rule for every helper this project has already ported.
+    _js_join, _js_json_text, _path_is_inside,
 )
-from jsapi import js_to_number  # noqa: E402  # type: ignore[import-not-found]
+from jsapi import js_json_object, js_length, js_slice, js_to_number  # noqa: E402  # type: ignore[import-not-found]
+from dispatch import _iso_now  # noqa: E402  # type: ignore[import-not-found]
 
 # Only the first line differs from the oracle's HELP; a program names itself in its own usage
 # line. Every other line is transliterated exactly.
@@ -119,6 +159,12 @@ DEFAULT_TIMEOUT_SECONDS = 120
 # local here too rather than promoted into gates.py, so this file's constants mirror exactly
 # what the oracle declares at its own top level.
 MAX_GATE_LEDGER_BYTES = 8 * 1024 * 1024
+# gate-check.mjs:65-70, the same local-constant convention as MAX_GATE_LEDGER_BYTES above.
+MAX_OUTPUT_BYTES = MAX_CHECK_OUTPUT_BYTES
+MAX_APPROVAL_BYTES = 256 * 1024
+REGEX_TIMEOUT_MS = 250
+REGEX_STARTUP_TIMEOUT_MS = 5000
+MAX_REGEX_WORKERS = 4
 
 # Exit code for "this vector reached un-ported territory". NOT an oracle exit code (0/1/2/3),
 # so it can never be mistaken for agreement -- see the module docstring.
@@ -338,8 +384,8 @@ def main(argv):
 
     root = js_resolve(opt.get("root") or os.getcwd())
     as_directory(root, "--root")
-    timeout_value(opt.get("timeout"))
-    job_count(opt.get("jobs"))
+    timeout_seconds = timeout_value(opt.get("timeout"))
+    jobs = job_count(opt.get("jobs"))
     default_cwd = js_resolve(root, opt.get("cwd") or ".")
     if not action and not opt.get("status"):
         as_directory(default_cwd, "--cwd")
@@ -471,19 +517,333 @@ def main(argv):
             + ": " + ", ".join(result["globs"]))
         sys.exit(0)
 
-    # THE PORT STOPS HERE -- gate-check.mjs:297 (`ledgers = target.files.map(loadLedger)`,
-    # the entry into the default run-mode) begins the CHECK-execution shell/PATH plumbing
-    # (executableCandidates/resolveShell at :299) and everything after it. The boundary sits
-    # BEFORE that line rather than after it -- even though load_ledger above is fully ported
-    # and used by --claim -- so the sentinel lands exactly at the last action this file's own
-    # branches fully resolve (--list-scopes/--log/--claim/--release all reach a real exit
-    # above), instead of one line into a batch load whose only consumer is the un-ported run
-    # loop. Loud on purpose: see the module docstring on why a silent fall-through would let a
-    # differential agree on a vector nothing implemented.
-    error("gate_check.py: PORT INCOMPLETE -- argument handling, target/ledger resolution, and "
-          "the --list-scopes/--log/--claim/--release actions end at gate-check.mjs:295; the "
-          "default run mode (loading every ledger, resolving a shell, executing CHECKs) is "
-          "not ported yet")
+    # Default run mode, gate-check.mjs:297 onward. See the module docstring for why the
+    # boundary is HERE (gate-check.mjs:775, one statement before the runRolling spawn) and not
+    # at :297 with an "approval skipped" carve-out.
+
+    def resolved_gate_cwd(gate, file):
+        """gate-check.mjs:332-338."""
+        base = default_cwd if opt.get("cwd") is not None else (
+            js_dirname(js_resolve(file)) if target["mode"] == "explicit" else root)
+        return js_resolve(base, gate["cwd"]) if gate.get("cwd") else base
+
+    ledgers = [load_ledger(f) for f in target["files"]]
+
+    # gate-check.mjs:322-330. Guarded exactly like the oracle: `--status` never resolves a
+    # shell, reads PATH, or touches approval storage, so a garbage AGENTS_DISCIPLINE_SHELL
+    # must not fail a `--status` run.
+    if opt.get("status"):
+        shell = None
+        path_value = None
+        path_transcript = None
+    else:
+        def executable_candidates(name):
+            """gate-check.mjs:299-304."""
+            if sys.platform != "win32":
+                return [name]
+            if re.search(r"\.[A-Za-z0-9]+\Z", name):
+                return [name]
+            extensions = [ext for ext in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";") if ext]
+            return [name] + [name + ext.lower() for ext in extensions] \
+                + [name + ext.upper() for ext in extensions]
+
+        def resolve_shell(raw):
+            """gate-check.mjs:306-320."""
+            requested = raw or os.environ.get("AGENTS_DISCIPLINE_SHELL") or (
+                (os.environ.get("ComSpec") or "cmd.exe") if sys.platform == "win32" else "/bin/sh")
+            contains_separator = "/" in requested or "\\" in requested or os.path.isabs(requested)
+            candidates = []
+            if contains_separator:
+                candidates.append(js_resolve(os.getcwd(), requested))
+            else:
+                path_delimiter = ";" if sys.platform == "win32" else ":"
+                for directory in [d for d in str(os.environ.get("PATH") or "").split(path_delimiter) if d]:
+                    for name in executable_candidates(requested):
+                        candidates.append(_js_join(directory, name))
+            for candidate in candidates:
+                try:
+                    if _stat.S_ISREG(os.stat(candidate).st_mode):
+                        return candidate
+                except OSError:
+                    continue  # keep looking
+            fail_usage("cannot resolve command shell " + js_json_stringify(requested) + " from PATH")
+
+        shell = resolve_shell(opt.get("shell"))
+        path_value = str(os.environ.get("PATH") or "")
+        path_transcript = (re.sub(r"[\r\n]", " ", js_slice(path_value, 0, 800))
+                            + ("..." if js_length(path_value) > 800 else ""))
+
+    def oracle(file, gate):
+        """gate-check.mjs:340-356. `sys.platform` matches node's `process.platform` for every
+        value this project runs on (darwin/linux/win32 -- the three the oracle itself is only
+        MEASURED against, per stat_current_named_file's own note in lib/gates.py)."""
+        return {
+            "schema": 1, "check": gate["check"], "expect": gate["expect"],
+            "cwd": resolved_gate_cwd(gate, file), "shell": shell,
+            "timeoutMs": timeout_seconds * 1000, "maxOutputBytes": MAX_OUTPUT_BYTES,
+            "regexTimeoutMs": REGEX_TIMEOUT_MS, "regexStartupTimeoutMs": REGEX_STARTUP_TIMEOUT_MS,
+            "maxRegexWorkers": MAX_REGEX_WORKERS, "platform": sys.platform, "path": path_value,
+        }
+
+    def approval_oracle_signature(file, gate):
+        """gate-check.mjs:358-360."""
+        return sha256(_js_json_text(js_json_object(oracle(file, gate))))
+
+    if opt.get("status"):
+        approval_dir = None
+        canonical_root = None
+    else:
+        # gate-check.mjs:367-370.
+        approval_dir = js_resolve(os.environ.get("AGENTS_DISCIPLINE_APPROVAL_DIR")
+                                   or _js_join(os.path.expanduser("~"), ".agents-discipline", "approved"))
+        canonical_root = os.path.realpath(root)
+        if _path_is_inside(root, approval_dir):
+            fail_usage("AGENTS_DISCIPLINE_APPROVAL_DIR must be outside the repository root")
+
+    def approval_path(file, gate, directory=None):
+        """gate-check.mjs:372-375."""
+        identity = js_resolve(file) + "\0" + gate["id"] + "\0" + approval_oracle_signature(file, gate)
+        return _js_join(approval_dir if directory is None else directory, sha256(identity) + ".json")
+
+    def assert_private_approval_entry(path, info, kind):
+        """gate-check.mjs:377-392."""
+        is_symlink = _stat.S_ISLNK(info.st_mode)
+        is_right_type = _stat.S_ISDIR(info.st_mode) if kind == "directory" else _stat.S_ISREG(info.st_mode)
+        if is_symlink or not is_right_type:
+            raise RuntimeError(str(path) + " must be a real " + kind)
+        # os.geteuid()/os.getuid() are POSIX-only, matching node's own
+        # `typeof process.geteuid === "function"` guard (absent on win32).
+        uid = os.geteuid() if hasattr(os, "geteuid") else (os.getuid() if hasattr(os, "getuid") else None)
+        if uid is not None and info.st_uid != uid:
+            raise RuntimeError(str(path) + " must be owned by the current user")
+        extra_permissions = info.st_mode & 0o077
+        if sys.platform != "win32" and extra_permissions != 0:
+            raise RuntimeError(str(path) + " must not grant group or other permissions")
+
+    def validated_approval_dir(create=False):
+        """gate-check.mjs:394-406."""
+        if create:
+            os.makedirs(approval_dir, mode=0o700, exist_ok=True)
+        elif not os.path.exists(approval_dir):
+            return None
+        info = os.lstat(approval_dir)
+        assert_private_approval_entry(approval_dir, info, "directory")
+        canonical = os.path.realpath(approval_dir)
+        if _path_is_inside(canonical_root, canonical):
+            raise RuntimeError("approval directory resolves inside the repository root: " + canonical)
+        canonical_info = os.lstat(canonical)
+        assert_private_approval_entry(canonical, canonical_info, "directory")
+        return {"path": canonical, "dev": canonical_info.st_dev, "ino": canonical_info.st_ino}
+
+    def assert_approval_dir_unchanged(store):
+        """gate-check.mjs:408-414."""
+        current = os.lstat(store["path"])
+        assert_private_approval_entry(store["path"], current, "directory")
+        if not same_file_identity(current, store):
+            raise RuntimeError("approval directory changed during use: " + store["path"])
+
+    def read_approval_file(path):
+        """gate-check.mjs:416-447."""
+        fd = None
+        try:
+            no_follow = 0 if sys.platform == "win32" else getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | no_follow)
+            opened = os.fstat(fd)
+            named = stat_current_named_file(
+                path, {"maxBytes": MAX_APPROVAL_BYTES, "label": "approval record"})
+            assert_private_approval_entry(path, opened, "file")
+            if opened.st_size > MAX_APPROVAL_BYTES:
+                raise RuntimeError("approval record exceeds " + str(MAX_APPROVAL_BYTES)
+                                   + " bytes: " + path)
+            assert_private_approval_entry(path, named, "file")
+            if opened.st_nlink != 1 or not same_file_identity(named, opened):
+                raise RuntimeError("refusing linked or replaced approval record " + path)
+            chunks = []
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            # errors="replace", matching readFileSync's "utf8" substitution behaviour --
+            # same reasoning as read_stable_regular_file in lib/gates.py.
+            text = b"".join(chunks).decode("utf-8", errors="replace")
+            after = stat_current_named_file(
+                path, {"maxBytes": MAX_APPROVAL_BYTES, "label": "approval record"})
+            assert_private_approval_entry(path, after, "file")
+            if not same_file_identity(after, opened):
+                raise RuntimeError("approval record changed while it was read: " + path)
+            return text
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+    def approval_exists(file, gate):
+        """gate-check.mjs:449-465."""
+        store = validated_approval_dir()
+        if not store:
+            return False
+        path = approval_path(file, gate, store["path"])
+        try:
+            text = read_approval_file(path)
+        except OSError as exc:
+            if exc.errno == _errno.ENOENT:
+                return False
+            raise
+        try:
+            value = json.loads(text)
+        except ValueError:
+            return False
+        assert_approval_dir_unchanged(store)
+        return (isinstance(value, dict) and value.get("file") == js_resolve(file)
+                and value.get("gate") == gate["id"]
+                and value.get("signature") == approval_oracle_signature(file, gate))
+
+    def record_approval(file, gate):
+        """gate-check.mjs:467-509. Synchronous, unlike the oracle's async lock-wait loop --
+        this whole file is synchronous, the same shape difference with_file_lock documents in
+        lib/gates.py."""
+        store = validated_approval_dir(create=True)
+        token = approval_path(file, gate, store["path"])
+        lock = token + ".lock"
+        deadline = time.monotonic() + 10.0
+        owner = os.urandom(16).hex()
+        fd = None
+        while True:
+            try:
+                fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                break
+            except OSError as exc:
+                if exc.errno != _errno.EEXIST:
+                    raise
+                # Fail closed instead of trying to steal by path -- same reasoning as the
+                # oracle's own comment at this exact site.
+                try:
+                    os.stat(lock)
+                except OSError as stat_exc:
+                    if stat_exc.errno != _errno.ENOENT:
+                        raise
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("timed out waiting for approval lock")
+                sleep(20)
+        try:
+            os.write(fd, json.dumps({"owner": owner, "pid": os.getpid(),
+                                     "at": int(time.time() * 1000)}).encode("utf-8"))
+            value = {
+                "schema": 1, "file": js_resolve(file), "gate": gate["id"],
+                "signature": approval_oracle_signature(file, gate),
+                "oracle": oracle(file, gate), "approvedAt": _iso_now(),
+            }
+            write_atomic(token, json.dumps(js_json_object(value), indent=2, ensure_ascii=False) + "\n")
+            assert_approval_dir_unchanged(store)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                with open(lock, encoding="utf-8") as fh:
+                    current = json.load(fh)
+                if current.get("owner") == owner:
+                    os.unlink(lock)
+            except Exception:  # noqa: BLE001 -- manual cleanup or a successor owns the lock
+                pass
+
+    def print_oracle(file, gate, prefix):
+        """gate-check.mjs:511-519."""
+        value = oracle(file, gate)
+        log(prefix + " " + qualify(file, gate["id"]))
+        log("    CHECK: " + str(value["check"]))
+        log("    EXPECT: " + str(value["expect"]))
+        log("    CWD: " + str(value["cwd"]))
+        log("    SHELL: " + str(value["shell"]))
+        log("    PATH: " + str(path_transcript))
+
+    # gate-check.mjs:716-739: gate selection. Every gate that is abandoned or has no CHECK is
+    # skipped outright; a `--status` run or an already-met gate under a non-`--reverify` run
+    # is skipped before its CWD is even resolved, matching the oracle's ordering exactly (a
+    # bad CWD on a gate `--status` would never run must never fail a `--status` run).
+    pending = []
+    for ledger in ledgers:
+        for gate in ledger["doc"]["gates"]:
+            if gate["id"] in ledger["doc"]["abandoned"] or not gate.get("check"):
+                continue
+            state = gate_state(gate, ledger["doc"]["abandoned"])
+            if opt.get("status") or (not opt.get("reverify") and state == "met"):
+                continue
+            cwd = resolved_gate_cwd(gate, ledger["file"])
+            try:
+                cwd_stat = os.stat(cwd)
+            except OSError as exc:
+                if exc.errno == _errno.ENOENT:
+                    fail_usage("gate " + qualify(ledger["file"], gate["id"])
+                               + " CWD does not exist: " + cwd)
+                name = _errno.errorcode.get(exc.errno, "UNKNOWN") if exc.errno is not None else "UNKNOWN"
+                description = (exc.strerror or "").lower()
+                fail_usage("cannot inspect gate CWD " + cwd + ": " + name + ": " + description
+                           + ", stat '" + cwd + "'")
+            else:
+                if not _stat.S_ISDIR(cwd_stat.st_mode):
+                    fail_usage("gate " + qualify(ledger["file"], gate["id"])
+                               + " CWD is not a directory: " + cwd)
+            pending.append({
+                "file": ledger["file"], "gate": gate, "cwd": cwd, "startingState": state,
+                "wasMet": state == "met", "definitionDigest": gate_definition_digest(gate),
+                "approvalSignature": approval_oracle_signature(ledger["file"], gate),
+            })
+
+    # gate-check.mjs:741-771: approval classification. Reads and, under `--approve`, WRITES
+    # the real on-disk approval store -- this is the loop the corrected boundary exists for.
+    runnable = []
+    not_run = []
+    approval_infrastructure_failures = 0
+    for task in pending:
+        approved = False
+        try:
+            approved = approval_exists(task["file"], task["gate"])
+        except Exception as exc:  # noqa: BLE001 -- mirrors the oracle's catch-everything here
+            error("gate-check: could not validate approval for "
+                  + qualify(task["file"], task["gate"]["id"]) + ": " + str(exc))
+            approval_infrastructure_failures += 1
+            not_run.append(task)
+            continue
+        if not approved:
+            print_oracle(task["file"], task["gate"], "APPROVAL REQUIRED")
+            if not opt.get("approve"):
+                log("    NOT RUN: inspect this oracle, then re-run with --approve")
+                not_run.append(task)
+                continue
+            try:
+                record_approval(task["file"], task["gate"])
+                log("    APPROVED: " + approval_path(task["file"], task["gate"],
+                                                       validated_approval_dir()["path"]))
+            except Exception as exc:  # noqa: BLE001
+                error("gate-check: could not record approval for "
+                      + qualify(task["file"], task["gate"]["id"]) + ": " + str(exc))
+                approval_infrastructure_failures += 1
+                not_run.append(task)
+                continue
+        runnable.append(task)
+
+    for task in runnable:
+        log("  RUN  " + qualify(task["file"], task["gate"]["id"]) + " shell=" + str(shell)
+            + " cwd=" + task["cwd"] + " PATH=" + str(path_transcript))
+
+    # THE PORT STOPS HERE -- gate-check.mjs:776, `results = opt.status ? [] : await
+    # runRolling(runnable, jobs)`. That call is the only place this default run mode spawns a
+    # process (lib/check-supervisor.mjs) or a Worker (the regex pool); everything from there to
+    # the final MET/UNMET tally at :950 depends on its output. See the module docstring for why
+    # this fires even when `runnable` is empty. Loud on purpose: see the module docstring on
+    # why a silent fall-through would let a differential agree on a vector nothing implemented.
+    error("gate_check.py: PORT INCOMPLETE -- ledger loading, gate selection, and the full "
+          "approval-classification loop end at gate-check.mjs:775; the actual CHECK "
+          "execution (spawning lib/check-supervisor.mjs, the regex Worker pool, process-tree "
+          "teardown, per-check timeouts) and the final ledger/verdict tally are not ported "
+          "yet. jobs=" + str(jobs) + " pending=" + str(len(pending)) + " runnable="
+          + str(len(runnable)) + " not_run=" + str(len(not_run)) + " approval_infra_failures="
+          + str(approval_infrastructure_failures))
     sys.exit(PORT_INCOMPLETE_EXIT)
 
 

@@ -91,10 +91,28 @@ export const CASES = {
   // What that same line DOES produce is two shapes no other row covers, and both are three-way
   // distinct in the hashed bytes ("" vs null vs a real string):
   "empty path (unset PATH becomes the empty string, not null)": oracle({ path: "" }),
-  // `null` under --status, from the ternary's other arm. json.dumps and JSON.stringify agree on
-  // null, so this row cannot fail today -- it is a CONTROL that the three shapes stay distinct,
-  // and it would redden the moment a port normalized null to "" or dropped it.
-  "null path (the --status arm)": oracle({ path: null }),
+  // `null` from the ternary's other arm. LABELLED AS A SERIALIZER CONTROL, NOT AS A REACHABLE
+  // PAYLOAD, because the reachability claim I first wrote here does not survive measurement:
+  // gate-check.mjs:165 is `if (opt.status && opt.approve) failUsage(...)` -- measured, exit 2 --
+  // so --status never produces an approval FILE. The signature computation at :736 is not
+  // gated on opt.approve, so the null payload is probably still hashed under --status, but I
+  // have NOT proven that line executes there and am not asserting it.
+  // What the row does prove either way: null, "" and absent are three DISTINCT digests
+  // (measured 99c12694 / 4eb17f71 / 2535b409), so a port normalizing between them reddens.
+  "null path (serializer control -- null is not empty-string)": oracle({ path: null }),
+  // `shell` HAS THE SAME TERNARY and the corpus had the same gap -- every row carried
+  // "/bin/bash" and none carried null. gate-check.mjs:324 is
+  //     const shell = opt.status ? null : resolveShell(opt.shell);
+  // so under --status BOTH ambient fields are null in the same payload. Found by asking the
+  // question the previous row's failure taught: `path`'s definition was read, `shell`'s and
+  // `timeoutSeconds`' were inherited from whoever wrote this driver, unexamined.
+  //
+  // REACHABILITY MEASURED, not assumed -- the reason the row it replaced was wrong. `--status`
+  // does not exit before the payload is built: approvalOracleSignature(ledger.file, gate) is
+  // unconditional at :736, and running `gate-check.mjs --status` on a one-gate ledger prints
+  // the report and exits 0 rather than short-circuiting. So this shape is emitted in practice.
+  "null shell (serializer control -- same ternary as path)": oracle({ shell: null }),
+  "both ambient fields null (serializer control)": oracle({ shell: null, path: null }),
   // Characters JSON MUST escape, where the two escape tables can differ.
   "control chars": oracle({ check: "a" + CH(1) + "b" + CH(31) + "c" }),
   "tab and newline": oracle({ check: "a" + CH(9) + "b" + CH(10) + "c" }),

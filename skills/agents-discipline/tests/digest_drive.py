@@ -73,7 +73,11 @@ CASES = {
     # gate-check.mjs:325 is `String(process.env.PATH || "")`, so an unset PATH becomes the empty
     # STRING and the key is never dropped -- the row tested a shape the oracle cannot emit.
     "empty path (unset PATH becomes the empty string, not null)": oracle(path=""),
-    "null path (the --status arm)": oracle(path=None),
+    "null path (serializer control -- null is not empty-string)": oracle(path=None),
+    # See digest-drive.mjs: `shell` carries the SAME `opt.status ? null : ...` ternary
+    # (gate-check.mjs:324), and the corpus had the same gap -- every row "/bin/bash", none null.
+    "null shell (serializer control -- same ternary as path)": oracle(shell=None),
+    "both ambient fields null (serializer control)": oracle(shell=None, path=None),
     "control chars": oracle(check="a" + chr(1) + "b" + chr(31) + "c"),
     "tab and newline": oracle(check="a" + chr(9) + "b" + chr(10) + "c"),
     "quote and backslash": oracle(check='a"b\\c'),
