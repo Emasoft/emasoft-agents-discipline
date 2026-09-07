@@ -926,8 +926,21 @@ them. Symmetrically, JS `/m` anchors after `\n \r    `; Python's `re.M` anch
   still a divergence from the spec.
 - heading (`:296`) — `## Ruleſ of thiſ ledger` enters rules-skip mode in the port only, changing
   what counts as evidence for the whole file.
-- `CREATED` (`:130`) — a ledger with CR line endings, or a U+2028 separator, has a `Created:` line
-  the ORACLE finds and the port does not. That feeds the stale-artifact comparison at oracle `:321`.
+- `CREATED` (`:130`) — **CORRECTED, this was overstated when first written.** I wrote "a ledger
+  with CR line endings", which reads as *Windows*. Measured per line ending, and **Windows does NOT
+  diverge**: `\r\n` ends in `\n`, so Python's `re.M` anchors after it and finds the line.
+
+  | line ending | oracle | port |
+  |---|---|---|
+  | CRLF (Windows) | finds | **finds — no divergence** |
+  | LF (unix) | finds | finds |
+  | **lone CR** (classic Mac) | finds | **MISSES** |
+  | **U+2028** (LINE SEPARATOR) | finds | **MISSES** |
+
+  So the divergence is real but its reach is much narrower than the first wording implied: lone-CR
+  files are essentially extinct, leaving **U+2028** as the plausible carrier (evidence text pasted
+  from a word processor or a JS string). It feeds the stale-artifact comparison at oracle `:321`.
+  Fix it for correctness, not urgency — and do not let the original phrasing rank it.
 
 **THE FIX IS UNBLOCKED BY THE `\s` FIX ITSELF, and that is the non-obvious part.** This module's
 `:55-59` comment records that `re.ASCII` was rejected because it *also* narrows `\s`. Once a site
@@ -970,6 +983,27 @@ case-folding divergence for a whitespace one. Substitute first, then flag.
 translation and CR survives** (`'x\rCreated: …'`, verified) — then the real patterns:
 **oracle finds the `Created:` line, port does not.** That premise was unverified when first
 recorded and is the one that would have made the claim false.
+
+**⚠ THE FLAG CLASS HAS SIX `re.I` SITES, NOT FOUR — and the two extra were invisible to every
+enumeration run this session, because all of them keyed on `\s`.** A site can carry a diverging
+FLAG without carrying a diverging BODY; searching for the body finds only the intersection.
+Enumerated directly on `re\.I` (2026-09-07):
+
+| site | `\s` in body? | on the `\s` list? | note |
+|---|---|---|---|
+| `MEASURED_RESULT` `:67` | yes | yes | |
+| `EXIT_CODE` `:69` | yes | yes | |
+| heading `:296` | yes | yes | |
+| `ALWAYS_TRUE` `:485` | yes | yes | |
+| **`UNIT_HEADER` `:103`** | **no — already converted** | **NO** | `\s` fix landed in `d750a3d`; the FLAG was never looked at. `re.A` is safe here **now**, no ordering wait. |
+| **`:758` `re.sub`** | **no — uses `[ \t]`** | **NO** | the known-open `[ \t]` stripper; carries `re.I` too |
+| `FILENAME_SHAPED` `:64` | no | n/a | already `re.I \| re.A` — correct |
+
+**The lesson is the enumeration key, not the two sites.** Every sweep this session searched for
+`\s`, so a `\s`-free site with a diverging flag could not appear in any of them — including the
+one I had already FIXED, whose conversion is exactly what removed it from the search. A fix that
+removes a site from the search that would find it again is a blind spot the sweep creates for
+itself.
 
 **PRECEDENT ALREADY IN THE FILE:** `FILENAME_SHAPED` ships `re.I | re.A` today. `re.A` is not a
 new device here, and `NOT_WORD_BEFORE`/`NOT_WORD_AFTER` are explicit ASCII classes
