@@ -60,16 +60,12 @@ RUNNER_WORDS = {
 # out as their ASCII selves.
 NOT_WORD_BEFORE = r"(?<![0-9A-Za-z_])"
 NOT_WORD_AFTER = r"(?![0-9A-Za-z_])"
-CODE_SPAN = re.compile(r"`[^`]+`")
-FILENAME_SHAPED = re.compile(r"\b[A-Za-z0-9_./-]+\.[a-z0-9]{2,5}\b", re.I | re.A)
-MEASURED_RESULT = re.compile(
-    NOT_WORD_BEFORE + r"[0-9]+\s+(?:[a-z]+\s+){0,3}(passed|passing|pass|ok)" + NOT_WORD_AFTER,
-    re.I,
-)
-EXIT_CODE = re.compile(r"exit\s+[0-9]+", re.I)
-# NO WHITESPACE in the span: `node test/run-tests.mjs` is a COMMAND that happens to name a
-# path, and demanding that string exist as a file is nonsense. Only a bare path is a citation.
-CITATION = re.compile(r"`([^`\s]*/[^`\s]*\.[A-Za-z0-9]{1,6})`")
+
+# DEFINED HERE, ABOVE EVERY PATTERN, and that placement is forced rather than tidy: the first
+# `\s` conversion below is `MEASURED_RESULT`, so a class defined after the patterns is a
+# NameError at import. The block used to sit lower, which was fine only while `UNIT_HEADER` was
+# its sole consumer.
+#
 # JS `String.prototype.trim()` strips WhiteSpace + LineTerminator, which is NOT Python's
 # `str.strip()` set. Measured across 0..0x10FFFF (surrogates skipped) on 2026-09-07:
 #   JS strips, Python does NOT:  U+FEFF
@@ -100,6 +96,44 @@ JS_TRIM = "".join(map(chr, _JS_TRIM_CODEPOINTS))
 # NOTHING under python3, so the abandoned-row marker stayed silent in the oracle and FIRED in
 # the port. Same bytes, opposite output, no test covering it.
 JS_WS_CLASS = "[" + "".join(map(re.escape, JS_TRIM)) + "]"
+CODE_SPAN = re.compile(r"`[^`]+`")
+FILENAME_SHAPED = re.compile(r"\b[A-Za-z0-9_./-]+\.[a-z0-9]{2,5}\b", re.I | re.A)
+# TWO divergences on one line, and they must be fixed TOGETHER in this order -- MEASURED.
+#
+# 1. BODY. `\s` -> JS_WS_CLASS, as everywhere else in this file.
+# 2. FLAGS. `re.I` -> `re.I | re.A`, because Python's `re.I` is NOT JavaScript's `/i`. JS `/i`
+#    WITHOUT the `u` flag -- which is what the oracle uses -- refuses case foldings that map a
+#    non-ASCII character onto an ASCII one. Python's performs them, so the evidence line
+#    `12 paſſed` is STRONG evidence in the port and NOT in the oracle. The `[a-z]+` CLASS
+#    diverges the same way, not just the literal alternation: Python folds U+017F, U+0131 and
+#    U+0130 into `[a-z]`, JS does not.
+#
+# THE ORDER IS LOAD-BEARING, and the file's own `:55-59` comment is why: `re.A` narrows `\s` too.
+# Applied to a pattern still spelling `\s` it would trade a fold divergence for a whitespace one
+# -- measured at the sibling site, where `re.A`-first takes the divergent set from 6 code points
+# to 19 by dropping every shared non-ASCII space (NBSP, U+2000-200A, U+3000...). Once the
+# whitespace is an explicit literal class there is no `\s` left for `re.A` to narrow.
+#
+# `re.A` IS NOT UNCONDITIONALLY SAFE, and the reason it is safe HERE is narrower than "\s was the
+# only problem" -- MEASURED: `re.A` also restricts IGNORECASE folding to ASCII, while JS non-`u`
+# `/i` DOES fold non-ASCII to non-ASCII (it excludes only foldings onto an ASCII character). So
+# `/é/i` matches `É` in the oracle, and `re.compile("é", re.I | re.A)` does NOT -- a divergence
+# `re.A` would INTRODUCE. It cannot bite here because every case-bearing element in this pattern
+# is ASCII (`[a-z]`, and the literal `passed|passing|pass|ok`), leaving the folding restriction
+# nothing to act on. DO NOT copy `re.A` to a site containing a non-ASCII literal or class member
+# on the strength of this comment; check that precondition there.
+# `NOT_WORD_BEFORE`/`NOT_WORD_AFTER` are spelled as explicit ASCII classes rather than `\b`, so
+# `re.A` has nothing to narrow there either.
+# `FILENAME_SHAPED` above already ships `re.I | re.A`; this is the house form, not a new device.
+MEASURED_RESULT = re.compile(
+    NOT_WORD_BEFORE + r"[0-9]+" + JS_WS_CLASS + r"+(?:[a-z]+" + JS_WS_CLASS
+    + r"+){0,3}(passed|passing|pass|ok)" + NOT_WORD_AFTER,
+    re.I | re.A,
+)
+EXIT_CODE = re.compile(r"exit\s+[0-9]+", re.I)
+# NO WHITESPACE in the span: `node test/run-tests.mjs` is a COMMAND that happens to name a
+# path, and demanding that string exist as a file is nonsense. Only a bare path is a citation.
+CITATION = re.compile(r"`([^`\s]*/[^`\s]*\.[A-Za-z0-9]{1,6})`")
 UNIT_HEADER = re.compile(r"^\*\*unit" + JS_WS_CLASS + r"+([0-9]+)" + NOT_WORD_AFTER, re.I)
 
 # The table-header FINDER, mirroring `ledger-check.mjs:47`'s `/^\|\s*#\s*\|/`. JS_WS_CLASS, never
