@@ -62,19 +62,45 @@ STALE_MSG="definition or runtime approval oracle changed"
 # The ledger, and the CHECK script it names. The gate is written UNCHECKED so the run has to
 # execute it; --approve records the approval in APPROVALS on the first pass.
 _write_fixture() {
-  local root="$1" mutating="$2"
+  local root="$1" mode="$2"
   mkdir -p "$root/.agents-discipline/s/gates"
-  printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./check.sh\n  EXPECT: ok\n' \
-    > "$root/.agents-discipline/s/gates/leaf.md"
-  if [ "$mutating" = mutating ]; then
-    # Rewrites the ledger it was launched from, then succeeds. The EXPECT still matches, so the
-    # result is a PASS that the lock-time re-read must then refuse to write.
-    printf '#!/bin/sh\nprintf "%s" > .agents-discipline/s/gates/leaf.md\necho ok\n' \
-      '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./other.sh\n  EXPECT: ok\n' \
-      > "$root/check.sh"
-  else
-    printf '#!/bin/sh\necho ok\n' > "$root/check.sh"
-  fi
+  case "$mode" in
+    mutating)
+      # Rewrites the ledger it was launched from, then succeeds. The EXPECT still matches, so
+      # the result is a PASS that the lock-time re-read must then refuse to write.
+      printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./check.sh\n  EXPECT: ok\n' \
+        > "$root/.agents-discipline/s/gates/leaf.md"
+      printf '#!/bin/sh\nprintf "%s" > .agents-discipline/s/gates/leaf.md\necho ok\n' \
+        '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./other.sh\n  EXPECT: ok\n' \
+        > "$root/check.sh"
+      ;;
+    cwd-respelled)
+      # ISOLATES THE DEFINITION-DIGEST DISJUNCT, which CASE 1 provably does not.
+      #
+      # The branch is a three-way OR: gate vanished, definition digest changed, approval-oracle
+      # signature changed. MEASURED with mutate-probe.sh: disabling ONLY the digest comparison
+      # left CASE 1 GREEN -- because the oracle signature hashes `check` and `expect` too, so
+      # any edit to those trips both disjuncts and the digest one is never load-bearing there.
+      #
+      # The two hash sets are not nested, though, and the gap is CWD's SPELLING:
+      #   gateDefinitionDigest (gates.mjs:445-455) hashes the RAW `gate.cwd` string
+      #   oracle()             (gate-check.mjs:340-356) hashes resolvedGateCwd(gate, file)
+      # so `.` and `./` are DIFFERENT to the digest and IDENTICAL to the signature. Respelling
+      # CWD moves exactly one disjunct, which is what makes this case a pin rather than a
+      # second copy of CASE 1.
+      printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./check.sh\n  EXPECT: ok\n  CWD: .\n' \
+        > "$root/.agents-discipline/s/gates/leaf.md"
+      printf '#!/bin/sh\nprintf "%s" > .agents-discipline/s/gates/leaf.md\necho ok\n' \
+        '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./check.sh\n  EXPECT: ok\n  CWD: ./\n' \
+        > "$root/check.sh"
+      ;;
+    stable)
+      printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./check.sh\n  EXPECT: ok\n' \
+        > "$root/.agents-discipline/s/gates/leaf.md"
+      printf '#!/bin/sh\necho ok\n' > "$root/check.sh"
+      ;;
+    *) echo "unknown fixture mode: $mode" >&2; exit 2 ;;
+  esac
   chmod +x "$root/check.sh"
 }
 
@@ -149,8 +175,9 @@ _case() {
   fail=$((fail + 1)); FAILED+=("$label")
 }
 
-_case "self-mutating CHECK is STALE"   mutating    present c1
-_case "CONTROL non-mutating CHECK"     stable      absent  c2
+_case "self-mutating CHECK is STALE"   mutating       present c1
+_case "CONTROL non-mutating CHECK"     stable         absent  c2
+_case "CWD respelled pins the digest"  cwd-respelled  present c3
 
 echo
 if [ "$fail" = 0 ]; then

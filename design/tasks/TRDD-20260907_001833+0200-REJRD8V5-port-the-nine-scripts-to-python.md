@@ -56,14 +56,43 @@ The harness produced them, not the port.
 > the runner's *design* ("driver pairs emit JSON") without opening the file, which was wrong about
 > this one — it has a CLI section added precisely because the drivers bypass `gate_check.py`.
 
-**Still unexercised**, revised: the `(stale result discarded)` label
-(`gate-check.mjs:925` / `gate_check.py:1374`) — it needs `staleResults` non-empty AND the
-reloaded gate to still read `met`, i.e. a concurrent writer landing VALID evidence for the new
-definition mid-run, which is a genuine race rather than a scripted mutation; concurrent ledger
-rewrites under the file lock; dispatch aggregation with real dispatch state; and ABANDON
-handling. Also NOT isolated by `stale-diff.sh`: the branch's three disjuncts are redundant for
-this fixture — a probe that disabled only the digest comparison stayed green because the
-approval-oracle signature detects the same edit.
+**The three disjuncts, and which fixture pins which.** The branch is a three-way OR — gate
+vanished, definition digest changed, approval-oracle signature changed. CASE 1 pins only the OR
+as a whole: MEASURED with `mutate-probe.sh`, disabling ONLY the digest comparison left it GREEN,
+because `oracle()` hashes `check` and `expect` too, so any edit to those trips both disjuncts and
+the digest one is never load-bearing there. **A probe that does not redden is a finding, not a
+footnote** — it is a direct measurement that the code it disabled is unnecessary for the test to
+pass.
+
+The two hash sets are NOT nested, and the gap is CWD's SPELLING:
+
+| | hashes |
+|---|---|
+| `gateDefinitionDigest` (`gates.mjs:445-455`) | `check`, `expect`, **raw `gate.cwd`** |
+| `oracle()` (`gate-check.mjs:340-356`) | `check`, `expect`, **`resolvedGateCwd(gate, file)`**, + 9 ambient fields |
+
+So `.` and `./` are DIFFERENT to the digest and IDENTICAL to the signature. **CASE 3
+(`cwd-respelled`) moves exactly one disjunct**, and the same probe that stayed green against
+CASE 1 now REDDENS. The earlier note that the disjunct might be unpinnable by construction was
+wrong — it is pinnable, and now pinned.
+
+**ABANDON emission is verified in isolation, not just inside a composite green.** The
+`run-tests.mjs:255` hierarchy case asserts `HANDOFF REQUIRED` on the OUTER run, whose output
+merely echoes the inner one, so a green there is a composite. Run directly on the child ledger,
+`--reverify` on `ABANDON: G1 upstream removed`: both runtimes exit 1 with byte-identical output
+(`HANDOFF REQUIRED: 1 abandoned (met: 0, reran: 0, previously met reverified: 0)`). That is what
+establishes the interpreter was the ONLY problem in `b6be6b4`, rather than one of two.
+
+**Still unexercised**, revised: the `(stale result discarded)` label (`gate-check.mjs:925` /
+`gate_check.py:1374`) — it needs `staleResults` non-empty AND the reloaded gate to still read
+`met`, i.e. a concurrent writer landing VALID evidence for the new definition mid-run, which is a
+genuine race rather than a scripted mutation; the `fresh_state == "abandoned": return` early exit
+in the same lock body (`gate_check.py:1285`), which declines to write a result and is covered by
+neither `stale-diff.sh` nor the hierarchy fixture; concurrent ledger rewrites under the file lock;
+and dispatch aggregation with real dispatch state. ABANDON is no longer on this list as a whole,
+but only ONE of its behaviours is covered (an abandoned child blocks its parent's promotion);
+ABANDON against a currently-`[x]` gate, multiple ABANDON lines, and a malformed or unknown-id
+ABANDON are not.
 
 **WHERE THE PORT ACTUALLY IS (`d4a1acc`, superseded above; kept for the boundary history).** `gate_check.py` is 851 lines against a 950-line oracle. `PORT_INCOMPLETE_EXIT`
 (90) fires from exactly ONE site, `:847`, now standing at `gate-check.mjs:775` — up from `:295`.
