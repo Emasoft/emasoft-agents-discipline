@@ -453,6 +453,32 @@ done
 _row "gate-check locks path is a file (EEXIST prose)" "$WORK/lockfile-o" "$WORK/lockfile-p" \
   "file already exists"
 
+# --- ROW 14: os.listdir, the spelling the "canonical" enumeration forgot -----------------------
+# WRITTEN BEFORE ITS FIX, unlike rows 12 and 13 -- so this one is observed RED against the real
+# defect while it is still in place, which is the evidence the other two can never have.
+# HOW IT WAS FOUND, because the method matters more than the row: the enumeration this file's
+# TRDD calls canonical listed `os.scandir` and NOT `os.listdir`, though `os.listdir` is the direct
+# counterpart of the oracle's readdirSync. A review named the omission; widening the pattern found
+# one call, at gates.py:2101, OUTSIDE any try -- so it propagates to a catch that hardcodes `open`
+# while node reports `scandir`.
+# WHY NO EXISTING ROW REACHED IT: row 8 chmod 000s the same directory, but that fails earlier, at
+# the FILELOCK OPEN (measured: `... open '<locks>/<digest>.filelock'`). Reaching the listdir needs
+# the directory WRITABLE but UNREADABLE -- chmod 300 -- so the lock file can still be created and
+# only the directory scan is denied. Two fixtures, one directory, two different syscalls.
+for rt in o p; do
+  R="$WORK/scandir2-$rt"; mkdir -p "$R/.agents-discipline/s/gates" "$R/.agents-discipline/locks"
+  printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: echo ok\n  EXPECT: ok\n' \
+    > "$R/.agents-discipline/s/gates/leaf.md"
+  chmod 300 "$R/.agents-discipline/locks"
+done
+"$NODE_ABS" "$HERE/../scripts/gate-check.mjs" --root "$WORK/scandir2-o" --scope s --claim \
+  > /dev/null 2> "$WORK/.o"
+"$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/scandir2-p" --scope s --claim \
+  > /dev/null 2> "$WORK/.p"
+chmod 700 "$WORK/scandir2-o/.agents-discipline/locks" "$WORK/scandir2-p/.agents-discipline/locks"
+_row "gate-check unreadable locks dir (listdir/scandir)" \
+  "$WORK/scandir2-o" "$WORK/scandir2-p" ", scandir '"
+
 echo
 if [ "$fail" = 0 ]; then
   echo "--- $pass errno message(s) identical ---"

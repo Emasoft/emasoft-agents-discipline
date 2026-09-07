@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T11:18:29+0200
+updated: 2026-09-07T11:24:04+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -212,6 +212,13 @@ binder name added later (the alternation is not regenerated automatically), by a
 interpolation site, or by a call whose helper makes more than one syscall. Re-run step 1 before
 trusting it; do not inherit it.
 
+> ⚠ **DO NOT READ "COMPLETE" HERE AS "THE PORT IS DONE ON THIS AXIS" — see Round 4.** This
+> section's claim is about INTERPOLATION sites and it still holds. Round 4 established that the
+> defect class is decided at the RAISE site instead, and **43 unwrapped fs-call sites remain**
+> (`gates.py` 27, `gate_check.py` 14, `ledger_check.py` 2). One of them was a live divergence
+> (`os.listdir`). The two sentences are not contradictory, but the distinction between them IS
+> the thing Round 3 got wrong, so a reader who stops here stops in the wrong place.
+
 **AND IT WAS ALREADY INCOMPLETE — BUT NOT FOR THE REASON FIRST WRITTEN HERE.** The first version
 said the sweep is "structurally blind to a site that never binds an error", which describes the
 symptom at `gate_check.py:756` (a bare `os.makedirs`) and would send the next reader hunting for
@@ -338,8 +345,17 @@ message, or came from the open.* A review found two counterexamples and both wer
 first-hand, so the version that shipped in 8078182 asserted as ESTABLISHED something the code did
 not do — strictly worse than the earlier state, where it was only asserted. Corrected:
 
-> Every error escaping `read_stable_regular_file` either carries an attached message, came from
-> the open, or is authored with no errno (which the `errno is not None` guard already handles).
+> Every **OSError** escaping `read_stable_regular_file` either carries an attached message, came
+> from the open, or is authored with no errno (which the `errno is not None` guard handles).
+
+**THE `OSError` QUALIFIER IS THE THIRD CORRECTION TO THIS ONE SENTENCE.** Without it the claim is
+still false: the boundary guard raises a `TypeError` for a non-string root, and `int(max_bytes)`
+raises `ValueError`/`TypeError` — none of which is an OSError, so none fits any of the three
+cases. Round 3 published it with two cases (false), Round 4 with three (still false), and this is
+the fourth attempt. **The repetition is the finding:** a sentence rewritten from memory of a
+function instead of from a walk of its raise sites will keep coming out slightly wrong. It is
+load-bearing for seven hardcoded constants, so either derive it by enumerating the raises in
+order, or do not publish it as established.
 
 Three cases, not two — and it became true only after fixing the two holes:
 - **the ENOENT probe's `os.lstat`** (a second escape hatch, wrapped now), and
@@ -391,9 +407,31 @@ running it. Run now:
     grep -rnE "os\.(open|stat|lstat|fstat|mkdir|makedirs|rename|replace|unlink|remove|rmdir|
                scandir|read|write|fsync|readlink|chmod|symlink|link|utime|truncate)\(" scripts/
 
-**38 unwrapped call sites remain**, in three files: `gates.py` 24, `gate_check.py` 13,
-`ledger_check.py` 1. Each must be shown WRAPPED or provably the only syscall its catch can see;
-that audit is NOT done, and this is the honest state of the sweep. **Correcting the review that
+**THAT LIST WAS ITSELF INCOMPLETE, and the omission was a live bug.** It named `os.scandir` but
+NOT **`os.listdir`** — the direct counterpart of the oracle's `readdirSync` — and omitted the
+`open()` builtin entirely. Adding both (plus `os.fdopen`, `pathlib`, `shutil`, `io.open`,
+`tempfile`) takes the count from 38 to **43**: `gates.py` 27, `gate_check.py` 14,
+`ledger_check.py` 2. **A count from a list of spellings is a FLOOR, never a total** — still
+missing are `mmap`, `from os import unlink` then a bare call, and `open` under an alias.
+
+**AND THE FIRST SITE THE WIDENED LIST EXPOSED WAS A REAL, CLI-REACHABLE DIVERGENCE**
+(`gates.py:2101`, `os.listdir` OUTSIDE any try, propagating to a catch that hardcodes `open`):
+
+    chmod 300 .agents-discipline/locks   (writable, UNREADABLE), then --claim
+    node -> EACCES: permission denied, scandir '<locks>'
+    port -> EACCES: permission denied, open    '<locks>'      # BEFORE
+
+**No existing row could reach it**: row 8 chmod 000s the same directory but fails EARLIER, at the
+filelock open. Reaching the listdir needs the directory writable-but-unreadable, so the lock file
+can still be created and only the scan is denied — two fixtures, one directory, two syscalls.
+**Row 14 was written BEFORE the fix and observed RED against the defect in place** — the evidence
+rows 12 and 13 can never have.
+
+That single find settles whether the audit is worth finishing: it is. Each remaining site must be
+shown WRAPPED or provably the only syscall its catch can see; **that audit is NOT done**, and this
+is the honest state of the sweep. `gate_check.py`'s 14 are the highest-risk set — that file has
+ten catches with HARDCODED syscall constants, so any call under one of them whose syscall differs
+is a verbatim `:756` repeat, and the cross-check (call site × enclosing catch) is mechanical. **Correcting the review that
 prompted this:** `process_tree.py`, `check_supervisor.py`, `regex_worker.py` and `jsapi.py` were
 predicted to be unswept liabilities — measured, they contain ZERO matching fs calls, so their
 absence from the sweep costs nothing on this axis.
@@ -404,16 +442,35 @@ claim published as first-hand measurement should survive its own method being do
 `jsapi.py` still at ZERO, and `process_tree.py`/`check_supervisor.py` carrying only PROCESS calls
 — `os.getpgid`, `os.killpg`, `os.getcwd`, `os.strerror`. No filesystem call in any of the four.
 
-**AND THE MODULE IS OUT OF SCOPE FOR THIS CLASS ENTIRELY, for a better reason than "no fs
-calls".** `process_tree.py` never emits an fs-shaped message: the oracle formats these as
+**AND THE MODULE IS OUT OF SCOPE FOR THIS CLASS, for a better reason than "no fs calls".**
+`process_tree.py` emits the errno NAME whenever an errno is present: the oracle formats these as
 `error.code || error.message` (`process-tree.mjs:31,65,74,81,87,122,158`) and the port's
-`_err_code` is that same ladder, so BOTH emit the errno NAME (`ESRCH`), not prose. Neither the
-syscall token nor `_LIBUV_PROSE` can apply. Confirmed too that node's process errors have a
-DIFFERENT GRAMMAR from its fs errors — `process.kill` gives `kill ESRCH`, not
-`ESRCH: no such process, kill` — so importing the fs rules here would have been actively wrong.
-The `_err_code` duplication stays a deliberate divergence between two copies, and it is about the
-FALLBACK rung (oracle `error.message` vs port `strerror`), reachable only when `code` is absent,
-which is the accepted runtime-message class.
+`_err_code` mirrors it code-first, so neither the syscall token nor `_LIBUV_PROSE` reaches the
+output. Node's process errors do have a DIFFERENT GRAMMAR from its fs errors — `process.kill`
+gives `kill ESRCH`, not `ESRCH: no such process, kill` — so wrapping here is UNNECESSARY.
+**Not "actively wrong", which an earlier draft claimed and could not support:** `_node_message_error`
+preserves errno, so a wrapped error would still take rung 1 and still print `ESRCH`. Wrapping
+would change nothing. The dramatic version is worse than useless — a later reader could cite it
+to decline a wrap that IS needed.
+
+**Two precision fixes to that paragraph, both self-contradictions:** "never prose" was false in
+the very case the next sentence describes (when `code` is absent the oracle emits `.message`,
+which IS prose) — hence "whenever the errno is present". And the two ladders are NOT "the same":
+the port has THREE rungs (errorcode → strerror → str) against the oracle's TWO, and rung 2
+differs in kind. Mostly that lands in the accepted runtime-message class, but ONE case does not:
+an OSError whose errno is absent from `errno.errorcode` gets `UNKNOWN` from node's `uv_err_name`
+and strerror prose from the port. Rare, unchased, and recorded rather than filed under a label
+that does not fit it.
+
+**THE EVIDENCE FOR THE PARAGRAPH ABOVE WAS FILTERED, AND THAT IS THE THIRD TIME.** The grep that
+COUNTED (20 lines) and the grep that DISPLAYED (5 lines) were different patterns, so ~15 matched
+lines were counted and never read — and the conclusion was written from the 5. Read now, all 15:
+every one is `subprocess` (`Popen`, `run`, `DEVNULL`, `PIPE`, `CREATE_NO_WINDOW`, one comment);
+the `os.path.(exists|isdir|isfile|realpath)` alternation matched nothing at all. The conclusion
+survives — and the `subprocess` sites are the SPAWN-ERROR path, which takes rung 1 in both
+runtimes, so they are consistent too. **The failure was the method, not the answer:** msg25's
+lesson is "enumerate, then READ every line", and this happened inside the commit whose subject
+was widening the grep. A method check that repeats the method's own error is not a method check.
 
 **2. TWO ROWS COULD NOT PROTECT THEMSELVES.** Rows 12 and 13 used the OUTER prefix as their
 non-vacuity needle (`could not record approval`, `cannot claim leases`). Both survive any authored
@@ -449,7 +506,24 @@ fixed table and mechanically closable → CLOSED. The dangling-symlink realpath 
 consumes, needs a walk reimplementation → RECORDED. Written down so the next session can stop
 without re-deriving it.
 
-**By that rule this class is CLOSED after the 38-site audit**, which is mechanical and therefore
+**IT IS A DISPOSITION RULE, NOT A STOPPING RULE — the label was wrong.** It says what to do with
+a divergence ALREADY FOUND; it says nothing about when to stop looking, and the cost here was
+overwhelmingly in the FINDING (measuring, forcing errnos, six review rounds), not in the fixes,
+which were a few lines each. "Cheap and mechanical" is also elastic in the worst direction: every
+fix here looked cheap once found, so applied prospectively it forbids nothing.
+
+**THE MISSING HALF, which is falsifiable:** *stop auditing a class when a round produces only
+reasoning and documentation defects and no CODE defects.* By that test the class had NOT
+converged at Round 4 (close-polarity was a real behaviour bug) and had NOT converged at Round 5
+either (`os.listdir` was a live divergence) — so continuing was correct both times, which is
+exactly what a stopping rule should be able to say in advance rather than in hindsight.
+
+**A SECOND, BLUNTER SIGNAL worth watching:** changed CODE lines versus changed PROSE lines. Some
+recent rounds ran ~5 code lines against ~60 of comment and TRDD. When that ratio inverts this
+hard the remaining work is editing, not porting — and the commit messages and code comments
+become the largest surface for NEW defects, which is measurably what has been happening.
+
+**By that rule this class is CLOSED after the 43-site audit**, which is mechanical and therefore
 in scope. Five commits on error text for a port whose CLI behaviour was already correct is past
 the point of diminishing returns: commits 1–2 fixed user-visible divergences, 3–5 increasingly
 fixed the REASONING around them. The remaining budget belongs to the port's untested surface, not

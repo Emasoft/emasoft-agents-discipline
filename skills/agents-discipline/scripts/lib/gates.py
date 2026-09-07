@@ -2098,7 +2098,11 @@ def _read_leases_unlocked(root):
         return invalid_dir
 
     leases = []
-    for name in sorted(os.listdir(directory), key=js_sort_key):
+    # `scandir`, which is what node reports for a failed readdirSync -- NOT `listdir`, and not the
+    # `open` a caller would otherwise guess: this call sits outside any try, so it propagates to
+    # gate_check's "cannot claim leases" catch, which hardcodes open. MEASURED before the fix on
+    # a chmod-300 locks directory: node `..., scandir '<locks>'` against the port's `..., open`.
+    for name in sorted(_node_call("scandir", os.listdir, directory), key=js_sort_key):
         if not name.endswith(".lease"):
             continue
         file = _js_join(directory, name)
