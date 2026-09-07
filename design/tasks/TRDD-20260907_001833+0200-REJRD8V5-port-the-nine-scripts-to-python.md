@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T05:59:27+0200
+updated: 2026-09-07T06:02:30+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -104,10 +104,13 @@ approval file simply does not appear, so anything reading only the exit status s
 **WHAT THE THREE `typing.cast` CALLS IN `gate_check.py` ARE ACTUALLY WORTH (2026-09-07).** They
 are not equivalent, and lumping them together as "seven benign type errors" hid that:
 - `:623` (inside `validated_approval_dir`) — **MEASURED SAFE.** Contiguous read of `:798-830`
-  plus the first-ever `--status` run of the PORT: `pending=0 approval_infra_failures=0`, while
-  the same ledger under `--reverify` reaches the CWD stat. The falsifiable prediction (a missing
-  guard leaves `pending` non-empty, hits `os.path.exists(None)`, bumps the counter per gate) is
-  refuted by both counters being 0.
+  plus a `--status` run of the PORT giving `pending=0`, with the DISCRIMINATING control that the
+  first version of this measurement lacked: the SAME ledger with only `--status` removed gives
+  `pending=1`. Without that second arm, `pending=0` was also consistent with `:805` skipping the
+  gate (abandoned / no CHECK) and a one-gate ledger cannot say which `continue` fired.
+  **`approval_infra_failures=0` is NOT a second, independent fact** — that counter lives in the
+  loop over `pending`, so `pending=0` makes it 0 whatever `validated_approval_dir` would have
+  done. Citing both read as two corroborating measurements; it was one measurement stated twice.
 - `:709` — **PROVABLY SAFE.** `create=True` makes the `return None` arm unreachable.
 - `:845` — **UNFALSIFIED, and it should be recorded as such.** `create` defaults to False, so
   `None` is reachable in principle via a TOCTOU race (the directory vanishing between
@@ -116,9 +119,14 @@ are not equivalent, and lumping them together as "seven benign type errors" hid 
   unfalsified is not the same as verified, and a green suite says nothing about it.
 
 **The `:627` `return None` arm IS exercised, contrary to a review finding.** `approval_exists`
-calls `validated_approval_dir()` with `create=False` and handles the result explicitly
-(`if not store: return False`), which happens on every fresh approval directory — i.e. CASE 1 of
-every `approval-diff.sh` run. That call site needed no cast and correctly got none.
+calls `validated_approval_dir()` with `create=False` at `:839` — BEFORE the `--approve` branch,
+so it is on the approve path — and handles the result explicitly (`if not store: return False`).
+**The load-bearing half, checked rather than assumed:** `approval-diff.sh` does NOT pre-create
+its approval directories. `:110` only assigns `APPR_O`/`APPR_P`; the runner's single `mkdir -p`
+(`:54`) builds the repo scaffold. So the directories are genuinely absent on the first run and
+the arm fires. Had the runner pre-created them, `os.path.exists` would be True, the arm would be
+dead in the suite, and the review finding I contradicted would have been right — so this was the
+part worth verifying, not the call order.
 
 **A FALSE CLAIM ABOUT MY OWN PROCESS, corrected.** I told the user the `row`-indentation coverage
 question was "asked of the replacement BEFORE relying on it rather than after". The real ordering

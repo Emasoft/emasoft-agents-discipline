@@ -854,13 +854,21 @@ def main(argv):
                 # THE RE-CALL IS A SECURITY RE-VALIDATION, WHICH IS WHY IT MUST STAY.
                 # gate-check.mjs:762 is
                 #     approvalPath(task.file, task.gate, validatedApprovalDir().path)
-                # and validatedApprovalDir re-runs lstat + assertPrivateApprovalEntry +
-                # realpath + the pathIsInside repo-root check. assertPrivateApprovalEntry THROWS
-                # on a symlink, on wrong ownership, and on any group/other permission bit. So a
-                # directory that became world-writable between record_approval's write and this
-                # line is caught HERE. Passing record_approval's already-validated `store` would
-                # be tidier, would silence the type checker without a cast, and would SKIP that
-                # re-check -- a real security divergence, not a stylistic one.
+                # and validatedApprovalDir re-runs lstat + assertPrivateApprovalEntry + realpath
+                # + the pathIsInside repo-root check.
+                #
+                # PRECISELY WHAT THE RE-CALL ADDS, because an earlier version of this comment
+                # said it would "skip a security re-validation" and that OVERSTATES it:
+                # record_approval already calls assert_approval_dir_unchanged(store) after the
+                # write, and that re-runs assert_private_approval_entry (symlink, ownership,
+                # group/other bits) plus a same_file_identity check. But it does so on
+                # store["path"], which is the CANONICAL path only. The re-call additionally
+                #   (a) re-lstats and re-validates the ORIGINAL approval_dir -- the path that
+                #       could have been swapped for a symlink pointing somewhere else, which is
+                #       exactly what a canonical-only check cannot see, and
+                #   (b) re-runs the pathIsInside repo-root containment check.
+                # So reusing `store` would still be a real divergence, just a narrower one than
+                # first claimed: the ownership/permission re-check is NOT what would be lost.
                 #
                 # The null-deref below is a side effect of keeping that re-call, not the reason
                 # for it: `create` defaults to false, so if the directory vanished entirely the
