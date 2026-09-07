@@ -256,9 +256,18 @@ test("hierarchy: an abandoned child cannot promote its N1 parent", async () => {
   const s = sandbox();
   try {
     const child = s.write("child.md", "# Gates\n\n- [ ] G1: impossible\n  EVIDENCE: pending\n\nABANDON: G1 upstream removed\n");
+    // The interpreter is chosen by GATE_CHECK's OWN extension, the same rule as :71. It used
+    // to be a hardcoded `process.execPath`, which is correct for the oracle and impossible for
+    // the port: under AD_RUNTIME=python this spawned `node gate_check.py` and node answered
+    // ERR_UNKNOWN_FILE_EXTENSION ".py". The gate then legitimately FAILED, so the case reported
+    // a missing "HANDOFF REQUIRED" -- a harness defect wearing the costume of a port defect, on
+    // the one path (ABANDON promotion) this suite is the only cover for. Under the default
+    // oracle run GATE_CHECK ends in .mjs and this expression is process.execPath, so nothing
+    // about the oracle's own behaviour changes.
+    const nestedExe = GATE_CHECK.endsWith(".py") ? (process.env.PYTHON || "python3") : process.execPath;
     s.write("parent-oracle.mjs", [
       "import { spawnSync } from 'node:child_process';",
-      "const result = spawnSync(process.execPath, [" + JSON.stringify(GATE_CHECK) + ", '--reverify', " + JSON.stringify(child) + "], { encoding: 'utf8', env: process.env });",
+      "const result = spawnSync(" + JSON.stringify(nestedExe) + ", [" + JSON.stringify(GATE_CHECK) + ", '--reverify', " + JSON.stringify(child) + "], { encoding: 'utf8', env: process.env });",
       "process.stdout.write((result.stdout || '') + (result.stderr || ''));",
       "process.exit(result.status === 0 ? 0 : 1);",
       "",
