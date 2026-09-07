@@ -15,7 +15,18 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const GATE_CHECK = join(HERE, "..", "scripts", "gate-check.mjs");
+// `AD_RUNTIME=python node tests/run-tests.mjs` selects the port, matching the convention
+// dispatch-tests.mjs:22-26 established. The suite is held FIXED as the ORACLE and only the
+// implementation varies, so a divergence is a porting defect and never a re-specified test.
+//
+// THIS IS A PROGRESS METER, NOT A GATE, until the port is complete: gate_check.py exits
+// PORT_INCOMPLETE_EXIT (90) past its ported boundary, so most cases fail loudly BY DESIGN.
+// That is the point -- 90 is outside the oracle's exit set {0,1,2,3}, so an unported path is
+// always a visible failure and never a coincidental agreement. The number that passes is the
+// measurement of how far the port has actually got, taken against the oracle's own suite
+// rather than against a differential written alongside the port.
+const PY = process.env.AD_RUNTIME === "python";
+const GATE_CHECK = join(HERE, "..", "scripts", PY ? "gate_check.py" : "gate-check.mjs");
 const filter = process.argv[2] || "";
 const APPROVAL_ROOT = mkdtempSync(join(tmpdir(), "agents-discipline-test-approvals-"));
 
@@ -44,7 +55,11 @@ function run(script, args, opts = {}) {
     const actions = new Set(["--status", "--claim", "--release", "--list-scopes", "--log", "--help", "-h"]);
     const needsApproval = script === GATE_CHECK && !opts.noApprove && !args.some((arg) => actions.has(arg));
     const actualArgs = needsApproval && !args.includes("--approve") ? ["--approve", ...args] : args;
-    const child = execFile(process.execPath, [script, ...actualArgs], {
+    // Same interpreter selection as dispatch-tests.mjs:58-59: decided by the script's OWN
+    // extension, not by the AD_RUNTIME flag, so a case that names gate-check.mjs explicitly
+    // still runs under node even when the suite is pointed at the port.
+    const exe = script.endsWith(".py") ? (process.env.PYTHON || "python3") : process.execPath;
+    const child = execFile(exe, [script, ...actualArgs], {
       cwd: opts.cwd, encoding: "utf8", maxBuffer: 8 * 1024 * 1024,
       env: { ...process.env, AGENTS_DISCIPLINE_APPROVAL_DIR: APPROVAL_ROOT, ...(opts.env || {}) },
     }, (err, stdout, stderr) => {
