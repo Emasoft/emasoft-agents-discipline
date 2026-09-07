@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T12:22:17+0200
+updated: 2026-09-07T16:29:25+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -12,6 +12,39 @@ scope: project
 # Port all nine scripts to Python
 
 ## ⏵ NEXT ACTION (2026-09-07)
+
+**DONE — `abandoned` in the delegation checker, both runtimes (b8bc1c1 code+test, 73b4aa8 doc).**
+The template had defined `abandoned` as terminal-but-unsuccessful for some time; neither checker
+knew the word, so such a row fell into `counts.other`, printed under "unverified rows" as work in
+flight, and closed with `-> ledger INCOMPLETE.`. Now counted under its own name, announced as
+`HANDOFF REQUIRED` naming the row, and closed with `-> ledger TERMINAL` — mirroring the gate half
+(`references/gates.md:130`) rather than inventing a vocabulary.
+
+**The lesson that generalizes past this item: the EXIT CODE was already correct.** `complete`
+requires `rows.every(status === "verified")`, so an abandoned row has always exited 1. Only the
+CLAIM was wrong. That is exactly the defect class no exit-code assertion can see, and it is why
+the new case asserts nothing on the exit code — `want: 1` does not discriminate, so four `expect`
+and three `reject` strings each pin ONE requirement. Two mutations killed disjoint subsets
+(routing → handoff/terminal/not-listed-as-unverified; counting → the count line and the no-`other:`
+check), and neither killed the other's, so no assertion rides on a sibling.
+
+**A second divergence fell out of the same expression, and the PORT was the correct side.**
+`counts[r.status] === undefined` is FALSE for a status cell reading `constructor`/`toString` —
+prototype lookup finds a function — so `counts[...]++` stored NaN and `other` never incremented;
+the row vanished from every printed total. A Python dict inherits no such keys, so `ledger_check.py`
+already counted those rows as `other` while the ORACLE lost them. Fixed the oracle to
+`Object.prototype.hasOwnProperty.call` (the form `scripts/lib/dispatch.mjs:53` already established,
+and safe on the `>=16` engines floor unlike `Object.hasOwn`). **Worth recording as a pattern: the
+oracle is fixed, not sacred. "Any divergence is a porting defect" governs TESTS being re-specified
+to match the port; it does not mean the JS is right when the JS is measurably wrong.**
+
+**Still open on this item, and stated rather than papered over:** nothing requires an abandoned row
+to carry a reason. The template asks; `references/ledger-discipline.md` now asks; no code checks.
+
+**NEXT:** plan item 2 — C4 half 2, descendant reaping in the re-run loop. Smaller than it was
+ranked: `process_tree.py` already exposes `terminate_process_tree()`, `kill_group(-pid, SIGKILL)`,
+`_child_kill()`, `start_new_session=True` and `windows_taskkill_path()`, so the Python half is
+"call the existing helper", not "implement process-group semantics".
 
 **DONE — the surrogate crash, and the fix was NOT where the deferral said to look.**
 `dispatch.py:429`'s exemption from `_js_json_text` reasoned that "every string in `state` is an
