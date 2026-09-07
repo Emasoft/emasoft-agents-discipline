@@ -1055,18 +1055,20 @@ def main(argv):
             # not after the process exits -- a runaway CHECK is cut off mid-stream.
             while True:
                 try:
-                    # read1(), NOT read(). BufferedReader.read(n) blocks until it has n bytes
-                    # or EOF, so a CHECK that prints a little and then hangs leaves that output
-                    # sitting in the buffer -- and when the timeout SIGKILLs the group and the
-                    # handle closes, the blocked read raises and those bytes are DISCARDED,
-                    # never having been appended. MEASURED against the oracle on
-                    # `echo starting; sleep 30` under --timeout 3:
-                    #     oracle  timed out after 3s; ... output=starting
-                    #     port    timed out after 3s; ... output=(no output)
-                    # read1() returns whatever one underlying read yields, which is the
-                    # semantics of node's stream 'data' events that gate-check.mjs:662-671
-                    # relies on: deliver what arrived, do not wait for a full buffer.
-                    chunk = handle.read1(65536)
+                    # read(), not read1(), and that is DELIBERATE after being wrong about it.
+                    # 3c78513 changed this line to read1() alongside the real fix in
+                    # check_supervisor.py, justified by "the timeout path closes the handle, so
+                    # a blocked read() loses its buffer". THE PREMISE IS FALSE:
+                    # terminate_process_tree only SIGNALS -- it never closes child.stdout/stderr
+                    # (no close of either appears in lib/process_tree.py), and capture() closes
+                    # the handle only after its own loop has already exited. So the writer dies,
+                    # the reader gets EOF, and read() returns its partial buffer normally.
+                    # FALSIFIED, not argued: with this line reverted to read() and only the
+                    # supervisor fixed, `echo starting; sleep 30` under --timeout 3 gives
+                    # `output=starting`, byte-identical to the oracle. The read1() here changed
+                    # no observable, so it is gone -- an inert edit inside a bugfix commit is
+                    # how a wrong diagnosis survives review.
+                    chunk = handle.read(65536)
                 except (OSError, ValueError):
                     break
                 if not chunk:

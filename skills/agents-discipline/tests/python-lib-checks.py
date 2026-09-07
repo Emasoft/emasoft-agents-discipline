@@ -40,8 +40,10 @@ import json
 import pathlib
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
+import time
 
 # The suite declares `engines: node >=16` and declared no Python floor at all — while
 # ledger_check.py already needed 3.11 (datetime.fromisoformat did not accept a colon-less
@@ -248,6 +250,46 @@ else:
     report(ja != jb and pa != pb,
            "check_supervisor: the two CHECKs differ, in BOTH runtimes (vacuity control)",
            f"{pa} vs {pb}")
+
+    # THE KILL PATH. Every case above runs a CHECK that TERMINATES ON ITS OWN, so `both()`
+    # reads to EOF and the pumped output arrives no matter how the supervisor buffers. The row
+    # named "propagates exit code and pumps stdout" was GREEN throughout a real bug in which
+    # the supervisor stranded a hung CHECK's output and never forwarded it (fixed in the commit
+    # that adds these rows: `_pump` used BufferedReader.read(65536), which BLOCKS until it has
+    # 65536 bytes or EOF, so a CHECK that prints a little and then hangs left those bytes in the
+    # supervisor until the per-check timeout SIGKILLed it). A test whose NAME claims the property
+    # the bug violated is worse than no test -- it is why nobody looked here.
+    #
+    # So: print, then hang; read for a bounded window; kill; assert what was pumped BEFORE the
+    # kill. This is the only row in the file that observes the supervisor mid-stream.
+    kill_path = []
+    for argv in (["node", os.path.join(LIB, "check-supervisor.mjs"), "/bin/bash", "echo hi; sleep 30"],
+                 [sys.executable, os.path.join(LIB, "check_supervisor.py"), "/bin/bash", "echo hi; sleep 30"]):
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+        try:
+            time.sleep(2.0)                     # long enough for `echo` to have been forwarded
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            # The pipe keeps whatever was written before the writer died; read it after the kill.
+            kill_path.append((proc.stdout.read() if proc.stdout else b"").decode("utf-8", "replace").strip())
+        finally:
+            # Constraint: no process this suite spawns may outlive the case that spawned it.
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            if proc.stdout:
+                proc.stdout.close()
+            proc.wait(timeout=10)
+    js_killed, py_killed = kill_path
+    report(js_killed == py_killed,
+           "check_supervisor: output printed before a mid-stream KILL is pumped — port matches oracle",
+           f"js={js_killed!r} py={py_killed!r}")
+    # Vacuity control: the row above passes trivially if BOTH strand the output (both ""), which
+    # is exactly the pre-fix state. The oracle is the specification, so assert it really pumped.
+    report(js_killed == "hi",
+           "check_supervisor: the ORACLE really pumped before the kill (vacuity control)",
+           f"js={js_killed!r}")
 completed.append("check_supervisor")
 
 # --- windows_taskkill_path: pure string logic, so it is testable on POSIX ------------------
