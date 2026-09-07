@@ -28,8 +28,10 @@ import stat as statmod
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from gates import read_stable_regular_file  # noqa: E402  # type: ignore[import-not-found]
-from jsapi import force_utf8_streams  # noqa: E402  # type: ignore[import-not-found]
+from gates import (  # noqa: E402  # type: ignore[import-not-found]
+    _node_fs_message, read_stable_regular_file)
+from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
+    force_utf8_streams, normalize_argv)
 
 # BEFORE anything can print -- see the function's docstring. MEASURED under
 # `PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C`, a DELEGATION.md whose unit name carries one
@@ -37,6 +39,10 @@ from jsapi import force_utf8_streams  # noqa: E402  # type: ignore[import-not-fo
 # the oracle printed the row. A ledger checker that dies on the ledger it was handed is the
 # loudest possible divergence.
 force_utf8_streams()
+
+# AND BEFORE anything can READ an argument -- see the function's docstring. This script takes the
+# ledger PATH from argv, so a bad byte there changes which file the two runtimes even look for.
+normalize_argv()
 
 # why: the same runner vocabulary as a word set — a regex alternation of shell names trips the
 # publish gate's injection scanner, and a dynamically built pattern trips its ReDoS rule.
@@ -88,7 +94,18 @@ try:
     # to run on a ledger it may not have written.
     text = read_stable_regular_file(path, label="ledger")
 except OSError as err:
-    fail(2, f"agents-discipline: cannot read {path}: {err}")
+    # ledger-check.mjs:41 interpolates `err.message`, which is node's fs shape and NOT Python's
+    # str(). MEASURED on a missing ledger, the same divergence 9071a84 fixed in gate-lint:
+    #     oracle  ... : ENOENT: no such file or directory, open '<path>'
+    #     port    ... : [Errno 2] No such file or directory: '<path>'
+    # THE SECOND SITE OF ONE DEFECT, and the reason it survived the commit that fixed the first
+    # is that no sweep followed it -- the same way the EXPECT-warning ensure_ascii defect
+    # survived the lease-write commit that fixed its twin. Found by argv-diff.sh on its first
+    # run, driving a second CLI purely because "every CLI" had been claimed at three of four
+    # before. The `errno is not None` guard preserves the helper's OWN raised errors (kind check,
+    # size cap), which carry no errno and whose text is already the message the oracle prints.
+    fail(2, "agents-discipline: cannot read " + path + ": " +
+            (_node_fs_message(err, "open") if err.errno is not None else str(err)))
 
 lines = text.split("\n")
 

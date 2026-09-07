@@ -14,7 +14,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from dispatch import (  # noqa: E402  # type: ignore[import-not-found]
     DispatchError, get_dispatch_wave, update_dispatch,
 )
-from jsapi import force_utf8_streams, js_trim  # noqa: E402  # type: ignore[import-not-found]
+from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
+    force_utf8_streams, js_trim, normalize_argv)
 
 # BEFORE anything can print -- see the function's docstring.
 #
@@ -29,6 +30,13 @@ from jsapi import force_utf8_streams, js_trim  # noqa: E402  # type: ignore[impo
 # version of this comment asserted a reason-and-leaf-id vector that I had not measured, which is
 # the exact habit the rest of this port's comments exist to correct.
 force_utf8_streams()
+
+# The vector the comment above says it could not construct EXISTS, and it is on this CLI. An
+# abandon reason carrying one bad argv byte: the oracle exits 0 and writes U+FFFD, the port died
+# with UnicodeEncodeError inside write_atomic -- a crash MID-TRANSACTION on state both runtimes
+# read. The cause is upstream of every write: CPython and node decode argv differently. Fixed at
+# the boundary, so no destination downstream can receive a surrogate from an argument.
+normalize_argv()
 
 COMMANDS = ("open", "start", "seal", "return", "abandon", "status")
 OPTIONS = ("--root", "--scope", "--wave", "--leaf", "--handle", "--reason")

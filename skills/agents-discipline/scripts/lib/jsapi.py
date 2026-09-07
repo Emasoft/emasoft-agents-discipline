@@ -689,3 +689,46 @@ def force_utf8_streams():
             # BYTES: a str replacement is re-encoded through the same codec and hits the same
             # surrogate rejection, which is what made the obvious spelling of this raise.
             reconfigure(encoding="utf-8", errors=_JS_SURROGATE_ERRORS)
+
+
+def normalize_argv():
+    """Decode sys.argv the way node decodes process.argv, in place.
+
+    The two runtimes disagree about an argv byte that is not valid UTF-8, and they disagree
+    BEFORE the program sees its own arguments, so every downstream comparison inherits it.
+    CPython surrogateescape-decodes argv (one lone surrogate PER BYTE); node runs the WHATWG
+    UTF-8 decoder (U+FFFD per MAXIMAL SUBPART). MEASURED on the same argv `a \\xe2\\x82 b \\xff c`,
+    written as bytes because typing the escape renders it back as the character:
+
+        node    61 fffd 62 fffd 63            (two replacements)
+        CPython 61 dce2 dc82 62 dcff 63       (three surrogates)
+
+    So they differ in the COUNT, not just the spelling: the truncated three-byte sequence is
+    ONE error to node and TWO to surrogateescape. That rules out the obvious fix of mapping
+    each surrogate to U+FFFD -- it would emit `a<FFFD><FFFD>b<FFFD>c` where the oracle emits
+    `a<FFFD>b<FFFD>c`. Re-encoding through surrogateescape and decoding with `replace` runs
+    CPython's own UTF-8 decoder over the original bytes, and its maximal-subpart rule is the
+    same one node uses. VERIFIED to reproduce node's code points exactly for the argv above.
+
+    THE TWO DECODERS AGREE ON MORE THAN THE ONE CASE ABOVE, checked because a maximal-subpart
+    disagreement would make this fix wrong in a way every differential row still passes. node vs
+    this expression over the shapes where UTF-8 decoders classically differ -- overlong `C0 80`,
+    a surrogate encoded in UTF-8 `ED A0 80`, a 5-byte sequence, a lead byte above F4, `E0 80 A0`,
+    and four truncations -- agree on the code points AND on the COUNT in all ten.
+
+    THIS IS WHY IT MUST HAPPEN AT THE ARGV BOUNDARY rather than at each write. The value flows
+    into files, digests and stdout, and each destination has a DIFFERENT correct handling of a
+    lone surrogate -- _js_json_text escapes it, write_atomic refuses it, the stream handler
+    substitutes it. Normalizing at the source means no destination ever receives one from argv,
+    which is precisely the oracle's situation. Fixing it per-destination instead would have to
+    be gotten right once per destination, and the one measured miss was already a crash:
+    `dispatch-check abandon --reason <bad byte>` exited 0 in the oracle and died in the port
+    with UnicodeEncodeError inside write_atomic, mid-transaction, on shared state.
+
+    NOT a general surrogate scrub. The filesystem encoding is surrogateescape too, so a
+    surrogate can still arrive from a directory listing; that path keeps its own handling.
+    """
+    sys.argv[:] = [
+        argument.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+        for argument in sys.argv
+    ]

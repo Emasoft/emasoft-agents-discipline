@@ -117,7 +117,8 @@ from gates import (  # noqa: E402  # type: ignore[import-not-found]
     _js_join, _js_json_text, _LONE_SURROGATE_RE, _path_is_inside,
 )
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
-    force_utf8_streams, js_json_object, js_length, js_slice, js_to_number, js_trim)
+    force_utf8_streams, js_json_object, js_length, js_slice, js_to_number, js_trim,
+    normalize_argv)
 from dispatch import _iso_now, dispatch_status  # noqa: E402  # type: ignore[import-not-found]
 from process_tree import terminate_process_tree  # noqa: E402  # type: ignore[import-not-found]
 
@@ -126,6 +127,11 @@ from process_tree import terminate_process_tree  # noqa: E402  # type: ignore[im
 # prints. MEASURED under `PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C` -- see the function's
 # docstring for the transcript, and for why a bare `LC_ALL=C` measures nothing.
 force_utf8_streams()
+
+# AND BEFORE anything can READ an argument. CPython surrogateescape-decodes argv where node runs
+# the WHATWG UTF-8 decoder, so the two runtimes hold different STRINGS for the same bytes before
+# either program starts. See the function's docstring for the measured transcript.
+normalize_argv()
 
 # gate-check.mjs:72 -- the sibling supervisor process that keeps a stable process-group
 # leader alive until CHECK's stdio closes. lib/regex_worker.py is the disposable one-shot

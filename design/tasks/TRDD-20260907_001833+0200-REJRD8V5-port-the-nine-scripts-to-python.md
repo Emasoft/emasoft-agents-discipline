@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T07:12:21+0200
+updated: 2026-09-07T09:10:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -11,43 +11,50 @@ scope: project
 
 # Port all nine scripts to Python
 
-## ⏵ NEXT ACTION (2026-09-07, head `9071a84`)
+## ⏵ NEXT ACTION (2026-09-07)
 
-**Read `dispatch.py:429`, then fix `gates.py:1582` `write_atomic` raising on a lone surrogate
-reaching `dispatch.json`.** Reproduce with
-`dispatch_check.py abandon --root <d> --scope s --wave w1 --reason "$(printf 'bad\xffreason')"`
-after an `open`: the oracle prints `ABANDONED w1 …: bad<U+FFFD>reason`, the port dies with
-`UnicodeEncodeError … '\udcff'`. `dispatch.py:429` documents a MEASURED exemption from
-`_js_json_text` at that write — correct for its stated reason, wrong for surrogates — so read it
-before editing rather than applying the reflex fix.
+**DONE — the surrogate crash, and the fix was NOT where the deferral said to look.**
+`dispatch.py:429`'s exemption from `_js_json_text` reasoned that "every string in `state` is an
+id or a handle, and both gates are charset-closed". FALSE: an abandon `reason` is free text, and
+`_valid_reason` rejects only control characters and length. But routing it through
+`_js_json_text` would have been the WRONG fix too — it escapes the surrogate to `\udcff`, six
+ASCII characters, where the oracle writes the U+FFFD CHARACTER. Both spellings differ from node.
 
-**Why this one and not more test work.** It is the last known defect that is IN THE PORT rather
-than in the harness, and it is a crash MID-WRITE to state both runtimes read.
+The real divergence is upstream of every write: **CPython surrogateescape-decodes `sys.argv`
+where node runs the WHATWG UTF-8 decoder**, so the two runtimes hold different STRINGS before
+either program starts. Fixed at that boundary with `jsapi.normalize_argv()`, called by all four
+CLIs. Note the shape that rules out the obvious version: node replaces per MAXIMAL SUBPART and
+surrogateescape per BYTE, so a truncated 3-byte sequence is ONE replacement to node and TWO to a
+port that maps each surrogate to U+FFFD. Re-encoding through surrogateescape and decoding with
+`replace` reuses CPython's own decoder, whose maximal-subpart rule matches. Measured identical.
 
-COUNTED FROM `git log`, not from a summary — the first version of this paragraph said "the first
-four commits fixed four pre-existing defects" and both halves were wrong. Over the encoding
-sweep, `87640c8`..`9071a84`:
+Covered by the new **`tests/argv-diff.sh`** (4 rows, each proven to redden). Its first run also
+went red on **`ledger_check.py:96`** — the same errno-message defect `9071a84` fixed in
+gate-lint, at a second call site nobody swept for. Fixed in the same commit.
 
-| pre-existing PORT defects fixed | commits fixing the PRECEDING commit's own defect |
-|---|---|
-| `87640c8` lease `ensure_ascii` | `f993399` (fixture from `873a738`) |
-| `13c2c4e` EXPECT warning | `6637b65` (stderr `strict`, from `64329a5`) |
-| `64329a5` four CLIs crash on an ASCII stdout | `2c98ecc` (one-U+FFFD-per-run, from `d406b47`) |
-| `d406b47` two `terminal_safe` crashes | `bd34d68` (guards from `2c98ecc`) |
-| `9071a84` errno message shape | `114e8d5` (guards from `bd34d68`) |
+**Stop editing `encoding-diff.sh`.** It is green with all seven rows proven to redden under a
+mutation — which is the whole reason to stop, and it is a property of the artifact that stays
+checkable. A commit-by-commit tally of "pre-existing vs self-inflicted" stood here and has been
+deleted: it classified each commit by its HEADLINE, so a commit that did both (`d406b47`,
+`9071a84`) counted once and the self-inflicted column was understated by construction. Two
+claims survive the recount and carry the same decision without a denominator: **every
+pre-existing port defect found in the sweep was fixed**, and **every regression the sweep itself
+introduced was caught before it left the session**. `git log` holds the per-commit detail; a
+table in a STATE block would only be re-cited with its qualifier stripped.
 
-**Five, not four, and they are NOT all early** — `64329a5`, `d406b47` and `9071a84` are spread
-through. So the honest statement is narrower than the one first committed: the RATE of
-pre-existing finds did not collapse, but the last stretch is dominated by fixing the previous
-commit's own work, and three of those live in test files. `encoding-diff.sh` is green with all
-seven rows proven to redden under a mutation. **Stop editing the test file.**
+Second item, RESOLVED and it found another defect: `argv-diff.sh` now covers the errno message,
+as a side effect of driving two path-taking CLIs. Its first run went red on `ledger_check.py:96`
+— the SAME `err.message`-vs-`str()` divergence `9071a84` fixed in gate-lint, at a second call
+site nobody swept for. Fixed in the same commit.
 
-Second item, lower: the errno fix in `9071a84` has NO differential row. `gate-args-diff.sh`
-drives gate-check only; `lint-tests.mjs` passes both before and after the fix, which is the
-evidence it does not cover the message. A row needs a new runner — not `encoding-diff.sh`, which
-has already grown into two subjects sharing only the word "encoding" (rows 1-2 are the
-`ensure_ascii` family at the default locale; rows 3-7 are the `force_utf8_streams` family under
-a hostile one). Split it if it grows again.
+**Next: sweep the remaining `error.message` interpolations.** `9071a84` and the ledger fix are
+two of a class. The oracle interpolates `error.message` at ~16 sites (`gate-check.mjs:126, 211,
+234, 241, 727, 748, 764, 855`, `dispatch-check.mjs:138`, `check-supervisor.mjs:24`); the port
+spells most of them `str(exc)` (`gate_check.py:448, 472, 478, 506, 523, 884, 941, 1320`,
+`dispatch_check.py:224`). NOT all are fs errors — the worker, spawn and regex sites are V8/CPython
+text where the guard correctly degrades to `str()` — so each site needs its errno checked rather
+than a blanket rewrite. `gate_check.py:929` already carries a note about exactly this asymmetry;
+read it first.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
 

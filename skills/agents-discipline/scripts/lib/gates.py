@@ -1254,6 +1254,12 @@ def _js_join(*parts):
     return normalized
 
 
+# CALLERS OUTSIDE THIS MODULE: gate_lint.py:249 and ledger_check.py:96. The leading underscore
+# says "implementation detail of gates.py" and that is no longer true -- two other modules pin
+# this function's exact OUTPUT, which is itself pinned to node's. So its signature and its
+# measured errno scope are a contract now, not a private choice, and a change to either has a
+# blast radius of three files. Left underscored rather than renamed because a rename is churn
+# that would not make the coupling any smaller; this line is the whole fix.
 def _node_fs_message(error, syscall):
     """Node's `error.message` for a failed fs call, which is NOT Python's `str(error)`.
 

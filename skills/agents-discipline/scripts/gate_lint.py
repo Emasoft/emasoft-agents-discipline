@@ -33,7 +33,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
     _node_fs_message, parse_gates, read_stable_regular_file)
-from jsapi import force_utf8_streams  # noqa: E402  # type: ignore[import-not-found]
+from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
+    force_utf8_streams, normalize_argv)
 
 # BEFORE anything can print -- see the function's docstring. On this script the failure is not a
 # degraded message but a CRASH: MEASURED under `PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C`, a
@@ -41,6 +42,10 @@ from jsapi import force_utf8_streams  # noqa: E402  # type: ignore[import-not-fo
 # oracle printed the warning. stderr defaults to backslashreplace and merely degrades; stdout,
 # which this script writes to, has no such fallback.
 force_utf8_streams()
+
+# AND BEFORE anything can READ an argument -- see the function's docstring. This script takes the
+# ledger PATH from argv, so a bad byte there changes which file the two runtimes even look for.
+normalize_argv()
 
 # The usage line is the ONE string that legitimately differs from the JS original: a
 # program names itself in its own usage line. Every other output string below is a
@@ -218,19 +223,28 @@ for file in files:
         # and this call site never used it; gate-lint.mjs:150 interpolates `error.message`,
         # which is precisely what that helper reproduces. Reusing it also inherits its measured
         # scope note: EACCES/ENOENT/ENOTDIR are verified against node, anything rarer is not.
-        # "open" IS THE SYSCALL FOR EVERY SHAPE THAT REACHES HERE, and node genuinely varies it,
-        # so this is a scoped claim rather than a constant nobody checked. MEASURED:
-        #     ENOENT  node: `ENOENT: no such file or directory, open '<path>'`   port: same
-        #     EACCES  node: `EACCES: permission denied, open '<path>'`           port: same
-        #     EISDIR  node: `EISDIR: illegal operation on a directory, read`  <- different
-        #                   syscall AND no path -- but unreachable at this site: a directory is
-        #                   refused by read_stable_regular_file's own kind check first, in BOTH
-        #                   runtimes, with the "must be one unchanged regular single-link file"
-        #                   message. Verified by running gate-lint on /tmp: identical, and
-        #                   neither side reached readFileSync.
-        # A failure at the READ stage rather than the open would name `read`; nothing here can
-        # force one, so treat that as UNCONFIRMED in the same sense _node_fs_message's own
-        # docstring treats errnos outside its measured three.
+        # "open" IS THE SYSCALL, and node genuinely varies it, so the constant needs an argument
+        # rather than a sample. THE ARGUMENT IS STRUCTURAL, read off gates.mjs:122: the open is
+        # the FIRST syscall the helper makes -- no stat precedes it -- and everything after it
+        # runs on the descriptor and raises the helper's OWN Error, which carries no errno and
+        # so takes the `else` branch below. So an errno reaching this line came from that open.
+        # The three shapes that look like counterexamples are all closed by the flags it opens
+        # with, in BOTH runtimes:
+        #     directory   O_RDONLY on a directory SUCCEEDS; the kind check then rejects the fd
+        #                 ("must be one unchanged regular single-link file"). Node's own
+        #                 `EISDIR: illegal operation on a directory, read` needs a bare
+        #                 readFileSync, which this path never performs. Confirmed on /tmp:
+        #                 identical message from both runtimes.
+        #     FIFO        O_NONBLOCK, so the open returns instead of blocking; same rejection.
+        #     symlink     O_NOFOLLOW gives ELOOP, caught explicitly and turned into that same
+        #                 helper Error before any errno can escape.
+        # MEASURED for the two that do escape: ENOENT `no such file or directory, open '<path>'`
+        # and EACCES `permission denied, open '<path>'`, both identical to node.
+        #
+        # THE ONE RESIDUAL IS A RACE, and it is worth naming rather than calling this total: the
+        # post-open fstat/stat/realpath CAN raise an errno if a concurrent mutator unlinks the
+        # file mid-read, and node would name THAT syscall. No vector in this suite can produce
+        # it, and a single-process caller cannot. Scoped, not proven absent.
         message = (_node_fs_message(error, "open")
                    if error.errno is not None else str(error))
         print("gate-lint: cannot read " + terminal_safe(file, 512) + ": " + terminal_safe(message, 1024),
