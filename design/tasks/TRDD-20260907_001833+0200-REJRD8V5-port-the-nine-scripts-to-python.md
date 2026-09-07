@@ -951,6 +951,56 @@ ordered, not independent.
 
 `re.M` is not fixed by `re.A`. `CREATED` needs its own decision.
 
+**⚠ TWO OF THE FOUR CONSEQUENCES HAD NO PROBE AT ALL WHEN FIRST WRITTEN.** The table above was
+presented as "measured first-hand", but tracing each claim to the probe that supposedly supported
+it: `ſleep` had a structurally faithful one; **`12 paſſed` had none** (its nearest probe used a
+different alternation branch AND a different character); **`## Ruleſ` had none whatsoever**. Three
+of four were consequences of *reasoning about* a measurement of something else — which is the
+stand-in-for-the-thing failure, one level up from the synthetic-pattern one it sits next to.
+
+**NOW MEASURED, real patterns, with the positive control that was missing.** The `/i` rows
+originally had no control establishing that a pattern *can* match — so a typo inside one would
+print `reject` and read as a fold difference. The control is the same pattern against its
+ASCII-cased equivalent:
+
+| input | oracle | port `re.I` | port `re.I\|re.A` | |
+|---|---|---|---|---|
+| `12 paſſed` | REJECT | **match** | REJECT ✓ | claim 2 |
+| `12 PASSED` | match | match | match | control |
+| `12 passed` | match | match | match | control |
+| `12 ok` | match | match | match | control (other branch) |
+| `## Ruleſ of thiſ ledger` | REJECT | **match** | REJECT ✓ | claim 4 |
+| `## Rules of this ledger` | match | match | match | control |
+| `## Notes` | REJECT | REJECT | REJECT | control (must reject) |
+
+Both hold, `re.A` restores oracle behaviour at both, and no control moves.
+
+**A FIFTH INSTANCE, INSIDE CLAIM 2'S OWN PATTERN, PREVIOUSLY UNRECORDED — the `[a-z]` CHARACTER
+CLASS diverges, not just the literal words.** JS `[a-z]` under non-`u` `/i` matches only `[A-Za-z]`;
+Python's `re.I` folds exotics into it:
+
+| code point | node `[a-z]+/i` | py `re.I` | py `+re.A` |
+|---|---|---|---|
+| U+017F `ſ` | rejects | **MATCHES** | rejects ✓ |
+| U+0131 `ı` | rejects | **MATCHES** | rejects ✓ |
+| U+0130 `İ` | rejects | **MATCHES** | rejects ✓ |
+| U+004B `K` (ASCII) | MATCHES | MATCHES | MATCHES — control |
+
+The ASCII `K` row was an accident — I meant to type U+212A KELVIN and typed plain `K` — but it
+lands as the positive control the set needed, so it stays. **U+212A is therefore NOT covered by
+this run**; it was only ever measured against a synthetic pattern. Re-measure it against
+`[a-z]` before claiming the class is fully characterised.
+
+**DIRECTIONS, which the first write-up gave for two claims and dropped for the two that need them
+most:** claim 4 — the port enters rules-skip mode the oracle does not, so it EXCLUDES evidence the
+oracle includes ⇒ port **STRICTER**. Claim 5 — no `Created:` match ⇒ `created_ms` is NaN ⇒ the
+`Number.isFinite` guard at oracle `:321` skips the stale-artifact branch ⇒ the port reports **no
+stale artifacts** ⇒ port fails **OPEN**.
+
+**TRIPWIRE, same family, not yet a work item:** `.` is the third member of the line-terminator
+class after `/m` and `$`/`\Z` — JS `.` excludes `\n \r    `, Python's excludes only `\n`, and
+`re.A` does NOT affect it. No bare `.` among the nine sites today; re-open if one appears.
+
 **RE-MEASURED WITH THE REAL PATTERNS, EXTRACTED FROM SOURCE — the table above used SYNTHETIC
 probes I typed, which is a stand-in for the thing.** Both patterns pulled out of their files (port
 via AST, oracle via its own source text) so no retyped copy can drift from what ships:
