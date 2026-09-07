@@ -891,8 +891,14 @@ def main(argv):
             # emits `,`/`:`, and it leaves a lone surrogate raw so the .encode below raises where
             # the oracle writes the file. `owner` is a token today, but a helper is chosen for
             # what the call site GUARANTEES, not for what today's inputs happen to be.
-            os.write(fd, _js_json_text({"owner": owner, "pid": os.getpid(),
-                                        "at": int(time.time() * 1000)}).encode("utf-8"))
+            # The try this sits in has only a `finally`, no `except`, so this error PROPAGATES to
+            # the "could not record approval" catch, which hardcodes `open` -- node says `write`.
+            # Missed on the first pass because that pass read the NEAREST `except` within thirty
+            # lines and took it for the handler; the nearest one here belongs to the close in the
+            # finally. Proximity is not the call graph.
+            node_call("write", os.write, fd,
+                      _js_json_text({"owner": owner, "pid": os.getpid(),
+                                     "at": int(time.time() * 1000)}).encode("utf-8"))
             value = {
                 "schema": 1, "file": js_resolve(file), "gate": gate["id"],
                 "signature": approval_oracle_signature(file, gate),

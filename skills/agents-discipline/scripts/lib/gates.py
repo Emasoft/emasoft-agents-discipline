@@ -1863,6 +1863,12 @@ def write_atomic(file, text, root=None):
         # fsyncSync raw), so each carries its own token out; unwrapped, both reached a caller
         # guessing `open`. The os.close below stays bare deliberately -- mjs:710 does not swallow
         # it either, and that polarity was checked per-site.
+        # `write` MEASURED on writeFileSync -- the API the oracle actually calls -- not on the
+        # writeSync sibling: EBADF gives "EBADF: bad file descriptor, write" from both, and
+        # fsyncSync gives `fsync`. Measuring the neighbouring API and generalizing is the realpath
+        # mistake, and node_call's own docstring demands the check before wrapping.
+        # THE TOKEN ASSUMES _write_all ONLY WRITES. If that helper ever grows an lseek or fstat,
+        # this goes silently wrong -- the same single-syscall precondition node_call documents.
         node_call("write", _write_all, fd, str(text).encode("utf-8"))
         node_call("fsync", os.fsync, fd)
         os.close(fd)
