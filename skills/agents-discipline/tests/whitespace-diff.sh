@@ -176,10 +176,25 @@ _case() {
 #
 # ONE CONTROL PER WRITER, and that is the whole reason this is a function rather than the single
 # inline block it started as. A control vouches for the writer it runs and for no other: if
-# `_write_ledger_hdr` emitted a malformed ledger -- a dropped separator row, a header one column
-# wide -- its six cases would agree identically-broken across both runtimes and every one would
-# report OK. That is a vacuous pass, and from the output it is indistinguishable from real
-# coverage. The cell control cannot see it, because it never runs that writer.
+# `_write_ledger_hdr` emitted a ledger that does not parse, its six cases would agree
+# identically-broken across both runtimes and every one would report OK -- a vacuous pass, and
+# from the output indistinguishable from real coverage. The cell control cannot see that, because
+# it never runs that writer.
+#
+# WHAT IT DOES **NOT** CATCH, measured rather than assumed, because the first version of this
+# comment named an example that turns out to be wrong. Deleting the separator row from
+# `_write_ledger_hdr` was offered as the motivating defect; run it and the oracle still exits 0
+# with `verified: 1`. The parser SKIPS the separator row (`cells.every(c => c === "" ||
+# /^:?-+:?$/.test(c))`), so its absence changes no verdict and no control can detect it. The two
+# writers also emit BYTE-IDENTICAL files at `ws=''` -- that is the healthy state, not an
+# invariant, so a defect in the writer's static text still diverges them and still fires here.
+#
+# The honest scope: this catches a `_write_ledger_hdr` defect that changes the PARSE (a lost
+# header row, a wrong column count, a mangled status cell). It CANNOT catch a defect in where the
+# writer PLACES `$pad` -- the one line that makes it a different writer from `_write_ledger` --
+# because the control is by construction the only case that never supplies a pad. A pad written
+# onto the separator row instead of the header would pass here and send all six header cases at
+# the wrong surface, silently.
 _control() {
   local writer="$1" label="$2" led o p
   led="$WORK/control-$writer.md"
@@ -195,7 +210,11 @@ _control() {
   # AND the control must actually have reached the status parser. Both runtimes agreeing on exit 1
   # because the file was unreadable would satisfy the check above while proving nothing, so the
   # agreed verdict is asserted to be the one a recognized `verified` produces.
-  if ! printf '%s' "$o" | grep -q 'verified: *1'; then
+  # `verified: +1([^0-9]|$)`, not `verified: *1`: the loose form also matches `verified: 11` and
+  # `verified: 1234`, because nothing terminates the number. A one-row fixture cannot produce
+  # those today -- but a control's entire job is to still hold when the fixture changes under it,
+  # and an assertion that widens silently as rows are added is the one that must not.
+  if ! printf '%s' "$o" | grep -qE 'verified: +1([^0-9]|$)'; then
     printf 'DIVERGE  %-38s control never reached the status counter\n' "$label"
     printf '    oracle: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
     exit 1
