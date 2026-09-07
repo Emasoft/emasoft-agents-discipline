@@ -268,6 +268,13 @@ def node_call(syscall, call, *args, **kwargs):
         #     unwrapped  write made no progress on fd 7
         #     wrapped    [Errno None] None: None -> None: [Errno None] None: None -> None, write
         # The doubling this module documents elsewhere, with the original text gone entirely.
+        # THE TEST IS SHAPE, THE ARGUMENT IS PROVENANCE, and they coincide only because every
+        # OSError this module authors is SINGLE-ARG -- `OSError(f"...")` leaves errno None. An
+        # `OSError(errno.EIO, "authored")` would be authored AND carry an errno, and would be
+        # reshaped; that is correct (a caller cannot tell it from a syscall's) but it is not what
+        # "authored" alone implies, so the coincidence is worth naming rather than relying on.
+        # `is None`, NOT `not error.errno`: errno 0 is falsy but PRESENT, and a truthiness test
+        # would send it down the verbatim path on a premise about absence.
         if error.errno is None:
             raise
         raise _node_message_error(error, syscall) from error

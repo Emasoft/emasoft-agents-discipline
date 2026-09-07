@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T12:16:19+0200
+updated: 2026-09-07T12:22:17+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -684,13 +684,21 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
 
   **SEVERITY, CORRECTED — "data loss" and "strictly worse than the divergence I fixed" was an
   unqualified REACHABILITY claim, the kind I got wrong two commits ago.** The payload is ~60-80
-  bytes to a regular file on a blocking fd, where POSIX writes all or fails: at that size
-  `RLIMIT_FSIZE`/`ENOSPC` produce a FAILED write, which the raw `os.write` would have raised, not
-  a partial one. Honest grade: **LATENT, no demonstrated trigger at this payload size** — the same
-  "unreachable by fixture, fixed because the helper exists" category as the lstat trio. The fix
-  stands on the ladder, not on the severity. **This is the overclaim that would have survived:**
-  every earlier one was caught by a reviewer measuring something, and this one cannot be measured
-  cheaply, so it would have been inherited as fact.
+  bytes to a regular file on a blocking fd, where **Linux and macOS** write all or fail — *not*
+  "POSIX", which PERMITS a partial write on a regular file; the guarantee is implementation
+  behaviour, and the qualifier matters in a sentence whose whole point was to stop overstating.
+  On **NFS a short write is possible at any size**, so "local filesystem" is load-bearing too.
+  And the EINTR half of the first draft was simply WRONG: since **PEP 475** `os.write` retries on
+  `EINTR` itself, so a signal cannot surface as a short write to Python at all — which makes the
+  conclusion STRONGER than stated, not weaker. Honest grade: **LATENT, no demonstrated trigger at
+  this payload size on a local filesystem**, the same category as the lstat trio.
+
+  **The fix's real justification is DUPLICATION, not diff size.** An earlier draft said "the
+  smaller diff", which is backwards: `write_all` cost a rename across four files (and broke the
+  suite), where a local `while` loop would have been ~4 lines in one. The ladder rung that
+  actually applies is *reuse what the codebase already has* — a second hand-rolled write loop is a
+  second place to get the zero-progress guard wrong, and three call sites already share this one.
+  "Smaller diff" was reached for because it SOUNDS like the ponytail rule.
 
   **A PRIOR REVIEW ALREADY FOUND IT AND IT WAS DEFERRED** — `reports/port-review/20260907_053738…`
   lists it as "F3 — one-line swap to `write_all` when convenient". Filed, correctly triaged as
@@ -772,9 +780,27 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   were never entered — and the `.git` exclusion was redundant because glob had already skipped it.
   (2) `Path.rglob` fixed that but ran from the SKILL directory, while the sentence said
   "repo-wide": from the real root there are **2791** files, not 121. (3) Correct now, and the
-  finding is unchanged — repo-wide the other NUL-bearing files are all `.venv` binaries,
-  `.mypy_cache`/`.ruff_cache` blobs, `.DS_Store`s, and one gitignored
-  `scripts_dev/gate_check.py.corrupt-backup-…`; **no other SOURCE file carries one.**
+  finding needed one more correction — I classified the 22 KB output BY EYE and missed a file.
+  Classified exhaustively instead (247 `.venv`, 21 type/lint cache, 4 `.DS_Store`, 1 `_dev`
+  artifact), **TWO non-cache files carry a NUL, not one**: the oracle `ledger-check.mjs` and
+  `reports/port-review/20260906_224445+0200-dispatch-review.md`. **So grep silently skips that
+  REPORT too** — and reports are exactly what a later session greps to find what was already
+  known. No PORT SOURCE file carries one.
+
+  **The eyeball pass is the finding.** A 22 KB listing was skimmed and its conclusion published as
+  exhaustive; the missed file is in the one directory whose whole purpose is to be searched later.
+  The fix was one filter — exclude the cache/venv categories INSIDE the scan so the remainder is
+  short enough to read in full. That is the difference between seeing the answer and seeing the
+  top of it, and it is the "counted one way, displayed another" failure for the third time.
+
+- **WHAT THE REVIEW LOOP ACTUALLY DOES, corrected because the flattering version was written
+  here:** an earlier draft said "every earlier overclaim was caught by a reviewer MEASURING
+  something." False. Reviewers caught them by REASONING cheaply — noticing `os.path.exists`
+  swallows EACCES, that a nested `def` breaks last-seen attribution, that an output ended in
+  `...`. **The measurement came afterwards, from me, in response.** The loop is: a reviewer names
+  a suspicion for almost nothing, the author measures it. Recording the flattering version would
+  teach the next session to expect reviewers to arrive with measurements, and to discount the
+  ones that arrive with only a suspicion — which are the ones that have found the most here.
 
   **A COUNT IS MEANINGLESS WITHOUT ITS ROOT, exactly as a line number is meaningless without its
   SHA** — the same lesson this document already learned in a different unit, arrived at again

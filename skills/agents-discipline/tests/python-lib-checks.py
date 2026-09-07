@@ -36,6 +36,7 @@ import sys
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 import atexit
+import errno
 import json
 import pathlib
 import re
@@ -1009,7 +1010,25 @@ try:
 except OSError as _error:
     _errno_text = str(_error)
 report(_errno_text.startswith("EBADF: ") and _errno_text.endswith(", fstat"),
-       "node_call still applies node's shape when errno IS set (control)", _errno_text)
+       "node_call still applies node's shape when errno IS set (smoke)", _errno_text)
+
+
+# THE REAL CONTROL FOR THE GUARD, and the row above is NOT one: os.fstat never raises an
+# errno-less error, so it passes with the guard, without it, and with it inverted -- it proves
+# node_call still works, not that the guard is correctly scoped. This row fails if the guard is
+# widened to `if not error.errno` or to any provenance test, because THIS error is authored AND
+# carries an errno, so it must still be reshaped.
+def _authored_with_errno(*_a, **_k):
+    raise OSError(errno.EACCES, "authored, but carrying an errno")
+
+
+try:
+    _g.node_call("lstat", _authored_with_errno)
+    _both_text = "NO ERROR"
+except OSError as _error:
+    _both_text = str(_error)
+report(_both_text.startswith("EACCES: ") and _both_text.endswith(", lstat"),
+       "node_call reshapes an authored error that DOES carry an errno (control)", _both_text)
 
 # returns emptyState() on ENOENT, so a port that re-raised the raw error would hand back an
 # empty wave set on exactly the interleaving the oracle refuses.
