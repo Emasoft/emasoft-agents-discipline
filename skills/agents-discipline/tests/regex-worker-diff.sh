@@ -107,6 +107,23 @@ row 'i flag'                         'OK'          'i' 'ok'
 row 'unmatched paren is an error'    'a('          ''  'a'
 row 'octal-looking escape'           '\101'        ''  'A'
 row 'unicode property escape'        '\p{L}'       'u' 'a'
+# --- misfire guards for the $/named-group/empty-class translation (TRDD) -----------------
+# Each of these agrees WITHOUT translation today; the fix must not turn a passing row into a
+# divergent one. `$` inside a class is a literal dollar, never the end-of-input anchor.
+row 'dollar inside a class is literal' '[$]'         ''  '$'
+# An escaped dollar is already literal; the `$`->`\Z` rewrite must skip the escaped form.
+row 'escaped dollar stays literal'     'ok\$'        ''  'ok$'
+# Negative lookbehind `(?<!` must not be mistaken for the named-group prefix `(?<name>`.
+row 'negative lookbehind, not a group' '(?<!x)\d'    ''  '5'
+# An empty class mid-pattern must not swallow the literal text that follows the closing `]`.
+row 'empty class then literal text'    '[]a]'        ''  'xa]'
+# Negated-empty class `[^]` is JS idiom for "any char including newline".
+row 'negated empty class is any char'  '[^]'         ''  '
+'
+# Two named groups in one pattern -- the translator must not stop after the first.
+row 'two JS named groups'              '(?<year>\d{4})-(?<month>\d{2})' '' '2026-09'
+# An escaped `]` inside a class must not close the class early.
+row 'escaped bracket inside a class'   '[a\]z]'      ''  ']'
 
 echo
 # NON-VACUITY: a corpus that silently shrank (an editing accident, a `row` call lost to a bad
@@ -120,7 +137,7 @@ echo
 # which one is right then depends on the reader noticing which fired. Adding rows is the normal
 # edit to this corpus; a floor cannot fire on one.
 #
-# The floor is set to the count the OTHER guards actually protect: 7 divergent rows (set pin) +
+# The floor is set to the count the OTHER guards actually protect: 1 divergent row (set pin) +
 # the named trap row. Deleting a non-load-bearing agreeing row is not worth a false alarm on
 # every addition.
 if [ "$rows" -lt 8 ]; then
@@ -149,13 +166,15 @@ echo "$rows rows, $differed divergent"
 #
 # Entries are `<source><flags-in-angle-brackets>`, i.e. the row's INPUTS. Renaming a row's
 # prose label does not touch this list; changing what it TESTS does.
-EXPECTED_DIVERGENT_SET='(?<y>\d{4})<>
-(?P<y>\d+)<>
-\Aok<>
-\p{L}<u>
-a[]b<>
-ok$<>
-ok\Z<>'
+#
+# SHRUNK 2026-09-06 (TRDD): a translation layer in regex_worker.py now rewrites `\A`/`\Z`,
+# `(?<name>` / `(?P<name>`, `$` (no `m` flag), and empty/negated-empty classes `[]`/`[^]`
+# before handing the source to `re`. Six of the original seven rows now AGREE with the oracle
+# (removed below with the measured before/after runner output in the TRDD and the divergence
+# closure report). `\p{L}` remains: Python's stdlib `re` has no Unicode-property-escape syntax
+# at all (no third-party `regex` dependency here), so there is no faithful translation --
+# left as a KNOWN, UNRESOLVED divergence, not a cheat-shrink.
+EXPECTED_DIVERGENT_SET='\p{L}<u>'
 actual=$(printf '%s' "$DIVERGENT_KEYS" | LC_ALL=C sort)
 expected=$(printf '%s' "$EXPECTED_DIVERGENT_SET" | LC_ALL=C sort)
 if [ "$actual" != "$expected" ]; then
@@ -166,13 +185,13 @@ if [ "$actual" != "$expected" ]; then
   exit 1
 fi
 # THE MESSAGE MUST NOT CLAIM HEALTH. Exit 0 means "no REGRESSION since the set was pinned" --
-# it does NOT mean the port is correct, and the earlier wording ("known engine divergences
-# only, set unchanged") was read as a clean bill in a regression tally that then reported
-# "11 suites PASS". Five of these seven are ways the PORT behaves differently from the ORACLE,
-# including the highest-ranked hazard in the TRDD: `EXPECT: /ok$/` fails in the oracle and
-# PASSES in the port, on output gate-check assembles without trimming. The emulate-vs-document
-# decision is still open, so those are UNRESOLVED DEFECTS, not neutral facts about two
-# runtimes. A pin is the right tool here; asserting health in its passing message was not.
+# it does NOT mean the port is correct. Six of the original seven rows (including the
+# highest-ranked hazard in the TRDD, `EXPECT: /ok$/` matching output the oracle rejects) were
+# PORT defects and are now fixed by the translation layer in regex_worker.py -- see the
+# divergence-closure report for the measured before/after. The one row still here, `\p{L}`, is
+# a genuine STDLIB LIMITATION (Python's `re` has no Unicode-property-escape syntax), not a
+# neutral fact about two runtimes either -- it is an UNRESOLVED DEFECT. A pin is the right tool
+# here; asserting health in its passing message was not.
 # WHY STILL EXIT 0, having considered the alternatives:
 #   exit 1  -> permanently red. Rejected earlier in this file for the reason that still holds:
 #             a check that is always red gets ignored, then "fixed" by weakening it.
