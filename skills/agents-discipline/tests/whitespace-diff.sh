@@ -148,7 +148,7 @@ _write_ledger_ev() {
   pad="$(printf '%b' "$ws")"
   {
     printf '# Delegation plan\n'
-    printf 'Units: 1\n\n'
+    printf 'Units: 2\n\n'
     printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
     printf '|---|------|--------------|--------|------------|--------|\n'
     printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
@@ -255,6 +255,47 @@ _control() {
   pass=$((pass + 1))
 }
 
+# NEGATIVE CONTROL FOR THE PAD ITSELF, and it closes the exact gap the paragraph above admits:
+# `_control` is by construction the only case that never supplies a pad, so until now NOTHING
+# asserted the pad LANDS in the header. A dropped `%s`, a stray `%` that swallowed it, or a `%b`
+# that failed to expand would leave every padded case reading the UNPADDED header -- both runtimes
+# read the same bytes, agree by construction, and six OKs report coverage that does not exist.
+# That is the first vacuity of this file wearing different clothes, and agreement-only vectors
+# cannot see it: they hold just as well when the pad was never written.
+#
+# MEASURED, both halves, not argued:
+#   pad `\x58`   -> both runtimes emit `- #2 finance — no reason found in a **Unit 2** …`
+#   pad dropped  -> both runtimes emit `- #2 finance` and NOTHING else, and STILL AGREE
+# So asserting the marker is PRESENT is the one assertion that separates them.
+#
+# `\x58` is the letter `X` -- whitespace in NEITHER language, in every version of both, so
+# `**Unit X2 —**` matches no detector, unit 2's block never opens, and the reason marker must
+# fire. Deliberately not U+180E, the other obvious "matches neither" candidate: it left JS's `\s`
+# in ES2016 and Python's on a Unicode table update, so it encodes a version bet where `X` encodes
+# none. It is written as a BYTE ESCAPE rather than a literal `X` on purpose -- that is what routes
+# it through `%b` and lets this case fail when `%b` expansion is what broke.
+_pad_landed() {
+  local led o p
+  led="$WORK/pad-landed.md"
+  _write_ledger_ev "$led" '\x58'
+  o="$(_verdict node "$led")"
+  p="$(_verdict py "$led")"
+  if [ "$o" != "$p" ]; then
+    printf 'DIVERGE  %-38s harness is broken; the cases below cannot be trusted\n' "pad-landed control"
+    printf '    oracle: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
+    printf '    port  : %s\n' "$(printf '%s' "$p" | tr '\n' '|')"
+    exit 1
+  fi
+  # -F, not -E: the needle carries `**` and `.`, which a regex would read as metacharacters.
+  if ! printf '%s' "$o" | grep -qaF 'no reason found in a **Unit 2** evidence block'; then
+    printf 'DIVERGE  %-38s pad never reached the evidence header; padded cases are vacuous\n' "pad-landed control"
+    printf '    agreed: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
+    exit 1
+  fi
+  printf '  OK      %-38s pad lands in the header (block stays shut)\n' "pad-landed control"
+  pass=$((pass + 1))
+}
+
 _control _write_ledger     "control: cell writer"
 _control _write_ledger_hdr "control: header writer"
 
@@ -270,6 +311,7 @@ for i in "${!CASE_NAME[@]}"; do
 done
 
 _control _write_ledger_ev "control: evidence-header writer"
+_pad_landed
 
 # The same six code points inside the `**Unit N —**` evidence header. This surface is parsed by
 # UNIT_HEADER, not by the table parser, so the twelve cases above cannot reach it -- and it is the
@@ -286,7 +328,11 @@ done
 
 echo
 if [ "$fail" = 0 ]; then
-  echo "--- $pass trim vector(s) identical (cell + header + evidence-header surfaces) ---"
+  # "check(s) passed", not "trim vector(s) identical": `$pass` has always also counted the
+  # controls, which assert PRESENCE rather than identity, and `_pad_landed` makes that split
+  # load-bearing -- it passes by finding a marker, not by two runtimes agreeing. A summary line
+  # that calls every check an identity is the kind of over-claim this suite exists to catch.
+  echo "--- $pass check(s) passed (cell + header + evidence-header surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"
