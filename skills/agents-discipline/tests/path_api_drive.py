@@ -35,7 +35,9 @@ CASES = {
              ["a", "..", "..", "b"], [""], ["/"], ["a/", "/b"]],
     "relative": [["/a/b", "/a/b/c"], ["/a/b", "/a"], ["/a/b", "/a/b"], ["/a/b", "/x"],
                  ["/a/b", "/a/b/../c"], ["/a//b", "/a/b/c"], ["/a/b/", "/a/b/c/"],
-                 ["/a/b", "/a/bc"], ["/a", "/a/../a/x"], ["/", "/a"]],
+                 ["/a/b", "/a/bc"], ["/a", "/a/../a/x"], ["/", "/a"],
+                 # See path-api-drive.mjs: two js_relative branches had no row reaching them.
+                 ["/a", "/"], ["/a/bc", "/a/b"]],
     # See path-api-drive.mjs for why the `//` rows exist and what they cost to omit.
     "resolve": [["/a", "b"], ["/a", "/b"], ["a"], ["/a", ".."], ["/", ".."], ["/a", "b", "../c"],
                 ["//a"], ["///a"], ["//"], ["//a/b"], ["//a/../b"],

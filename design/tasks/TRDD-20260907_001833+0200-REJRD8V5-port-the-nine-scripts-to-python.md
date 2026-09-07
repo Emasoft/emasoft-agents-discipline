@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T04:02:00+0200
+updated: 2026-09-07T04:16:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -600,7 +600,7 @@ difference — but every call site has to drop the await). One item left:
    | row | what it establishes |
    |---|---|
    | `isAbsolute` | **A FINDING.** `os.path.isabs` is a genuinely different function that happens to agree on the probed corpus. The only row still comparing stdlib to node. |
-   | `dirname`, `relative`, `resolve`, `join`, `basename` | **A REGRESSION CHECK.** These drive our own PORTS, which were written to match node — of course they agree. Useful, but it can never be a finding, and if someone "simplifies" one back to `os.path`, the cell silently becomes a different claim. |
+   | `dirname`, `relative`, `resolve`, `join`, `basename` | **A CHECK ON OUR PORT, not on the stdlib.** A red row here is a PORT DEFECT — the higher-stakes kind of finding, not noise. (An earlier revision said "can never be a finding", which is false and dangerous: it primes a reader meeting a red `dirname` to reach for "someone refactored" before "the port is broken". It cannot be a finding *about the two runtimes*; that is the only true reading. One commit earlier the `resolve` row went red and that is why `js_resolve` exists.) Also: if someone "simplifies" one back to `os.path`, the cell silently becomes a different claim. |
    | `sep`, `delimiter` | **BY DEFINITION.** Platform constants: one observation on one platform is not a survey, and the only axis they can differ on is the untested one. (They also match on Windows: `\` and `;`.) |
 
    What the divergences WERE, before the ports (kept because they are what a naive port
@@ -638,11 +638,15 @@ difference — but every call site has to drop the await). One item left:
    `"@"` in `js_relative`. **A passing differential said nothing about those branches.**
 
    **One branch could NOT be made to redden, so it was DELETED rather than shipped
-   untestable.** `_normalize_string` was written with node's `allow_above_root` parameter; the
-   `True` arm is unreachable from both callers, because `js_resolve` only stops once it has an
-   absolute segment and falls back to `os.getcwd()`, which always is one. Parameter removed,
-   with a note to reinstate it if `js_normalize` or a relative-path `js_join` is ever ported —
-   those are node's callers that pass `True`.
+   untestable.** `_normalize_string` was written with node's `allow_above_root` parameter and
+   the `True` arm was removed. **Unreachable BY CONSTRUCTION, not by a census of callers** —
+   that distinction matters, because "no caller uses it today" is an argument that expires the
+   moment `gate_check.py` adds callers. The construction: `js_resolve`'s scan terminates only
+   on an absolute segment, and its index `-1` fallback is `os.getcwd()`, which always is one —
+   so `absolute` is True for EVERY possible call, including future ones. Only a NEW function
+   (`js_normalize`, a relative-path `js_join`) could reach it, and those are named in the
+   docstring as the trigger to reinstate. Behaviourally the deletion is a no-op either way:
+   with `allowAboveRoot=false` node's own `normalizeString` also drops the unpoppable `..`.
    - **Why it matters most:** `resolve` feeds `approvalPath`'s sha256 identity (`:372`) and
      `oracle().cwd`. One character changes the digest, and that is the silent
      total-approval-failure mode ranked highest above.
@@ -686,6 +690,27 @@ difference — but every call site has to drop the await). One item left:
    same whitespace trap that caused this round's production edit, reproduced in an ad-hoc probe
    written an hour after documenting it. **Ad-hoc probes need the parse-don't-byte-compare
    policy as much as the committed differentials do.**
+
+   **DO THE DIGEST DIFFERENTIAL FIRST — BEFORE writing `gate_check.py`, and before the suite
+   retrofit. This is an ORDERING instruction, and it is here because FOUR distinct causes
+   produce a BYTE-IDENTICAL symptom.** This document flags them in three separate places
+   without ever saying they are indistinguishable:
+   1. a digest mismatch → "every approval silently fails to match";
+   2. missing `run-tests.mjs`'s `--approve` injection → "every gate silently runs UNAPPROVED";
+   3. the unapproved branch → "runs ZERO commands and exits 1";
+   4. ordinary port bugs.
+
+   All four surface as *a mass of gates reporting unapproved, no command executed, no message
+   naming a cause*. And the advice above — "port first, retrofit the suites once there is
+   something to point them at" — routes a resuming session straight into that wall: write 950
+   lines, retrofit four suites, run, and face four candidate causes with no discriminator.
+
+   The fix is cheap and settles one candidate before the ambiguity can form: **a ~10-line
+   differential comparing `sha256(JSON.stringify(oracle(file, gate)))` across the two runtimes
+   on a fixed gate**, in the style of `path-api-diff.sh`. It needs no `gate_check.py` — only
+   `oracle()`'s twelve fields — and it is the highest-ranked hazard in this document. Do it
+   first, and a later wall of unapproved gates has three candidates instead of four, one of
+   them already excluded by measurement.
 
    **ALSO: `mutate-probe.sh` does NOT work as the verdict reader for this route.** Its verdict
    greps `^DIVERGE` (`:140`), which only the hand-written differential drivers print. The

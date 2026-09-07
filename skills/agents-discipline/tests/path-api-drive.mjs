@@ -27,7 +27,13 @@ export const CASES = {
          ["a", "..", "..", "b"], [""], ["/"], ["a/", "/b"]],
   relative: [["/a/b", "/a/b/c"], ["/a/b", "/a"], ["/a/b", "/a/b"], ["/a/b", "/x"],
              ["/a/b", "/a/b/../c"], ["/a//b", "/a/b/c"], ["/a/b/", "/a/b/c/"],
-             ["/a/b", "/a/bc"], ["/a", "/a/../a/x"], ["/", "/a"]],
+             ["/a/b", "/a/bc"], ["/a", "/a/../a/x"], ["/", "/a"],
+             // Two branches of js_relative had NO row reaching them, found by reading the
+             // transcription against node rather than by any control: `["/a","/"]` is the
+             // to-is-root arm (`i == 0` -> last_common_sep = 0), and `["/a/bc","/a/b"]` is the
+             // from-longer non-boundary arm. `["/","/a"]` above covers only the mirror of the
+             // first, which is what made the omission look deliberate.
+             ["/a", "/"], ["/a/bc", "/a/b"]],
   // The `//` rows are the ones that matter most and were MISSING from the first corpus.
   // POSIX gives exactly two leading slashes implementation-defined meaning: Python's
   // posixpath PRESERVES them (collapsing three or more), node collapses to one. `resolve`
