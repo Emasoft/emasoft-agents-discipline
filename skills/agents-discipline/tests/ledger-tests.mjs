@@ -195,6 +195,13 @@ const cases = [
     // `unreproducible` in the broken one. The COUNT discriminates and doubles as the control.
     // 1 means row 2 was attributed to its own header; 2 means the fold pooled both rows under
     // row 1; 0 would mean attribution never ran at all.
+    //
+    // The red is uniquely the LITERAL fold only because a space follows the digit here.
+    // Dropping `re.A` unfolds a SECOND thing in the same pattern -- NOT_WORD_AFTER's
+    // `[0-9A-Za-z_]`, which under bare `re.I` admits those same four code points -- and that
+    // effect runs the OPPOSITE way (`**Unit 1` + U+017F matches with the flag and not without).
+    // A space is outside the class in both states, so it is inert here. A future case that puts
+    // a fold character after the digit reddens under the same mutation for a different reason.
     name: "a unit header holding U+0131 backs nothing, the ASCII header beside it backs its own row",
     file: "tests/fixtures/unit-header-fold.md",
     want: 1,
@@ -682,18 +689,30 @@ report(
   "ledger + verify + no-done"
 );
 
-// ARMING CHECK for the fold case above. Its whole discriminating power sits in ONE non-ASCII
-// code point, which an editor, a lossy encoding pass or a well-meaning "typo fix" can quietly
-// turn into ASCII `i` -- leaving a fixture that still parses, still runs, and still PASSES
-// while testing nothing. A presence assertion is the only thing that reddens on that; the case
-// itself cannot, because a disarmed vector produces the same verdict as a correct one.
+// ARMING CHECK for the fold case above, guarding a NARROWER thing than "the fixture is intact"
+// -- named as three modes, because the case covers one of them and is blind to the other two:
+//
+//   U+0131 -> ASCII `i`      the case FAILS LOUDLY. The header then matches in both states, the
+//                            row comes back backed, and all four assertions red. Redundant here.
+//   U+0131 deleted           `**Unt 1` matches in NEITHER state, so the verdict is identical to
+//                            a correct run and the case PASSES. This line is the only guard.
+//   U+0131 -> a non-folding  same shape: no fold, no match, same verdict, case PASSES. Only
+//     character              guard.
+//
+// The silent disarms are the ones that REMOVE the fold rather than complete it, and nothing
+// inside the case can see them -- a disarmed vector and a correct vector produce byte-identical
+// output. That is what this line is for, and it is not general fixture insurance.
+//
+// It pins the HEADER rather than the code point's presence anywhere in the file: the vector
+// surviving in a comment while the header went ASCII would satisfy a bare presence test.
+//
 // SPELLED AS AN ESCAPE, never as the character: written literally, this assertion is
 // vulnerable to the very pass it guards against -- normalize this file too and it would
 // compare against ASCII `i`, which a disarmed fixture also contains, and pass.
 const foldFixture = readFileSync(resolve(root, "tests/fixtures/unit-header-fold.md"), "utf8");
 report(
-  foldFixture.includes(String.fromCharCode(0x131)),
-  "fold fixture: U+0131 vector intact (not normalized to ASCII)"
+  foldFixture.includes("**Un" + String.fromCharCode(0x131) + "t 1"),
+  "fold fixture: U+0131 header vector intact (not normalized, deleted, or substituted)"
 );
 
 console.log(failed ? `${failed} failing` : "all pass");

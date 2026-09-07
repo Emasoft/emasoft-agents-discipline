@@ -727,8 +727,11 @@ decision → then the remaining eight. `:144` first because it is the most sever
 (`UNIT_HEADER` at `:103` is the pattern to copy), its divergence is already measured so its control
 is already designed, and finishing one site measures the per-site cost instead of estimating it.
 
-**⚠ TWO CLAIMS IN `47bc2be` AND `7e8d56c` ARE OVER-STATED. The commits are permanent; the
-corrections live here.**
+**⚠ FOUR CLAIMS ACROSS `47bc2be`, `7e8d56c`, `d88f586` AND `9ee169e` ARE WRONG OR OVER-STATED.
+The commits are permanent; the corrections live here.** Items 3 and 4 are FALSE, not merely
+over-stated, and they share one shape: **an absence asserted without searching for the thing.**
+Both would have cost one `find` or one `grep -a`. When about to write "X does not exist" into a
+commit message, search first — that sentence is the one this task keeps getting wrong.
 
 1. **`47bc2be` says "NOTHING WAS WATCHING THIS LINE" and cites the silent settle. Too strong.**
    Every existing fixture *executes* the finder — that is how any of them parse at all. What the
@@ -750,6 +753,24 @@ corrections live here.**
    all 9 live lines have their `\s` inside a **STRING** token; 13 inside a **COMMENT** token; the
    intersection is **empty**; none is inside a multi-line string. Use the by-token classification,
    never the by-line one, if this is ever recomputed.
+3. **`d88f586` records "multi-unit slicing NOT verified". FALSE.**
+   `tests/fixtures/pooled-evidence.md` is a three-unit ledger with three line-initial
+   `**Unit N —**` headers and one artifact under unit 3, asserting `#1` and `#2` UNBACKED and
+   unit 3 backed, and its case carries `rerun: true` — so it runs the attribution path in BOTH
+   runtimes. That IS the verification the commit says is missing. A false negative in a permanent
+   record is worse than an unhedged one: it sends a future session to build a fixture that
+   already exists, and it reads as rigour because it enumerates what was *not* done.
+4. **`9ee169e` records that the `\s` batch's fixture "is unwritten". FALSE.**
+   `tests/whitespace-diff.sh` is 507 lines with **four** writers padding the six divergent code
+   points, and `_write_ledger_ev` pads `**Unit %s2 —**` — the `UNIT_HEADER` site itself. The
+   harness exists and is the one this task built. What the remaining sites need is a WRITER THAT
+   REACHES EACH ONE plus its control, which is exactly the per-site cost `47bc2be` already
+   measured and this block already records — not a new harness.
+   **The surviving half of that paragraph is still true and still worth keeping:** the fold
+   fixture gives the `\s` conversion no DISCRIMINATING coverage. It executes `JS_WS_CLASS` (the
+   class sits in the pattern under test) but the whitespace there is a plain ASCII space, the one
+   character on which Python `\s` and `JS_WS_CLASS` agree — revert that site to bare `\s` and the
+   fixture behaves identically. Path exercised, divergence not.
 
 **STEP 1 IS DONE (`47bc2be`), AND IT MEASURED THE PER-SITE COST — which was the point of doing it
 alone.** One site took: a module-level constant, a FOURTH writer surface in `whitespace-diff.sh`
