@@ -1059,6 +1059,20 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   nothing watching the total"). Half 2 is genuinely absent (0 refs).
   **A multi-part item scored with markers for one part reports the whole item's status. Pick a
   marker per part, or read the item.**
+  **SIXTH INSTANCE, and this one is pattern WIDTH rather than a flag: my C2 control searched
+  `new RegExp` and returned 0. Searching bare `RegExp` returns 2.** The narrower pattern could
+  not have seen `RegExp(unit)` without `new` — the exact form a reviewer named and I had not
+  tested. Both hits turn out to be COMMENTS (`:23`, `:241`), so C2-by-removal stands, but it
+  stood on a control that could not have falsified it. **A positive control must use the pattern
+  a defect could actually take, not the pattern the fix would have taken.**
+  **C0d is fixed MORE completely than I reported.** I concluded it from an absence (52-line file,
+  `## Evidence` IS line 52, `Unit 1`/`Unit 2` count 0) and never read the template. Reading it:
+  the Acceptance placeholder ships as **`` `<command>` `` — BACKTICKED**, which is the plan's
+  Order-step-0 requirement to fix BOTH placeholders, and the one I never checked. The empty
+  `## Evidence` heading is not "no guidance" either: a `### How to write the Evidence section`
+  block sits directly above it, specifying the line-initial `**Unit N —**` marker and that a
+  citation must be a bare path in a code span, not a command. **A 52-line file was sampled three
+  times instead of read once.**
   Second, sharper: **all three were catchable, because a second command had already contradicted
   the first.** The `-i` case is literally two greps whose counts disagreed on screen — and I
   published anyway. **When two of your own outputs disagree, THAT is the finding; resolve it
