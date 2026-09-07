@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T05:36:46+0200
+updated: 2026-09-07T05:49:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -65,6 +65,41 @@ varies. Any divergence is a porting defect, never a re-specified test. `AD_RUNTI
 switches `dispatch-tests.mjs`, `lint-tests.mjs` and `ledger-tests.mjs` to the port. Paired
 drivers (`X-drive.mjs` / `X_drive.py`) dump every observable effect as JSON; the diff is the
 test.
+
+**A PREDICATE THAT RETURNS THE SAME NUMBER BEFORE AND AFTER A CHANGE KNOWN TO MODIFY THE FILE IS
+MEASURING THE WRONG THING (2026-09-07).** To check that the regex agent had not cheat-shrunk the
+KNOWN set by deleting cases, I counted with `grep -cE '^\s*case |CASES|_case '` and got **2 before,
+2 after** — then wrote "the case count did not shrink, it GREW" into `03f2e84`. The predicate
+matched two shell `case "$src" in` STATEMENTS and never counted a test case at all. The real count
+is `^row ` lines: **22 → 29, zero removed**, so the CLAIM is true and the EVIDENCE I cited for it
+was inert. Had the agent actually cheated, that counter prints `2 / 2` just the same.
+The check is one line: `git diff <old> <new> -- <file> | grep -E "^-row "` — look for REMOVALS
+directly rather than inferring them from a total. Generalisation worth keeping: an unchanged
+count across a known-changed file is not a reassuring result, it is a broken instrument, and it
+fails in the flattering direction because a constant number reads as stability.
+
+**Which evidence ACTUALLY carries the anti-cheat conclusion, since `03f2e84` names three checks
+and two of them do not.** Corrected after reading `regex-worker-diff.sh` properly:
+- ✗ *"the corpus, `regex-worker-drive.mjs`, is untouched"* — **aimed at the wrong file.** The
+  cases are `row '...'` lines in `regex-worker-diff.sh` ITSELF, the file that was modified.
+  `drive.mjs` is the JS-side driver (source/flags/output → matched), not the case list.
+- ✗ *"one DIVERGE line, down from seven"* — **cannot distinguish a FIXED row from a DELETED one.**
+  Both emit nothing. It is blind to the exact cheat by construction.
+- ✓ **zero `^-row` deletions, 22 → 29 rows** — this is the one that carries it, and it is the one
+  the commit does not name.
+- ✓ (found afterwards, and stronger than all three) the runner PINS the set itself: `:177`
+  `EXPECTED_DIVERGENT_SET='\p{L}<u>'` is compared at `:180` against the set computed from real
+  comparisons, and the runner fails with `--- DIVERGENCE SET CHANGED ---` on any mismatch. A
+  healed row trips it exactly as a new one does. `DIVERGE` at `:65` prints the actual `js(...)`
+  and `py(...)` values, so it is a real comparison and not a declared list.
+
+**The pre-fix failure was NOT silent, and saying so was my own grep's fault.** `gate_check.py:846-848`
+prints `could not record approval for <gate>: <str(exc)>`, and the observed text is
+`'utf-8' codec can't encode character '\udcff' in position 4099: surrogates not allowed` — the
+cause, named precisely. My ARM-1 grep pattern (`UnicodeEncodeError|Traceback|APPROVED|not_run`)
+did not match `codec can't encode`, and I reported the gap in my pattern as a property of the
+program. What IS true and narrower: the EXIT CODE is non-discriminating (90 in both arms) and the
+approval file simply does not appear, so anything reading only the exit status sees nothing wrong.
 
 **Every check pairs with a control proving it CAN fail.** A green run is the weakest evidence in
 this project — the recurring defect all session has been an assertion satisfied by something
