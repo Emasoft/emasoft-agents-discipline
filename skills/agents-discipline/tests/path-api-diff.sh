@@ -30,15 +30,10 @@ py = json.load(open("/tmp/path-py.json"))
 # a count holds steady under a swap (one gap closed while another opens), which is the exact
 # defect found in regex-worker-diff.sh's first pin.
 #
-# `resolve` is here because of a TWO-WRONGS-CANCEL that an uncommitted probe could not see.
-# That probe built Python's resolve as `abspath(os.path.join(...))` and reported AGREEMENT.
-# But os.path.join DISCARDS everything before an absolute segment (`join("/a","/b")` -> "/b")
-# where node's join does NOT (-> "/a/b"). Python's join is therefore a WRONG port of node's
-# join -- and its wrongness is exactly the reset that node's RESOLVE performs, so the bad
-# helper produced the right answer and hid the gap. Using the real `_js_join` (which correctly
-# does not discard) makes `resolve("/a","/b")` come out "/a/b" against node's "/b", which is
-# the truth: node:path's resolve has no port at all.
-EXPECTED_DIVERGENT = {"dirname", "relative", "resolve"}
+# EMPTY, and it should stay empty: `js_dirname`, `js_relative` and `js_resolve` were written
+# after this file first reported them missing, and every row now drives a PORT rather than a
+# stdlib stand-in. An entry APPEARING here is a port defect or a newly-probed shape.
+EXPECTED_DIVERGENT = set()
 
 # VACUITY: compare the corpus SIZES first. The two drivers duplicate their case lists rather
 # than sharing them across the language boundary, so a list edited on one side only would

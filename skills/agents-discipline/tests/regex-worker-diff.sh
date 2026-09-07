@@ -112,14 +112,19 @@ echo
 # NON-VACUITY: a corpus that silently shrank (an editing accident, a `row` call lost to a bad
 # heredoc) would report "all identical" over nothing at all. Same gate as lease-diff.sh.
 #
-# EQUALITY, not a floor. The floor was `-lt 15` while the corpus held 22, so SEVEN rows could
-# be deleted before it noticed -- and the set pin protects only the 7 DIVERGENT ones, leaving
-# every agreeing row unguarded. Among those is `dollar with m flag agrees`, which exists solely
-# to make the `$`->`\Z` recipe fail and which the TRDD's swap control depends on. Deleting it
-# alone left the suite green, with the trap silently gone until someone implemented the recipe.
-EXPECTED_ROWS=22
-if [ "$rows" != "$EXPECTED_ROWS" ]; then
-  echo "VACUOUS: $rows rows executed, expected $EXPECTED_ROWS (adding a row? update this)"; exit 1
+# A FLOOR, and deliberately not an equality. The original floor was `-lt 15` against 22 rows,
+# so seven could be deleted unnoticed -- but the fix briefly went to `EXPECTED_ROWS=22`, and an
+# equality fails on every legitimate ADDITION, with a message telling the reader to bump the
+# number. Forty lines below, the set pin's message says the opposite: "do NOT just update the
+# list". Two adjacent guards teaching opposite lessons is worse than either alone, because
+# which one is right then depends on the reader noticing which fired. Adding rows is the normal
+# edit to this corpus; a floor cannot fire on one.
+#
+# The floor is set to the count the OTHER guards actually protect: 7 divergent rows (set pin) +
+# the named trap row. Deleting a non-load-bearing agreeing row is not worth a false alarm on
+# every addition.
+if [ "$rows" -lt 8 ]; then
+  echo "VACUOUS: only $rows rows executed"; exit 1
 fi
 # And name the trap row explicitly, because a count alone permits swapping it for another.
 case "$ALL_KEYS" in

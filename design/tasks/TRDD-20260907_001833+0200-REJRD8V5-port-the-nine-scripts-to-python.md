@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T03:38:00+0200
+updated: 2026-09-07T04:02:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -592,13 +592,21 @@ difference — but every call site has to drop the await). One item left:
    helper where one exists (`_js_join`, `js_basename`) and plain `os.path` where none does, so
    the divergence set IS the list of functions still needing a port.
 
-   | function | verdict (darwin; see the platform caveat below) |
+   **ALL EIGHT NOW AGREE — `js_dirname`, `js_relative` and `js_resolve` were written after this
+   differential reported them missing** (`gates.py`, alongside `_js_join`/`js_basename`). The
+   expected-divergence set is now EMPTY. What each row actually establishes differs, though,
+   and the table says which — three epistemic states were previously sharing one verdict word:
+
+   | row | what it establishes |
    |---|---|
-   | `isAbsolute`, `join`, `basename` | agree on the probed corpus |
-   | `sep`, `delimiter` | agree **by definition**, not by probe — they are platform constants, so one observation on one platform is not a survey. (They also match on Windows: `\` and `;` both sides.) |
-   | `relative` | **DIVERGES**: identical paths → JS `""`, Python `"."` |
-   | `dirname` | **DIVERGES on 5 of 10**: `/a/`→`/` vs `/a`; `a`→`.` vs `""`; `""`→`.` vs `""`; `//`→`/` vs `//`; `/a//b//`→`/a/` vs `/a//b` |
-   | `resolve` | **DIVERGES, for TWO independent reasons** — and an earlier five-row corpus reported it as AGREEING |
+   | `isAbsolute` | **A FINDING.** `os.path.isabs` is a genuinely different function that happens to agree on the probed corpus. The only row still comparing stdlib to node. |
+   | `dirname`, `relative`, `resolve`, `join`, `basename` | **A REGRESSION CHECK.** These drive our own PORTS, which were written to match node — of course they agree. Useful, but it can never be a finding, and if someone "simplifies" one back to `os.path`, the cell silently becomes a different claim. |
+   | `sep`, `delimiter` | **BY DEFINITION.** Platform constants: one observation on one platform is not a survey, and the only axis they can differ on is the untested one. (They also match on Windows: `\` and `;`.) |
+
+   What the divergences WERE, before the ports (kept because they are what a naive port
+   reproduces): `relative` — identical paths → `""` vs `"."`; `dirname` — 5 of 10 cases
+   (`/a/`→`/` vs `/a`; `a`→`.` vs `""`; `""`→`.` vs `""`; `//`→`/` vs `//`; `/a//b//`→`/a/` vs
+   `/a//b`); `resolve` — leading `//`, below.
 
    **`resolve` is the important one, and the way it was missed twice is the lesson.**
    - *Reason 1 — leading `//`.* POSIX gives exactly two leading slashes implementation-defined
@@ -606,14 +614,35 @@ difference — but every call site has to drop the await). One item left:
      one. MEASURED: `//a` → `/a` vs `//a`; `//` → `/` vs `//`; `//a/b` → `/a/b` vs `//a/b`;
      `//a/../b` → `/b` vs `//b`; `///a` → `/a` both. The first corpus was all single-slash, so
      it probed everything except the shape where the normalisers are documented to differ.
-   - *Reason 2 — absolute segments.* `resolve("/a","/b")` is `/b` (a later absolute segment
-     RESETS); node's `join` does not discard, so `_js_join` correctly gives `/a/b`.
-   - **The `/tmp` probe reported "resolve agrees" through a TWO-WRONGS-CANCEL.** It built
-     Python's resolve as `abspath(os.path.join(...))`. `os.path.join` DISCARDS before an
-     absolute segment (`join("/a","/b")` → `/b`) where node's does NOT (`/a/b`) — so
-     `os.path.join` is a *wrong* port of node's `join`, and its wrongness is exactly the reset
-     `resolve` needs. The bad helper produced the right answer and hid the gap. Substituting
-     the CORRECT `_js_join` is what exposed it.
+   - *Reason 2 was an ARTIFACT and is withdrawn.* An earlier draft listed "absolute segments"
+     as a second divergence. But `os.path` has **no `resolve` at all**, so that row was never
+     node-vs-Python — it was node against `abspath(_js_join(...))`, an expression written FOR
+     the test. Of course a faithful `join` composed with `abspath` is not `resolve`; they are
+     different functions. The row measured how the harness was built, which is this session's
+     most repeated defect. Now that `js_resolve` exists the row measures the port.
+   - **The related `/tmp` lesson is about PROBE HYGIENE, not about the codebase.** That probe
+     used `os.path.join`, whose discard-before-absolute is exactly the reset `resolve` needs,
+     so a wrong helper produced a right-looking answer. Framing this as a "two-wrongs-cancel in
+     the codebase" would send a reader hunting a latent bug in `_js_join`; there is none —
+     `_js_join` exists BECAUSE the repo already knew `os.path.join` was wrong, and documents it.
+     The real lesson: **an ad-hoc probe reaches for the stdlib function the project has already
+     replaced, so the project's corrections do not travel into `/tmp`.** Same shape as the
+     `json.dumps` recurrence — use the project's ported helpers in probes, or the probe
+     measures a codebase that does not exist.
+
+   **The corpus had two holes, and only MUTATION CONTROLS found them.** With all three ports
+   passing, breaking `js_dirname`'s double-slash-root arm (`return "//"` → `"/"`) and blanking
+   `_normalize_string`'s `"."` case both reddened NOTHING — no row reached either path (`//`
+   alone does not enter the dirname branch, and no `resolve` row fed a `.` segment). Added
+   `//a`, `//a/b` and six `.`-segment rows; all three controls now redden, plus `char == "/"` →
+   `"@"` in `js_relative`. **A passing differential said nothing about those branches.**
+
+   **One branch could NOT be made to redden, so it was DELETED rather than shipped
+   untestable.** `_normalize_string` was written with node's `allow_above_root` parameter; the
+   `True` arm is unreachable from both callers, because `js_resolve` only stops once it has an
+   absolute segment and falls back to `os.getcwd()`, which always is one. Parameter removed,
+   with a note to reinstate it if `js_normalize` or a relative-path `js_join` is ever ported —
+   those are node's callers that pass `True`.
    - **Why it matters most:** `resolve` feeds `approvalPath`'s sha256 identity (`:372`) and
      `oracle().cwd`. One character changes the digest, and that is the silent
      total-approval-failure mode ranked highest above.

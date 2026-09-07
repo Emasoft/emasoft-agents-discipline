@@ -759,6 +759,155 @@ def js_basename(value):
     return os.path.basename(str(value).rstrip(os.sep + (os.altsep or "")))
 
 
+def _normalize_string(path):
+    """node's internal `normalizeString`: resolve `.` and `..` LEXICALLY, touching no disk.
+
+    Split out because `js_resolve` and `js_relative` both need it and `posixpath.normpath` is
+    not a substitute -- normpath PRESERVES a leading double slash (POSIX makes exactly two
+    implementation-defined) where node collapses it. That single difference is why
+    `os.path.abspath("//a")` is `//a` against node's `/a`, and it lands on `approvalPath`'s
+    sha256 identity, so it is not cosmetic. Normalizing a body WITHOUT its leading slash and
+    re-attaching one, which is what node does, sidesteps the whole question.
+
+    NO `allow_above_root` PARAMETER, unlike node's. It was written, and a mutation control
+    then showed the `True` arm was UNREACHABLE and could not be made to redden: `js_resolve`
+    only stops scanning once it has an absolute segment, and it falls back to `os.getcwd()`,
+    which is always absolute -- so `not absolute` is always False at the call. `js_relative`
+    reaches this only through `js_resolve`. A branch no caller can enter is exactly the dead
+    code this project deletes rather than ships with an untestable control.
+
+    REINSTATE IT if a `js_normalize` or a relative-path `js_join` is ever ported -- those ARE
+    node's callers that pass `True`, and they need the `..` segments kept rather than dropped.
+    """
+    out = []
+    for segment in path.split("/"):
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            if out and out[-1] != "..":
+                out.pop()
+        else:
+            out.append(segment)
+    return "/".join(out)
+
+
+def js_dirname(value):
+    """`path.dirname`, which `os.path.dirname` is NOT -- measured, 5 of 10 probe cases differ.
+
+    `/a/` -> `/` vs `/a`; `a` -> `.` vs `""`; `""` -> `.` vs `""`; `//` -> `/` vs `//`;
+    `/a//b//` -> `/a/` vs `/a//b`. Transcribed from node's own loop rather than approximated,
+    because the cases that differ are exactly the irregular ones an approximation gets wrong:
+    node scans from the END for the last separator that is not part of a trailing run, and has
+    a special answer for a path rooted at a DOUBLE slash.
+
+    Only ONE call site exists today (`gate-check.mjs:336`, on `resolve()` output, where a
+    trailing slash cannot occur) -- so this is not fixing a live bug. It exists so the next
+    call site cannot introduce one, which is the same reasoning `_js_join`'s docstring gives
+    for why a rule applied per-site does not hold.
+    """
+    path = os.fspath(value)
+    if len(path) == 0:
+        return "."
+    has_root = path[0] == "/"
+    end = -1
+    matched_slash = True
+    for i in range(len(path) - 1, 0, -1):
+        if path[i] == "/":
+            if not matched_slash:
+                end = i
+                break
+        else:
+            matched_slash = False
+    if end == -1:
+        return "/" if has_root else "."
+    # A path rooted at `//` keeps BOTH slashes here, unlike everywhere else in node's posix
+    # module. Not an oversight in the port: node returns the literal "//" for this case.
+    if has_root and end == 1:
+        return "//"
+    return path[:end]
+
+
+def js_resolve(*parts):
+    """`path.resolve`: right-to-left until an absolute segment, then normalize.
+
+    THERE IS NO `os.path` COUNTERPART, which is the point. `abspath` alone ignores the
+    argument list; `abspath(join(...))` is a `join` that was then absolutised, and `join` does
+    not reset on an absolute segment -- `resolve("/a", "/b")` is `/b` while node's
+    `join("/a", "/b")` is `/a/b`. A stand-in built that way looks close and is not.
+
+    The leading-`//` collapse falls out of the algorithm rather than being special-cased: the
+    body is normalized WITHOUT its root and a single `/` is prepended, so any number of
+    leading slashes reduces to one. That is node's own construction.
+    """
+    resolved = ""
+    absolute = False
+    index = len(parts) - 1
+    while index >= -1 and not absolute:
+        # index -1 is the CWD, which node consults only if no argument was absolute.
+        segment = os.fspath(parts[index]) if index >= 0 else os.getcwd()
+        index -= 1
+        if len(segment) == 0:
+            continue
+        resolved = segment + "/" + resolved
+        absolute = segment[0] == "/"
+    body = _normalize_string(resolved)
+    # `absolute` is always True here -- the scan only ends by finding an absolute segment, and
+    # the index -1 fallback is os.getcwd(). The branch is kept because node's has it and its
+    # absence would read as a port omission; see _normalize_string on why the sibling dead arm
+    # was deleted instead. If a caller ever passes something that makes this False, "." is
+    # node's answer for an empty relative result.
+    if absolute:
+        return "/" + body
+    return body if body else "."
+
+
+def js_relative(source, target):
+    """`path.relative`, which `os.path.relpath` is NOT: equal paths give "" here and "." there.
+
+    That difference is inert in `pathIsInside` (an empty `rel` satisfies every conjunct of the
+    fallback test, so the `rel === ""` clause is provably redundant), but it is NOT inert in
+    general, and `relpath` also differs by resolving through a different normalizer.
+
+    Node compares the two RESOLVED paths segment-wise, tracking the last common separator,
+    then emits one `..` per remaining segment on the source side. Transcribed rather than
+    rebuilt from `os.path.relpath` semantics.
+    """
+    source_path = js_resolve(source)
+    target_path = js_resolve(target)
+    if source_path == target_path:
+        return ""
+    # Skip the root slash on both sides; js_resolve guarantees exactly one.
+    from_start, from_end = 1, len(source_path)
+    to_start, to_end = 1, len(target_path)
+    from_len, to_len = from_end - from_start, to_end - to_start
+    length = min(from_len, to_len)
+    last_common_sep = -1
+    i = 0
+    while i < length:
+        char = source_path[from_start + i]
+        if char != target_path[to_start + i]:
+            break
+        if char == "/":
+            last_common_sep = i
+        i += 1
+    if i == length:
+        if to_len > length:
+            if target_path[to_start + i] == "/":
+                return target_path[to_start + i + 1:]
+            if i == 0:
+                return target_path[to_start + i:]
+        elif from_len > length:
+            if source_path[from_start + i] == "/":
+                last_common_sep = i
+            elif i == 0:
+                last_common_sep = 0
+    out = []
+    for i in range(from_start + last_common_sep + 1, from_end + 1):
+        if i == from_end or source_path[i] == "/":
+            out.append("..")
+    return "/".join(out) + target_path[to_start + last_common_sep:]
+
+
 def qualify(file_or_label, gate_id):
     return _MD_SUFFIX_RE.sub("", js_basename(file_or_label)) + ":" + gate_id
 

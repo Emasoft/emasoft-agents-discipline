@@ -16,7 +16,11 @@ import { delimiter, dirname, basename, isAbsolute, join, relative, resolve, sep 
 // where the two libraries are KNOWN to make different choices -- trailing slashes, doubled
 // separators, empty strings, `..` segments, and absolute segments in the middle of a join.
 export const CASES = {
-  dirname: ["/a/b", "/a/", "a", "/", "", "//", "/a//b//", "/a/b/.", "a/b", "./a"],
+  // `//a` and `//a/b` are here because a MUTATION CONTROL exposed their absence: breaking
+  // js_dirname's double-slash-root branch (`return "//"`) reddened NOTHING against the
+  // original corpus. `//` alone does not reach it -- that path has no non-slash character, so
+  // the scan ends without a candidate separator and returns "/" by the other arm.
+  dirname: ["/a/b", "/a/", "a", "/", "", "//", "//a", "//a/b", "/a//b//", "/a/b/.", "a/b", "./a"],
   basename: ["/a/b", "/a/", "a", "/", "", "//", "/a//b//", "a/b/", ".", ".."],
   isAbsolute: ["/a", "a", "", "./a", "//a", "../a", "/"],
   join: [["/a", "b"], ["/a", "/b"], ["a", ""], ["", "b"], ["/a", ".."], ["/a", "b/"],
@@ -30,8 +34,11 @@ export const CASES = {
   // feeds `approvalPath`'s sha256 identity (:372) and `oracle().cwd`, so a one-character
   // difference here is total, silent approval failure -- the highest-ranked hazard in the
   // TRDD. A five-row single-slash corpus reported `resolve` as AGREEING.
+  // The `.`-segment rows likewise come from a control: blanking `_normalize_string`'s "."
+  // case reddened NOTHING, because no row fed a `.` segment through resolve.
   resolve: [["/a", "b"], ["/a", "/b"], ["a"], ["/a", ".."], ["/", ".."], ["/a", "b", "../c"],
-            ["//a"], ["///a"], ["//"], ["//a/b"], ["//a/../b"]],
+            ["//a"], ["///a"], ["//"], ["//a/b"], ["//a/../b"],
+            ["/a", "./b"], ["/a/./b"], ["a/./b"], ["/a/b/."], ["."], ["./."]],
 };
 
 const answers = {
