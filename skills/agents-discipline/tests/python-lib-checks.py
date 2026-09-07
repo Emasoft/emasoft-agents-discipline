@@ -38,6 +38,7 @@ os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 import atexit
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -443,6 +444,20 @@ report(_by.get("keys mixed") != sorted(_by.get("keys mixed", [])) and
 report(_by.get("localeCompare pairs") != sorted(_by.get("localeCompare pairs", [])),
        "jsapi: localeCompare really differs from code-point order (vacuity control)",
        str(_by.get("localeCompare pairs")))
+
+# THE CORPUS BOUND, MADE MECHANICAL. Most of the numeric-grammar rows are kept on ground two --
+# js_to_number's docstring NAMES them -- and that ground is only a bound if something checks the
+# naming still holds. Left as prose, a row added with no docstring line reopens the "documentation"
+# ground silently, which is the exact drift the enumeration was written to close.
+_gram = re.search(r"THE GRAMMAR THIS ACCEPTS.*?\n(.*?)\n\s*Adding a shape",
+                  pathlib.Path(LIB, "jsapi.py").read_text(encoding="utf-8"), re.S)
+_shapes = re.findall(r'"([^"]*)"', _gram.group(1)) if _gram else []
+# The count guard is the vacuity control: a marker rename makes the regex match nothing, and
+# `all()` over an empty list is True -- the check would pass by not looking.
+report(len(_shapes) >= 20, "jsapi: the grammar enumeration was actually found", str(len(_shapes)))
+_unbacked = [s for s in _shapes if "Number(string) " + json.dumps(s) not in _by]
+report(_shapes and not _unbacked,
+       "jsapi: every docstring-enumerated grammar shape has a corpus row", str(_unbacked)[:200])
 completed.append("jsapi")
 
 # --- parse_gates: the whole parse result, field by field -----------------------------------

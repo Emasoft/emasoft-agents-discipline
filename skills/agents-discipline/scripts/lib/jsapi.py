@@ -85,6 +85,18 @@ def js_to_number(value):
       "1,000"   -> NaN      thousands separators are not numeric syntax
       "--5"     -> NaN      only ONE sign, and none at all on a radix prefix
 
+    THE GRAMMAR THIS ACCEPTS, enumerated so the corpus has a closed obligation rather than an
+    open invitation. `_JS_DECIMAL_RE` plus the radix table admit exactly these shapes, and the
+    differential must exercise every line:
+      "0."  "1.e3"  "+.5"  "-.5"  "0.0e0"    trailing dot, leading dot, signed fraction
+      "1e+3"  "1e-3"  "1e999"                exponent with either sign; overflow to Infinity
+      "00"  "010"                            no octal-by-leading-zero; both are decimal
+      "0X"  "0b"  "0o"  "0xg"                a radix prefix with no valid digits is NaN
+      " 0x10 "  "+0x10"  " +0x10"            trimmed first; a SIGN before a prefix is NaN
+      "+"  "-"  "."  ".e3"  "1.2.3"  "1 2"   incomplete or multi-token is NaN
+    Adding a shape to the grammar means adding its row here AND to the corpus; the list closing
+    is what stops the corpus growing on a "documentation" pretext.
+
     Returns a float (`float("nan")` for the NaN cases) so callers can use the same
     `Number.isInteger` / range tests the oracle does.
     """

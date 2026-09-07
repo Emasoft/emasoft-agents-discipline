@@ -126,12 +126,19 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   // NaN. All verified identical before being added, not added hoping they would be.
   //
   // "VERIFIED IDENTICAL" IS NOT A GROUND FOR KEEPING A ROW -- the two grounds are
-  // mutation-isolated, or named by the helper's docstring. Checked afterwards rather than
-  // asserted: mutating the regex's trailing-dot form (`\d+(?:\.\d*)?` -> `\d+(?:\.\d+)?`)
-  // reddens "5." "0." "1.e3", and dropping the exponent sign (`[eE][+-]?\d+` -> `[eE]\d+`)
-  // reddens "1e-3" "1e+3". So those earn their place outright. The REST of this block is
-  // documentation of the grammar rather than isolated coverage -- kept deliberately, on the
-  // weaker ground, and labelled so nobody mistakes it for the stronger one.
+  // mutation-isolated, or named by the helper's docstring.
+  //
+  // Two rows are MUTATION-ISOLATED. Both mutants were confirmed to IMPORT first (the crash
+  // guard: a regex edit that fails to compile raises at import, every row reddens, and that
+  // reads as a large isolated set), and in both runs the non-listed rows stayed green:
+  //   `\d+(?:\.\d*)?` -> `\d+(?:\.\d+)?`  reddens "5." (pre-existing), "0." and "1.e3"
+  //   `[eE][+-]?\d+`  -> `[eE]\d+`        reddens "1e-3" (pre-existing) and "1e+3"
+  //
+  // The REST are ground TWO: `js_to_number`'s docstring now ENUMERATES the grammar it accepts,
+  // and every shape listed there has its row here. An earlier version kept them as
+  // "documentation of the grammar", which was a THIRD ground introduced by naming it something
+  // else -- and a corpus that admits unbounded documentation rows has no stopping condition at
+  // all. The enumeration is what closes it: adding a shape means adding it in both places.
   "0.", "1.e3", " +0x10", "0X", "1e+3", "1e999", "+", "-", ".", "1.2.3", "0.0e0", "+.5",
   "-.5", "00", "010", ".e3", "0b", "0o", "0xg", " 0x10 ", "+0x10", "1 2"];
 for (const s of NUM_STRINGS) {
