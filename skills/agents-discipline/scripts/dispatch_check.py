@@ -65,6 +65,12 @@ def terminal_safe(value, max_bytes=500):
         if _UNSAFE_TERMINAL.search(character):
             code = ord(character)
             piece = ("\\x" + format(code, "02x")) if code <= 0xFF else ("\\u" + format(code, "04x"))
+        elif 0xD800 <= ord(character) <= 0xDFFF:
+            # A LONE SURROGATE. Same defect and same fix as gate_lint.py's terminal_safe -- see
+            # that copy for the measurement. It is not matched by _UNSAFE_TERMINAL and is not
+            # UTF-8-encodable, so the size computation below raised. node substitutes U+FFFD and counts
+            # it as 3 bytes (measured), so chr(0xFFFD) reproduces both the text and the budget.
+            piece = chr(0xFFFD)
         size = len(piece.encode("utf-8"))
         if total + size > max_bytes:
             truncated = True

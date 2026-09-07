@@ -86,6 +86,22 @@ def terminal_safe(value, max_bytes=1024):
                 piece = "\\x" + format(code, "02x")
             else:
                 piece = "\\u" + format(code, "04x")
+        elif 0xD800 <= ord(character) <= 0xDFFF:
+            # A LONE SURROGATE, which is not a terminal control and is not UTF-8-encodable, so
+            # the `size = len(piece.encode(...))` below RAISED. MEASURED, default locale, no
+            # hostile environment needed -- `gate_lint.py <a filename containing byte 0xFF>`:
+            #     oracle  gate-lint: cannot read bad<U+FFFD>arg: ENOENT: no such file...
+            #     port    UnicodeEncodeError: ... '\udcff' ... surrogates not allowed
+            # The port CRASHED while reporting that it could not read a file, which is the
+            # loudest divergence this port can produce and it needed no unusual configuration:
+            # CPython surrogateescape-decodes argv, so any command line carrying a byte that is
+            # not valid UTF-8 reaches here.
+            #
+            # chr(0xFFFD) is what node substitutes, and it is byte-exact rather than merely
+            # non-crashing: MEASURED, `Buffer.byteLength("\ud800")` is 3 and the bytes are
+            # EF BF BD, so replacing the piece here gives the same emitted text AND the same
+            # contribution to the truncation budget.
+            piece = chr(0xFFFD)
         size = len(piece.encode("utf-8"))
         if total_bytes + size > max_bytes:
             truncated = True

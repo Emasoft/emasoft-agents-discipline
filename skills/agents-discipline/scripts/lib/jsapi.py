@@ -22,6 +22,7 @@ Each is verified against Node by tests/jsapi-drive.mjs / tests/jsapi_drive.py, o
 that includes every case measured above.
 """
 
+import codecs
 import datetime
 import decimal
 import re
@@ -573,6 +574,37 @@ def js_sort_key(value):
     return js_string(value).encode("utf-16-be", "surrogatepass")
 
 
+# The name registered below, and the one force_utf8_streams passes to reconfigure().
+_JS_SURROGATE_ERRORS = "agents_discipline.js_surrogate"
+
+
+def _js_surrogate_replacement(error):
+    """Encode an unencodable run the way node does: one U+FFFD, as BYTES.
+
+    RETURNS BYTES, NOT A STR, and that is the whole subtlety. For a UnicodeEncodeError a `str`
+    replacement is RE-ENCODED through the same codec, so returning chr(0xFFFD) as a str hits the
+    identical "surrogates not allowed" rejection and raises -- MEASURED, and it is what made the
+    obvious spelling of this function look impossible:
+
+        handler returns str    'a\\ud800b'.encode('utf-8', h)  -> UnicodeEncodeError
+        handler returns bytes  'a\\ud800b'.encode('utf-8', h)  -> b'a\\xef\\xbf\\xbdb'
+        node                   process.stdout.write("a\\ud800b") -> b'a\\xef\\xbf\\xbdb'
+
+    Bytes are inserted verbatim, so the bytes form is byte-identical to node. chr(0xFFFD) rather
+    than the character or a backslash-u escape, for the reason _JS_WHITESPACE gives above: both
+    of those spellings have been silently transformed on the way into this file before.
+
+    One replacement for the whole unencodable RUN (error.start..error.end), which is what node
+    does per unpaired surrogate; a valid astral character is a surrogate PAIR to UTF-16 but a
+    single code point to Python, never reaches an error handler, and is emitted identically by
+    both runtimes -- MEASURED on U+1F600, both write F0 9F 98 80.
+    """
+    return chr(0xFFFD).encode("utf-8"), error.end
+
+
+codecs.register_error(_JS_SURROGATE_ERRORS, _js_surrogate_replacement)
+
+
 def force_utf8_streams():
     """Make stdout/stderr UTF-8, because node's are, whatever the locale says.
 
@@ -626,13 +658,12 @@ def force_utf8_streams():
             # this function turned "stderr prints an escape" into "the process dies while
             # reporting an error", which is the exact failure it was written to remove.
             #
-            # NO HANDLER MATCHES NODE, so this does not pretend to. MEASURED on "a\ud800b":
+            # NO BUILT-IN HANDLER MATCHES NODE. MEASURED on "a\ud800b":
             #     node                a + EF BF BD + b     (U+FFFD)
             #     strict              UnicodeEncodeError
             #     replace             a?b                  (a QUESTION MARK, not U+FFFD)
             #     backslashreplace    a\ud800b
-            # Exact fidelity needs the substitution at the CALL SITE, which is the pattern
-            # gate_check.py:587 already uses (`_LONE_SURROGATE_RE.sub("�", ...)`) -- an
-            # encoder error handler cannot express it. backslashreplace is chosen as the one that
-            # preserves the information and never raises; it is what stderr already had.
-            reconfigure(encoding="utf-8", errors="backslashreplace")
+            # so a custom one is registered above. See _JS_SURROGATE_ERRORS for why it returns
+            # BYTES: a str replacement is re-encoded through the same codec and hits the same
+            # surrogate rejection, which is what made the obvious spelling of this raise.
+            reconfigure(encoding="utf-8", errors=_JS_SURROGATE_ERRORS)
