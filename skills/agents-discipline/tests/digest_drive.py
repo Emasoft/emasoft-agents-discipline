@@ -69,17 +69,11 @@ CASES = {
     # abstract string, which is the only thing that matters, because both drivers hand it to
     # the SAME serialization contract and compare DIGESTS, not source bytes.
     "lone surrogate": oracle(check="echo " + chr(0xD800)),
-    # See digest-drive.mjs. The key is DELETED, not set to None: `pathValue` is
-    # `process.env.PATH`, and when the variable is unset node yields `undefined`, which
-    # JSON.stringify DROPS from the object entirely. Python has no undefined -- the port must
-    # reproduce the DROP. `None` gives `"path":null` and `""` gives `"path":""`; all three are
-    # different bytes, so all three are different sha256s, so every approval silently fails to
-    # match. This is the one field of the approval identity whose ABSENCE is representable in
-    # JS and not in Python, and no other row here exercises it: all nineteen pass concrete
-    # strings.
-    "absent path (undefined is DROPPED, not null)": {
-        k: v for k, v in oracle().items() if k != "path"
-    },
+    # See digest-drive.mjs: the "absent path" row that stood here was WRONG and is gone.
+    # gate-check.mjs:325 is `String(process.env.PATH || "")`, so an unset PATH becomes the empty
+    # STRING and the key is never dropped -- the row tested a shape the oracle cannot emit.
+    "empty path (unset PATH becomes the empty string, not null)": oracle(path=""),
+    "null path (the --status arm)": oracle(path=None),
     "control chars": oracle(check="a" + chr(1) + "b" + chr(31) + "c"),
     "tab and newline": oracle(check="a" + chr(9) + "b" + chr(10) + "c"),
     "quote and backslash": oracle(check='a"b\\c'),
@@ -124,6 +118,14 @@ def _js_value(value):
     flat str/int fields, so those paths are unreachable there; anything else raises rather
     than guessing.
     """
+    # None -> null. The docstring above said oracle() "returns twelve flat str/int fields", and
+    # that was FALSE: gate-check.mjs:325 is `opt.status ? null : String(process.env.PATH || "")`,
+    # so `path` is genuinely null under --status. This function used to RAISE on it
+    # ("oracle field of unsupported type 'NoneType'"), which is the right default for an
+    # unmodelled type and the wrong answer for one the oracle actually emits. Found by adding
+    # the row, not by reading the docstring.
+    if value is None:
+        return "null"
     # bool BEFORE int: bool subclasses int in Python, so True would render as 1.
     if isinstance(value, bool):
         return "true" if value else "false"

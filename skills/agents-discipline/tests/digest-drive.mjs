@@ -79,23 +79,22 @@ export const CASES = {
   // before the fix -- the driver crashed on it, which is how the SECOND copy of the bug was
   // found. The PRODUCTION function is covered separately, in python-lib-checks, against node.
   "lone surrogate": oracle({ check: "echo " + CH(0xd800) }),
-  // AN ABSENT PATH, which is the sharpest divergence left in the approval identity and is NOT
-  // covered by any other row -- all nineteen pass concrete strings. `pathValue` comes from
-  // `process.env.PATH`, and when a variable is unset node gives `undefined` while Python gives
-  // `None`. MEASURED, same payload shape:
-  //     JS  JSON.stringify({schema:1, path: undefined})  ->  {"schema":1}          KEY DROPPED
-  //     PY  json.dumps({"schema":1, "path": None})       ->  {"schema":1,"path":null}
-  // Different bytes, different sha256, so EVERY APPROVAL SILENTLY FAILS TO MATCH. Reachable:
-  // `env -i`, a scrubbed CI environment, cron. The port must reproduce the DROP, not translate
-  // None to null -- and `os.environ.get("PATH", "")` is not the fix either, since "" is a third
-  // answer (`{"schema":1,"path":""}`).
+  // THE `path` FIELD'S TWO NON-STRING SHAPES. An earlier version of this block had a third,
+  // "absent path (undefined is DROPPED, not null)", built by deleting the key -- and it was
+  // WRONG: a row justified by a hazard the oracle cannot produce, which is the exact defect
+  // this corpus exists to catch in other people's code. gate-check.mjs:325 reads
+  //     const pathValue = opt.status ? null : String(process.env.PATH || "");
+  // so `|| ""` turns an unset PATH into the empty STRING and `String(...)` guarantees a string.
+  // `undefined` never reaches the payload; the key is never dropped. Settled by reading the
+  // line rather than by reasoning about `process.env`.
   //
-  // Spelled by DELETING the key rather than assigning undefined: `{...over}` would copy an
-  // explicit `path: undefined` and JSON.stringify drops it identically, but the two spellings
-  // are not the same object and a reader should see which one is under test.
-  "absent path (undefined is DROPPED, not null)": (() => {
-    const o = oracle({}); delete o.path; return o;
-  })(),
+  // What that same line DOES produce is two shapes no other row covers, and both are three-way
+  // distinct in the hashed bytes ("" vs null vs a real string):
+  "empty path (unset PATH becomes the empty string, not null)": oracle({ path: "" }),
+  // `null` under --status, from the ternary's other arm. json.dumps and JSON.stringify agree on
+  // null, so this row cannot fail today -- it is a CONTROL that the three shapes stay distinct,
+  // and it would redden the moment a port normalized null to "" or dropped it.
+  "null path (the --status arm)": oracle({ path: null }),
   // Characters JSON MUST escape, where the two escape tables can differ.
   "control chars": oracle({ check: "a" + CH(1) + "b" + CH(31) + "c" }),
   "tab and newline": oracle({ check: "a" + CH(9) + "b" + CH(10) + "c" }),
