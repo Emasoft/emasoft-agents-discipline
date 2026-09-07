@@ -873,10 +873,28 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   **This inverts what several commits above were about.** I spent them fixing a portability bug
   in a row CI *does* run, while the instrument that would actually catch cross-platform
   divergence was not wired to CI at all.
+  **WHAT IS AND IS NOT ESTABLISHED ABOUT THE WIRING — no CI run has executed it, nothing is
+  pushed.** Checked statically, and each of these was a live failure mode: the workflow sets
+  `defaults.run.working-directory: skills/agents-discipline` (there is NO root `package.json`,
+  so a step inheriting the repo root would have found nothing); a glob matching NOTHING fails
+  LOUDLY — POSIX `sh` passes the literal pattern through, `bash "tests/*-diff.sh"` errors, and
+  the loop exits 1 (measured in the scratchpad), so a rename reddens CI instead of silently
+  running zero suites; and the twelve carry no live GNU-only or BSD-divergent command — `stat`,
+  `realpath`, `timeout` and `python3.9` appear ONLY inside comments and row-name strings, and
+  the three `grep -P` hits are comments explaining why it was AVOIDED (an earlier session
+  measured macOS grep exiting 2 on `-P`). `python3` is on PATH on all three runners, inferred
+  soundly from `npm test` already invoking it with CI green.
+  **NOT established: that the twelve actually PASS on ubuntu.** Absence of the obvious hazards
+  is not evidence of passing, and darwin is the more restrictive host for GNU tooling, so the
+  inference runs the safe direction only. The first push is the measurement.
 - **HOW FAR THE HOST-SCOPING REACHES, stated at full width because the version in `gates.py` is
   narrower:** every differential suite runs node and python **on the same machine**, so every
-  "identical" claim in this port means *identical on darwin*. Not only the `_LIBUV_PROSE`
-  partition — every errno message, path-semantics assumption and permission-dependent row. And
+  "identical" claim in this port is *evidence gathered on darwin* — a statement about the
+  EVIDENCE, not a claim that each property is host-dependent. Several plainly are not (digest,
+  tonumber, argv pin arithmetic and encoding rules that do not vary by libc); the point is that
+  nothing here distinguishes those from the ones that do, which is exactly the `_LIBUV_PROSE`
+  case. Not only that partition — every errno message, path-semantics assumption and
+  permission-dependent row shares the scope. And
   the permission rows are Unix-scoped by construction (`chmod 300` has no Windows meaning), so
   on Windows the differential coverage would shrink rather than fail. Now that CI runs them on
   ubuntu and macos, glibc-vs-darwin divergence will surface on the next push — which is the
