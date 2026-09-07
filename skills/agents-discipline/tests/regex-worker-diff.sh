@@ -26,6 +26,11 @@ row() {                     # row <label> <source> <flags> <output>
 "*) echo "PROBE FAILED: row '$label' has a newline in its SOURCE, which breaks the key set" >&2
         exit 1 ;;
   esac
+  # EVERY row's key, divergent or not. The set pin below covers only the divergent ones, so
+  # without this an AGREEING row -- including the trap row the swap control depends on -- could
+  # be deleted with nothing noticing.
+  ALL_KEYS="$ALL_KEYS$src<$flags>
+"
   local msg o1 o2 e1 e2
   # jq builds the JSON so a backslash-heavy pattern reaches each side unmangled. Hand-rolled
   # string concatenation is how a `\d` becomes a `d` in exactly one of the two paths and the
@@ -62,6 +67,7 @@ row() {                     # row <label> <source> <flags> <output>
   fi
 }
 DIVERGENT_KEYS=""
+ALL_KEYS=""
 
 # --- the engine-difference corpus -------------------------------------------------------
 # Each row names the property under test. A row that cannot distinguish the engines is a
@@ -103,12 +109,23 @@ row 'octal-looking escape'           '\101'        ''  'A'
 row 'unicode property escape'        '\p{L}'       'u' 'a'
 
 echo
-if [ "$rows" -lt 15 ]; then
-  # NON-VACUITY: a corpus that silently shrank (an editing accident, a `row` call lost to a
-  # bad heredoc) would report "all identical" over nothing at all. Same gate as lease-diff.sh,
-  # and for the same reason: the diff passing is not evidence the diff ran.
-  echo "VACUOUS: only $rows rows executed"; exit 1
+# NON-VACUITY: a corpus that silently shrank (an editing accident, a `row` call lost to a bad
+# heredoc) would report "all identical" over nothing at all. Same gate as lease-diff.sh.
+#
+# EQUALITY, not a floor. The floor was `-lt 15` while the corpus held 22, so SEVEN rows could
+# be deleted before it noticed -- and the set pin protects only the 7 DIVERGENT ones, leaving
+# every agreeing row unguarded. Among those is `dollar with m flag agrees`, which exists solely
+# to make the `$`->`\Z` recipe fail and which the TRDD's swap control depends on. Deleting it
+# alone left the suite green, with the trap silently gone until someone implemented the recipe.
+EXPECTED_ROWS=22
+if [ "$rows" != "$EXPECTED_ROWS" ]; then
+  echo "VACUOUS: $rows rows executed, expected $EXPECTED_ROWS (adding a row? update this)"; exit 1
 fi
+# And name the trap row explicitly, because a count alone permits swapping it for another.
+case "$ALL_KEYS" in
+  *'b$<m>'*) ;;
+  *) echo "VACUOUS: the 'dollar with m flag agrees' trap row (b\$<m>) is gone"; exit 1 ;;
+esac
 echo "$rows rows, $differed divergent"
 # PINNED TO THE SET OF LABELS, NOT THEIR COUNT. `RegExp` and `re` genuinely disagree on these
 # rows and the fix is an undecided design question (emulate JS semantics, or document the

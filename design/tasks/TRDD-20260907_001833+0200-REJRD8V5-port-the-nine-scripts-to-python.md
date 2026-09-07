@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T03:19:00+0200
+updated: 2026-09-07T03:38:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -585,11 +585,46 @@ difference — but every call site has to drop the await). One item left:
    both needed one is the evidence, not a coincidence. Differential over the other six,
    measured 2026-09-07:
 
-   | function | verdict |
+   Now a COMMITTED differential — `tests/path-api-diff.sh` + `path-api-drive.mjs` /
+   `path_api_drive.py` — because the first version of this measurement was four scripts in
+   `/tmp`, and a table citing evidence the repo cannot reproduce is the same defect as an
+   instruction whose inputs have vanished. The Python driver deliberately uses the PORTED
+   helper where one exists (`_js_join`, `js_basename`) and plain `os.path` where none does, so
+   the divergence set IS the list of functions still needing a port.
+
+   | function | verdict (darwin; see the platform caveat below) |
    |---|---|
-   | `isAbsolute`, `resolve`, `sep`, `delimiter` | **agree** on every probed case |
+   | `isAbsolute`, `join`, `basename` | agree on the probed corpus |
+   | `sep`, `delimiter` | agree **by definition**, not by probe — they are platform constants, so one observation on one platform is not a survey. (They also match on Windows: `\` and `;` both sides.) |
    | `relative` | **DIVERGES**: identical paths → JS `""`, Python `"."` |
-   | `dirname` | **DIVERGES on 5 of 7**: `/a/`→`/` vs `/a`; `a`→`.` vs `""`; `""`→`.` vs `""`; `//`→`/` vs `//`; `/a//b//`→`/a/` vs `/a//b` |
+   | `dirname` | **DIVERGES on 5 of 10**: `/a/`→`/` vs `/a`; `a`→`.` vs `""`; `""`→`.` vs `""`; `//`→`/` vs `//`; `/a//b//`→`/a/` vs `/a//b` |
+   | `resolve` | **DIVERGES, for TWO independent reasons** — and an earlier five-row corpus reported it as AGREEING |
+
+   **`resolve` is the important one, and the way it was missed twice is the lesson.**
+   - *Reason 1 — leading `//`.* POSIX gives exactly two leading slashes implementation-defined
+     meaning: Python's `posixpath` PRESERVES them (collapsing three or more), node collapses to
+     one. MEASURED: `//a` → `/a` vs `//a`; `//` → `/` vs `//`; `//a/b` → `/a/b` vs `//a/b`;
+     `//a/../b` → `/b` vs `//b`; `///a` → `/a` both. The first corpus was all single-slash, so
+     it probed everything except the shape where the normalisers are documented to differ.
+   - *Reason 2 — absolute segments.* `resolve("/a","/b")` is `/b` (a later absolute segment
+     RESETS); node's `join` does not discard, so `_js_join` correctly gives `/a/b`.
+   - **The `/tmp` probe reported "resolve agrees" through a TWO-WRONGS-CANCEL.** It built
+     Python's resolve as `abspath(os.path.join(...))`. `os.path.join` DISCARDS before an
+     absolute segment (`join("/a","/b")` → `/b`) where node's does NOT (`/a/b`) — so
+     `os.path.join` is a *wrong* port of node's `join`, and its wrongness is exactly the reset
+     `resolve` needs. The bad helper produced the right answer and hid the gap. Substituting
+     the CORRECT `_js_join` is what exposed it.
+   - **Why it matters most:** `resolve` feeds `approvalPath`'s sha256 identity (`:372`) and
+     `oracle().cwd`. One character changes the digest, and that is the silent
+     total-approval-failure mode ranked highest above.
+
+   **PLATFORM CAVEAT — every "agree" above is a darwin verdict.** The corpus is POSIX-shaped
+   and was run on one OS, in a codebase that has a `WIN32` branch, `WINDOWS_ENV`, and a
+   `windows_taskkill_path` section. `isAbsolute("C:\\x")` was evaluated by POSIX rules on both
+   sides, so it tests nothing about Windows despite looking like it does. Related: the claim
+   *"resolve never returns a trailing slash except `/`"* (used to argue `dirname`'s divergent
+   shapes are unreachable at `:336`) is POSIX-only — on Windows `resolve("C:\\")` returns
+   `C:\`. The conclusion probably survives, the premise as written does not.
 
    **Both divergent ones are load-bearing, and both currently survive BY LUCK — say so rather
    than either alarming or dismissing:**
@@ -599,11 +634,22 @@ difference — but every call site has to drop the await). One item left:
    - `relative` is used once, at `:363`, inside **`pathIsInside`** — which gates the security
      check *"AGENTS_DISCIPLINE_APPROVAL_DIR must be outside the repository root"* (`:371`), and
      is also how `approvalPath` stays confined. The `""` vs `"."` difference lands on the
-     function's FIRST clause (`rel === ""`). MEASURED: a naive `os.path.relpath` port agrees
-     with the oracle on all 10 probed cases — because `"."` also satisfies the third clause, so
-     the first is redundant with it. **The guard is correct today for a reason that is not the
-     one it is written to express.** A port must not "simplify" that first clause away, and
-     must not assume the helper is equivalent.
+     function's FIRST clause (`rel === ""`).
+
+     **That clause is PROVABLY inert, not merely probed** — an earlier draft said "agrees on
+     all 10 probed cases", understating evidence that is actually a proof. Clause 1 can only
+     matter when `rel === ""`, and on that single value every conjunct of clause 3 holds:
+     `"".startsWith("../")` is false, `"" !== ".."`, `isAbsolute("")` is false. So clause 3 is
+     unconditionally true whenever clause 1 is, for EVERY input. The same holds for Python's
+     `"."`. All four combinations (JS-faithful `relative` or `os.path.relpath` × clause kept or
+     dropped) give identical verdicts, which a 10-case probe corroborates.
+
+     **The prescription attached to this was self-contradictory and is withdrawn.** It said a
+     port "must not simplify that first clause away" — one paragraph after showing the clause
+     is inert, which reads as "removing it changes behaviour". It does not. Keeping it is a
+     style call about documenting intent, not a correctness requirement. What DOES stand:
+     **the helper is not equivalent**, so do not assume `os.path.relpath` can stand in for
+     `relative` anywhere else.
 
    Recorded because it happened while measuring the above: the throwaway comparison script
    reported `VERDICT: DIVERGES` for `pathIsInside` when the two sides were IDENTICAL — Python's
