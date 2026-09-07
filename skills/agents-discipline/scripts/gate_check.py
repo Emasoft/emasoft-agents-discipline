@@ -4,11 +4,13 @@
 Port of gate-check.mjs. The JavaScript suite is the ORACLE: it is held FIXED and only this
 implementation varies, so any divergence is a porting defect and never a re-specified test.
 
-PARTIAL PORT -- THE ARGUMENT FRONT END, TARGET DISCOVERY, LEDGER-EXISTENCE CHECKS, THE
---list-scopes/--log/--claim/--release ACTIONS, THE DEFAULT RUN MODE'S LEDGER LOADING, GATE
-SELECTION, FULL APPROVAL-CLASSIFICATION LOOP, AND (NEW) CHECK EXECUTION -- spawning
-lib/check_supervisor.py, the regex-worker subprocess pool, process-tree teardown, per-check
-timeouts, and the PASS/FAIL print loop -- gate-check.mjs:27-793.
+FULL PORT of gate-check.mjs:27-950 -- the argument front end, target discovery,
+ledger-existence checks, the --list-scopes/--log/--claim/--release actions, the default run
+mode's ledger loading, gate selection, the full approval-classification loop, CHECK execution
+(spawning lib/check_supervisor.py, the regex-worker subprocess pool, process-tree teardown,
+per-check timeouts, and the PASS/FAIL print loop), the ledger EVIDENCE rewrite under
+withFileLock (stale-result detection included), and the final reloaded-ledger MET/UNMET/
+ABANDONED tally that decides the process exit code.
 
 The boundary sat at :295 (the `--claim`/`--release` block's closing brace) until this pass
 moved it forward. It CANNOT sit at :297 (`ledgers = target.files.map(loadLedger)`, where the
@@ -24,12 +26,8 @@ silently diverges the moment `--approve` is passed (which tests/run-tests.mjs:45
 into nearly every case) -- exactly the shape of bug a differential run without that flag would
 never catch.
 
-The boundary now ends exactly at gate-check.mjs:793, the last line of the RUN results
-PASS/FAIL print loop, one statement before `function failureOutput(...)`'s call site chain
-resumes into `function evidenceFor(result)` at :802 -- the start of the ledger-mutation half
-(rewriting EVIDENCE lines under `withFileLock`, detecting stale results, and the final
-MET/UNMET/ABANDONED tally). Everything that SPAWNS a process or a worker in this default run
-mode is now ported: `runRolling`/`run_rolling` (:700-714), `runCheck`/`run_check`
+Everything that SPAWNS a process or a worker in this default run
+mode is ported: `runRolling`/`run_rolling` (:700-714), `runCheck`/`run_check`
 (:593-698, spawning lib/check_supervisor.py -- ported here as CHECK_SUPERVISOR -- as a
 detached process-group leader, capturing stdout/stderr with the same live MAX_OUTPUT_BYTES
 cap, tearing the group down via lib/process_tree.py's `terminate_process_tree` on overflow or
@@ -41,32 +39,20 @@ REGEX_STARTUP_TIMEOUT_MS/REGEX_TIMEOUT_MS pair). These are LOCAL to gate-check.m
 for any of them in lib/gates.mjs), so they are ported HERE rather than assumed to already
 exist in lib/gates.py.
 
-Ported in this pass: ledger loading (:297), the `pending` gate-selection loop with real CWD
+Ledger loading (:297), the `pending` gate-selection loop with real CWD
 resolution and validation (:716-739), shell resolution and the full approval-token machinery
 -- `resolveShell`/`oracle`/`approvalOracleSignature`/`approvalPath`/`validatedApprovalDir`/
 `assertPrivateApprovalEntry`/`assertApprovalDirUnchanged`/`readApprovalFile`/`approvalExists`/
 `recordApproval`/`printOracle` (:299-519) -- the classification loop that turns `pending` into
 `runnable`/`notRun` while genuinely reading and writing the on-disk approval store
-(:741-775) -- and now CHECK execution itself: `runCheck`, `safeRegexMatch`, `runRolling`,
+(:741-775) -- CHECK execution itself: `runCheck`, `safeRegexMatch`, `runRolling`,
 `outputFingerprint`, and `failureOutput` (:538-800), all spawning real subprocesses rather
-than being stubbed.
-
-PORT_INCOMPLETE_EXIT (90) now fires unconditionally the moment this file would continue past
-the PASS/FAIL print loop -- not only when `results` is non-empty. The same reasoning as the
-earlier boundary still applies to the NEXT one: the oracle's tail (the staleResults
-ledger-rewrite loop, the reloaded-ledger MET/UNMET tally, dispatchStatus aggregation, the
-extraUnmet bookkeeping across `--reverify` and stale results) is complex enough that
-reproducing it from an empty-`results` shortcut would have been exactly the kind of "looks
-complete, is not measured" simplification this project's own history keeps warning about. So
-the sentinel fires every time, and the next porting pass inherits a clean, single,
-textually-obvious boundary instead of a conditional one that would need re-auditing later.
-Anything past that boundary exits PORT_INCOMPLETE_EXIT (90) with a message naming the stop.
-
-That is deliberate and load-bearing: a partial port that fell through to a silent success
-would let a differential PASS on a vector it never actually implemented, which is this
-project's recurring defect (an assertion satisfied by something other than the property it
-names). 90 collides with no oracle exit code, so a vector that runs off the end of the port is
-always visible as a divergence rather than as agreement.
+than being stubbed -- and, finally, the ledger-mutation half: `evidenceFor`/
+`insertOrUpdateEvidence` writing PASS/FAIL back into EVIDENCE lines under `withFileLock`
+(:802-858), the reloaded-ledger MET/UNMET/ABANDONED tally (:861-895), `dispatchStatus`
+aggregation for a scoped pipeline's native dispatch waves (:897-910), and the `extraUnmet`
+bookkeeping across `--reverify` and stale results that decides the final exit code
+(:912-950).
 
 That range claim is ENUMERATED, not induced from the codes a few scenarios happened to produce
 -- a bound asserted from observation is exactly the shape this task has had to retract twice.
@@ -102,6 +88,7 @@ of differential divergence in every ported script at once.
 """
 
 import errno as _errno
+import hashlib
 import json
 import math
 import os
@@ -117,10 +104,12 @@ import typing
 _LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
 sys.path.insert(0, _LIB_DIR)
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
-    AGENTS_DISCIPLINE_DIR, MAX_CHECK_OUTPUT_BYTES, claim_leases, gate_definition_digest,
-    gate_state, js_dirname, js_resolve, list_scopes, parse_gates, qualify,
+    AGENTS_DISCIPLINE_DIR, MAX_AUTOMATIC_EVIDENCE_CHARS, MAX_CHECK_OUTPUT_BYTES,
+    automatic_evidence_prefix, claim_leases, format_document, gate_definition_digest,
+    gate_state, js_basename, js_dirname, js_resolve, list_scopes, parse_gates, qualify,
     read_stable_regular_file, release_leases, resolve_target, same_file_identity, sha256,
-    sleep, stat_current_named_file, append_status, validate_scope_id, write_atomic,
+    sleep, stat_current_named_file, append_status, validate_scope_id, with_file_lock,
+    write_atomic,
     # Underscore-prefixed: module-private in gates.py, but already the CORRECT port of the
     # exact primitives gate-check.mjs's own approval machinery needs (path.join,
     # pathIsInside, and JSON.stringify-as-text). REUSE them rather than re-derive a second,
@@ -128,7 +117,7 @@ from gates import (  # noqa: E402  # type: ignore[import-not-found]
     _js_join, _js_json_text, _LONE_SURROGATE_RE, _path_is_inside,
 )
 from jsapi import js_json_object, js_length, js_slice, js_to_number, js_trim  # noqa: E402  # type: ignore[import-not-found]
-from dispatch import _iso_now  # noqa: E402  # type: ignore[import-not-found]
+from dispatch import _iso_now, dispatch_status  # noqa: E402  # type: ignore[import-not-found]
 from process_tree import terminate_process_tree  # noqa: E402  # type: ignore[import-not-found]
 
 # gate-check.mjs:72 -- the sibling supervisor process that keeps a stable process-group
@@ -189,10 +178,6 @@ MAX_APPROVAL_BYTES = 256 * 1024
 REGEX_TIMEOUT_MS = 250
 REGEX_STARTUP_TIMEOUT_MS = 5000
 MAX_REGEX_WORKERS = 4
-
-# Exit code for "this vector reached un-ported territory". NOT an oracle exit code (0/1/2/3),
-# so it can never be mistaken for agreement -- see the module docstring.
-PORT_INCOMPLETE_EXIT = 90
 
 # gate-check.mjs:78, expressed as RANGES and assembled at import time.
 #
@@ -560,6 +545,7 @@ def main(argv):
         shell = None
         path_value = None
         path_transcript = None
+        path_evidence = None
     else:
         def executable_candidates(name):
             """gate-check.mjs:299-304."""
@@ -596,6 +582,26 @@ def main(argv):
         path_value = str(os.environ.get("PATH") or "")
         path_transcript = (re.sub(r"[\r\n]", " ", js_slice(path_value, 0, 800))
                             + ("..." if js_length(path_value) > 800 else ""))
+        # gate-check.mjs:326-328. `os.pathsep` is node's `path.delimiter` exactly (":" on
+        # posix, ";" on win32). Unlike resolve_shell's own PATH split above, this one does
+        # NOT filter empty segments -- `pathValue.split(delimiter).length` counts them.
+        # NOT gates.py's sha256() -- it is deliberately FAIL-CLOSED on a lone surrogate, and
+        # that is right for the LOCK key it was written for (node hashes a lossy key there, so
+        # two different paths can share one lock; refusing is safer). This is a DISPLAY hash in
+        # the RUN transcript, where the oracle at :326 emits a value, so refusing is a crash
+        # where the oracle prints -- measured: UnicodeEncodeError at this line on a PATH
+        # carrying one invalid UTF-8 byte, while gate-check.mjs completes.
+        #
+        # gates.py's own comment says "no spelling of errors= reproduces Node's
+        # one-U+FFFD-per-surrogate" -- true of errors= ("replace" gives "?", surrogatepass gives
+        # three bytes), and it does not follow that nothing reproduces it. An explicit
+        # substitution does, exactly: for "/usr/bin:\udcff" both node and this line give
+        # 29f7a3f616c4. So the port matches the oracle here rather than trading a fail-closed
+        # divergence for a crash.
+        path_hash = hashlib.sha256(
+            _LONE_SURROGATE_RE.sub("�", path_value).encode("utf-8")).hexdigest()[:12]
+        path_count = len(path_value.split(os.pathsep)) if path_value else 0
+        path_evidence = path_hash + "/" + str(path_count) + " entries"
 
     def oracle(file, gate):
         """gate-check.mjs:340-356. `sys.platform` matches node's `process.platform` for every
@@ -1227,24 +1233,169 @@ def main(argv):
             log("  FAIL " + qualify(result["file"], result["gate"]["id"]) + ": " + str(result["gate"]["title"]))
             log("       " + ((result["error"] + "; ") if result["error"] else "") + outcome)
 
-    # THE PORT STOPS HERE -- gate-check.mjs:794, the `failureOutput` declaration boundary is
-    # already crossed above; the actual next unported statement is gate-check.mjs:802
-    # (`function evidenceFor(result)`), which starts the ledger-mutation half: writing
-    # PASS/FAIL back into EVIDENCE lines under withFileLock, detecting stale results, and the
-    # final MET/UNMET/ABANDONED tally that decides the process exit code. That half touches
-    # disk state (ledger files) rather than spawning processes, so it is a distinct, separable
-    # remaining vector -- left unported rather than guessed. Loud on purpose: see the module
-    # docstring on why a silent fall-through would let a differential agree on a vector
-    # nothing implemented.
-    error("gate_check.py: PORT INCOMPLETE -- ledger loading, gate selection, the full "
-          "approval-classification loop, and CHECK execution (spawning lib/check_supervisor.py, "
-          "the regex worker pool, process-tree teardown, per-check timeouts, and the PASS/FAIL "
-          "print loop) end at gate-check.mjs:793; the ledger EVIDENCE rewrite and the final "
-          "MET/UNMET/ABANDONED verdict tally are not ported yet. jobs=" + str(jobs)
-          + " pending=" + str(len(pending)) + " runnable=" + str(len(runnable)) + " not_run="
-          + str(len(not_run)) + " approval_infra_failures=" + str(approval_infrastructure_failures)
-          + " results=" + str(len(results)))
-    sys.exit(PORT_INCOMPLETE_EXIT)
+    def evidence_for(result):
+        """gate-check.mjs:802-812. Order matters: the definition binding and the successful-
+        output fingerprint sit ahead of machine-specific fields so MAX_AUTOMATIC_EVIDENCE_CHARS
+        truncates only transcript detail, never the structural currentness or output identity."""
+        def clean(value):
+            return re.sub(r"[\r\n\t]+", " ", terminal_safe(value))
+        fingerprint = result["outputFingerprint"]
+        text = (automatic_evidence_prefix(result["definitionDigest"])
+                + " exit=0; EXPECT=matched; output-sha256=" + fingerprint["sha256"]
+                + "; output-bytes=" + str(fingerprint["bytes"]) + "; shell=" + clean(shell)
+                + "; cwd=" + clean(result["cwd"]) + "; path=" + path_evidence)
+        return js_slice(text, 0, MAX_AUTOMATIC_EVIDENCE_CHARS)
+
+    def insert_or_update_evidence(doc, gate, value):
+        """gate-check.mjs:814-823."""
+        if gate["evidenceLine"] != -1:
+            indent_match = re.match(r"^\s*", doc["lines"][gate["evidenceLine"]])
+            indent = indent_match.group(0) if indent_match else "  "
+            doc["lines"][gate["evidenceLine"]] = indent + "EVIDENCE: " + value
+            return
+        line = gate["line"] + 1
+        while line < len(doc["lines"]) and re.match(r"^\s+(CHECK|EXPECT|EVIDENCE|CWD):", doc["lines"][line]):
+            line += 1
+        doc["lines"].insert(line, "  EVIDENCE: " + value)
+
+    def result_key(file, gate_id):
+        """gate-check.mjs:825: `resolve(file) + "\\0" + id`."""
+        return js_resolve(file) + "\0" + gate_id
+
+    # gate-check.mjs:826-858: rewrite EVIDENCE lines for this run's results under a per-file
+    # lock, re-reading the ledger fresh so a concurrent edit is detected as staleness rather
+    # than clobbered.
+    stale_results = {}
+    any_lock_write_failed = False
+    for result in results:
+        def rewrite(result=result):
+            doc = parse_gates(read_ledger_file(result["file"]))
+            if doc["errors"]:
+                raise RuntimeError("fresh ledger became invalid: " + "; ".join(doc["errors"]))
+            fresh = next((g for g in doc["gates"] if g["id"] == result["gate"]["id"]), None)
+            if (fresh is None
+                    or gate_definition_digest(fresh) != result["definitionDigest"]
+                    or approval_oracle_signature(result["file"], fresh) != result["approvalSignature"]):
+                stale_results[result_key(result["file"], result["gate"]["id"])] = \
+                    qualify(result["file"], result["gate"]["id"])
+                log("  STALE " + qualify(result["file"], result["gate"]["id"])
+                    + ": definition or runtime approval oracle changed; result not written")
+                return
+            fresh_state = gate_state(fresh, doc["abandoned"])
+            if fresh_state == "abandoned":
+                return
+            must_write_failure = (result["startingState"] == "stale-unmet"
+                                   or (bool(opt.get("reverify")) and result["wasMet"])
+                                   or fresh["checked"])
+            if not result["ok"] and not must_write_failure:
+                return
+            if result["ok"]:
+                doc["lines"][fresh["line"]] = re.sub(
+                    r"^- \[( |x|X)\]", "- [x]", doc["lines"][fresh["line"]])
+                insert_or_update_evidence(doc, fresh, evidence_for(result))
+            else:
+                doc["lines"][fresh["line"]] = re.sub(
+                    r"^- \[(x|X)\]", "- [ ]", doc["lines"][fresh["line"]])
+                insert_or_update_evidence(doc, fresh, "pending")
+            write_atomic(result["file"], format_document(doc))
+
+        try:
+            with_file_lock(root, result["file"], rewrite)
+        except Exception as exc:  # noqa: BLE001 -- the oracle's catch is equally wide
+            error("gate-check: cannot update " + result["file"] + ": " + str(exc))
+            any_lock_write_failed = True
+    if any_lock_write_failed:
+        sys.exit(2)
+
+    # gate-check.mjs:861-895: reload every ledger fresh (this run's rewrites just landed) and
+    # tally MET/UNMET/ABANDONED from that reloaded state -- never from the in-memory `results`.
+    ledgers = [load_ledger(f) for f in target["files"]]
+    total_met = 0
+    total_unmet = 0
+    total_abandoned = 0
+    reverified = 0
+    unmet_ids = []
+    abandoned_ids = []
+    final_states = {}
+    for result in results:
+        if (opt.get("reverify") and result["wasMet"]
+                and result_key(result["file"], result["gate"]["id"]) not in stale_results):
+            reverified += 1
+
+    for ledger in ledgers:
+        for gate in ledger["doc"]["gates"]:
+            state = gate_state(gate, ledger["doc"]["abandoned"])
+            final_states[result_key(ledger["file"], gate["id"])] = state
+            if state == "abandoned":
+                total_abandoned += 1
+                abandoned_ids.append(qualify(ledger["file"], gate["id"]))
+            elif state == "met":
+                total_met += 1
+            else:
+                total_unmet += 1
+                unmet_ids.append(qualify(ledger["file"], gate["id"]))
+                if opt.get("status"):
+                    reason = ("unchecked" if state == "unmet"
+                              else "checked but EVIDENCE pending" if state == "unmet-no-evidence"
+                              else "checked but automatic evidence is stale or unbound")
+                    log("  UNMET " + qualify(ledger["file"], gate["id"]) + " (" + reason + "): "
+                        + str(gate["title"]))
+        log(js_basename(ledger["file"]) + ": " + str(len(ledger["doc"]["gates"])) + " gates")
+
+    # gate-check.mjs:897-910: a scoped pipeline is complete only when both its ledgers and its
+    # native dispatch waves are resolved.
+    aggregate_dispatch = dispatch_status(root, scope)
+    if aggregate_dispatch["errors"]:
+        for dispatch_error in aggregate_dispatch["errors"]:
+            error("gate-check: " + dispatch_error)
+        sys.exit(2)
+    total_abandoned += len(aggregate_dispatch["abandoned"])
+    abandoned_ids.extend(aggregate_dispatch["abandoned"])
+    if opt.get("status"):
+        for blocker in aggregate_dispatch["blocking"]:
+            log("  UNMET " + blocker)
+
+    # gate-check.mjs:912-950: the final verdict -- extraUnmet folds back in results that were
+    # never reverified (still trusted as met, but not actually re-checked this run) and stale
+    # results discarded above, then the exit code is chosen from the aggregate.
+    where = " [scope " + scope + "]" if scope else ""
+    verify_note = (", reran: " + str(len(results)) + ", previously met reverified: " + str(reverified)
+                   if opt.get("reverify") else "")
+    unverified_met = [task for task in not_run if task["wasMet"]] if opt.get("reverify") else []
+    extra_unmet = {}
+    for task in unverified_met:
+        key = result_key(task["file"], task["gate"]["id"])
+        state = final_states.get(key)
+        if state == "met" or key not in final_states:
+            extra_unmet[key] = qualify(task["file"], task["gate"]["id"]) + " (reverify not run)"
+    for key, label in stale_results.items():
+        state = final_states.get(key)
+        if state == "met" or key not in final_states:
+            extra_unmet[key] = label + " (stale result discarded)"
+    effective_unmet = total_unmet + len(extra_unmet) + len(aggregate_dispatch["blocking"])
+    unmet_ids.extend(extra_unmet.values())
+    unmet_ids.extend(aggregate_dispatch["blocking"])
+    if approval_infrastructure_failures:
+        error("gate-check: infrastructure failure prevented "
+              + str(approval_infrastructure_failures) + " approval(s)")
+        sys.exit(2)
+    if effective_unmet == 0 and total_abandoned == 0:
+        log("ALL MET (" + str(total_met) + " met" + verify_note + ")" + where)
+        sys.exit(0)
+    if total_abandoned:
+        log("HANDOFF REQUIRED: " + str(total_abandoned) + " abandoned (met: "
+            + str(max(0, total_met - len(extra_unmet)))
+            + (", unmet: " + str(effective_unmet) if effective_unmet else "")
+            + verify_note + ")" + where)
+        log("  " + ", ".join(abandoned_ids[:12])
+            + (", +" + str(len(abandoned_ids) - 12) + " more" if len(abandoned_ids) > 12 else ""))
+    if effective_unmet:
+        log("UNMET: " + str(effective_unmet) + " (met: " + str(max(0, total_met - len(extra_unmet)))
+            + (", abandoned: " + str(total_abandoned) if total_abandoned else "")
+            + verify_note + ")" + where)
+        log("  " + ", ".join(unmet_ids[:12])
+            + (", +" + str(len(unmet_ids) - 12) + " more" if len(unmet_ids) > 12 else ""))
+    sys.exit(1)
 
 
 if __name__ == "__main__":
