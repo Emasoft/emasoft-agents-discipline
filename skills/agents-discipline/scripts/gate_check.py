@@ -109,7 +109,7 @@ from gates import (  # noqa: E402  # type: ignore[import-not-found]
     # exact primitives gate-check.mjs's own approval machinery needs (path.join,
     # pathIsInside, and JSON.stringify-as-text). REUSE them rather than re-derive a second,
     # driftable copy -- the standing rule for every helper this project has already ported.
-    _js_join, _js_json_text, _path_is_inside,
+    _js_join, _js_json_text, _LONE_SURROGATE_RE, _path_is_inside,
 )
 from jsapi import js_json_object, js_length, js_slice, js_to_number  # noqa: E402  # type: ignore[import-not-found]
 from dispatch import _iso_now  # noqa: E402  # type: ignore[import-not-found]
@@ -729,14 +729,38 @@ def main(argv):
                     raise RuntimeError("timed out waiting for approval lock")
                 sleep(20)
         try:
-            os.write(fd, json.dumps({"owner": owner, "pid": os.getpid(),
-                                     "at": int(time.time() * 1000)}).encode("utf-8"))
+            # gate-check.mjs:494 is `JSON.stringify({owner, pid, at})` -- COMPACT, no indent.
+            # _js_json_text, not a bare json.dumps, for the same two reasons gates.py:1623 gives
+            # at the identical write: json.dumps defaults to `", "`/`": "` where JSON.stringify
+            # emits `,`/`:`, and it leaves a lone surrogate raw so the .encode below raises where
+            # the oracle writes the file. `owner` is a token today, but a helper is chosen for
+            # what the call site GUARANTEES, not for what today's inputs happen to be.
+            os.write(fd, _js_json_text({"owner": owner, "pid": os.getpid(),
+                                        "at": int(time.time() * 1000)}).encode("utf-8"))
             value = {
                 "schema": 1, "file": js_resolve(file), "gate": gate["id"],
                 "signature": approval_oracle_signature(file, gate),
                 "oracle": oracle(file, gate), "approvedAt": _iso_now(),
             }
-            write_atomic(token, json.dumps(js_json_object(value), indent=2, ensure_ascii=False) + "\n")
+            # gate-check.mjs:500 is `JSON.stringify(value, null, 2) + "\n"`. `_js_json_text` is
+            # NOT usable verbatim here -- it hardcodes compact separators for the DIGEST path,
+            # where compactness is part of the hashed bytes -- so this repeats only its lone-
+            # surrogate substitution over an indent=2 dump, sharing the PATTERN so the two cannot
+            # drift apart on what counts as a surrogate.
+            #
+            # WHY THIS LINE EXISTS: it shipped as a bare json.dumps and that was a live bug, the
+            # THIRD instance of one class (gates.py:961 and digest_drive.py:147 are the other
+            # two). ensure_ascii=False leaves a lone surrogate raw, write_atomic then encodes
+            # utf-8, and the port raises UnicodeEncodeError where the oracle writes the approval
+            # and exits 0 -- so the port classified the task not_run instead. Reachable without
+            # anything exotic: CPython surrogateescape-decodes sys.argv ITSELF, so one invalid
+            # UTF-8 byte in --cwd (or in PATH) puts a U+DCxx into `oracle`, which this line
+            # serializes. Found by an end-to-end differential, not by reading; the import list at
+            # :108 already said "REUSE them rather than re-derive a second, driftable copy", and
+            # the rule being written down two hundred lines above did not stop the call site.
+            write_atomic(token, _LONE_SURROGATE_RE.sub(
+                lambda m: "\\u%04x" % ord(m.group(0)),
+                json.dumps(js_json_object(value), indent=2, ensure_ascii=False)) + "\n")
             assert_approval_dir_unchanged(store)
         finally:
             try:
