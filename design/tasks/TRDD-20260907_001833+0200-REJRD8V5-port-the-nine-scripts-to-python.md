@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T12:09:51+0200
+updated: 2026-09-07T12:16:19+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -678,18 +678,32 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   **THE BIGGER DEFECT IS DATA LOSS, AND MY FIRST FIX WRAPPED IT INSTEAD OF FIXING IT.** That line
   used a RAW `os.write`, which returns a count and may write FEWER bytes — so a short write
   truncated the approval-lock JSON that the oracle's `writeFileSync` (`gate-check.mjs:494`) writes
-  whole. `write_all` exists in this codebase for precisely this, and says so in its own docstring:
-  *"The consequence is not a wrong message, it is data loss."* `write_atomic` and `append_status`
-  both use it; this sibling reached for the primitive. **I hardened the error text on a line whose
-  real defect corrupts a file** — strictly worse than the divergence I fixed. Now
+  whole. `write_all` exists in this codebase for precisely this. `write_atomic` and
+  `append_status` both use it; this sibling reached for the primitive. Now
   `node_call("write", write_all, fd, …)`.
 
-  **FOURTH INSTANCE OF ONE LESSON, and it has stopped being about naming:** `node_fs_message`,
-  `mkdirs`, `node_call`, now `write_all`. Every time a private helper in `gates.py` was needed
-  next door, the neighbour went without and grew a defect — three message defects and now a
-  data-loss one. **The generalization, not another rename:** a helper written to prevent a class
-  of bug must be importable by everyone who could hit that class, or the underscore itself becomes
-  the cause.
+  **SEVERITY, CORRECTED — "data loss" and "strictly worse than the divergence I fixed" was an
+  unqualified REACHABILITY claim, the kind I got wrong two commits ago.** The payload is ~60-80
+  bytes to a regular file on a blocking fd, where POSIX writes all or fails: at that size
+  `RLIMIT_FSIZE`/`ENOSPC` produce a FAILED write, which the raw `os.write` would have raised, not
+  a partial one. Honest grade: **LATENT, no demonstrated trigger at this payload size** — the same
+  "unreachable by fixture, fixed because the helper exists" category as the lstat trio. The fix
+  stands on the ladder, not on the severity. **This is the overclaim that would have survived:**
+  every earlier one was caught by a reviewer measuring something, and this one cannot be measured
+  cheaply, so it would have been inherited as fact.
+
+  **A PRIOR REVIEW ALREADY FOUND IT AND IT WAS DEFERRED** — `reports/port-review/20260907_053738…`
+  lists it as "F3 — one-line swap to `write_all` when convenient". Filed, correctly triaged as
+  minor, then not done; it resurfaced only because an unrelated audit walked the same line. The
+  deferral-nobody-re-reads pattern, which this sweep had already documented once.
+
+  **FOUR CASES, NOT ONE LESSON — the tidy version inflates them.** `node_fs_message` and
+  `node_call` were needed by a SECOND MODULE (real import friction). `mkdirs` and `write_all` were
+  needed by a sibling call site in a file that ALREADY imported `gates` — no import barrier at
+  all; the author simply did not reach for the helper. The second pair's cause is
+  DISCOVERABILITY, not privacy, and "make it public" does not address it. An earlier draft said
+  "the underscore itself becomes the cause", which is rhetorically strong and causally false: a
+  public name makes reaching easier, it does not make anyone look.
   **USER-VISIBLE, traced not assumed:** `read_approval_file` → `approval_exists` → the catch at
   `:987`, which prints `node_fs_message(exc, "open")`. So a failing `fstat`/`read` reached a user
   labelled `open`. **Evidence grade differs across the six, and the difference is real:** that
@@ -751,11 +765,20 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   grep over the oracles as suspect until the file is known to be NUL-free. The port's
   `ledger_check.py` has no NUL (it uses the `"\0"` escape, the same sentinel VALUE, so there is
   no behavioural divergence).
-  **BOUNDED BY A GENUINELY REPO-WIDE SCAN — the first attempt was not one.** It used
-  `glob("**/*")`, which skips every DOTTED path by default, so `.github/`, `.claude/` and
-  `.janitor/` were never entered and the `.git` exclusion was redundant because glob had already
-  skipped it. Re-run with `Path.rglob`, which does not: **121 files, exactly one carries a NUL**,
-  this one. The claim survives; the scan behind its first publication did not exist. So the hazard
+  **SCOPE: within `skills/agents-discipline/` — 121 files, exactly one carries a NUL, this one.**
+
+  **That scope line took THREE attempts, and each failure was a different traversal gap.** (1)
+  `glob("**/*")` skips every DOTTED path by default, so `.github/`, `.claude/` and `.janitor/`
+  were never entered — and the `.git` exclusion was redundant because glob had already skipped it.
+  (2) `Path.rglob` fixed that but ran from the SKILL directory, while the sentence said
+  "repo-wide": from the real root there are **2791** files, not 121. (3) Correct now, and the
+  finding is unchanged — repo-wide the other NUL-bearing files are all `.venv` binaries,
+  `.mypy_cache`/`.ruff_cache` blobs, `.DS_Store`s, and one gitignored
+  `scripts_dev/gate_check.py.corrupt-backup-…`; **no other SOURCE file carries one.**
+
+  **A COUNT IS MEANINGLESS WITHOUT ITS ROOT, exactly as a line number is meaningless without its
+  SHA** — the same lesson this document already learned in a different unit, arrived at again
+  because the root was implicit in the shell's cwd instead of written down. So the hazard
   is one known file, not an open question about the other ~15 sources and every test suite that
   has been grepped all session. The general form is what matters: **grep silently lies about any
   file containing a NUL**, returning no matches and a non-zero exit, so a "not found" is only

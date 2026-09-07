@@ -982,6 +982,35 @@ completed.append("short_write")
 # Port-only, and stub-driven because it is a race: os.open must report ENOENT while the name
 # EXISTS. No oracle comparison is possible without the same stub, so what is asserted is the
 # DISTINCTION the oracle draws — and it is load-bearing, not cosmetic: dispatch's readState
+# --- node_call must not attach a node shape to an AUTHORED error ------------------------------
+# REGRESSION, and nothing in the suite caught it when it shipped: node_call attached
+# unconditionally, so an errno-less OSError -- one the PORT raised, whose text is already what the
+# oracle prints -- came back as the doubled garbage this module documents, with the original
+# message gone. Reachable the moment write_all was wrapped, because its zero-progress guard
+# raises a bare OSError. The `errno is not None` guard exists at every CALL SITE for exactly this
+# reason; node_call was the one place that skipped it.
+# BOTH DIRECTIONS, because a guard that swallows the real case is the opposite defect: an
+# authored error must survive VERBATIM, and a genuine errno must still get node's shape.
+def _authored_raiser(*_a, **_k):
+    raise OSError("write made no progress on fd 7")
+
+
+try:
+    _g.node_call("write", _authored_raiser, 1, b"x")
+    _authored_text = "NO ERROR"
+except OSError as _error:
+    _authored_text = str(_error)
+report(_authored_text == "write made no progress on fd 7",
+       "node_call leaves an errno-less AUTHORED OSError verbatim", _authored_text)
+
+try:
+    _g.node_call("fstat", os.fstat, 9999)
+    _errno_text = "NO ERROR"
+except OSError as _error:
+    _errno_text = str(_error)
+report(_errno_text.startswith("EBADF: ") and _errno_text.endswith(", fstat"),
+       "node_call still applies node's shape when errno IS set (control)", _errno_text)
+
 # returns emptyState() on ENOENT, so a port that re-raised the raw error would hand back an
 # empty wave set on exactly the interleaving the oracle refuses.
 _probe_src = r"""

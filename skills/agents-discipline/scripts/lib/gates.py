@@ -260,6 +260,16 @@ def node_call(syscall, call, *args, **kwargs):
     try:
         return call(*args, **kwargs)
     except OSError as error:
+        # AN ERRNO-LESS OSError IS ONE THE PORT AUTHORED, and its text is already the message the
+        # oracle prints -- so attaching a node shape to it DESTROYS that text. This is the same
+        # `errno is not None` guard every call site carries; node_call bypassed it, and wrapping
+        # write_all (which raises a bare OSError on a zero-progress write) made it reachable.
+        # MEASURED, before the guard:
+        #     unwrapped  write made no progress on fd 7
+        #     wrapped    [Errno None] None: None -> None: [Errno None] None: None -> None, write
+        # The doubling this module documents elsewhere, with the original text gone entirely.
+        if error.errno is None:
+            raise
         raise _node_message_error(error, syscall) from error
 
 
