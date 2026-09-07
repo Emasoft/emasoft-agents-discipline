@@ -856,11 +856,22 @@ def main(argv):
                 # -- `create` defaults to false, so if the approval directory vanished between
                 # record_approval creating it and this line, the oracle dereferences null and
                 # throws, and the catch below turns that into an approvalInfrastructureFailures
-                # bump. The port must do the SAME thing: cast() keeps the null-deref (a TypeError
-                # here, "Cannot read properties of null" there), both land in the same handler.
-                # Passing record_approval's already-validated `store` would be tidier AND would
-                # be a divergence -- the oracle re-validates, and that re-validation is what
-                # makes the TOCTOU window observable at all.
+                # bump. cast() keeps the deref so the port does the same.
+                #
+                # WHAT IS FAITHFUL, PRECISELY -- an earlier version of this comment said the two
+                # "crash identically", and MEASURED that is too strong:
+                #     JS   Cannot read properties of null (reading 'path')
+                #     PY   'NoneType' object is not subscriptable
+                # The CONTROL FLOW is identical (deref -> same handler -> same counter -> same
+                # exit); the MESSAGE TEXT is not. That difference is not created by this line: it
+                # is the general, unavoidable class at EVERY `except Exception as exc` site in
+                # this port, because str(exc) is CPython's text where the oracle prints V8's. It
+                # is worth naming here rather than leaving "identically" to be read as byte
+                # equality by whoever audits this next.
+                #
+                # Passing record_approval's already-validated `store` would be tidier AND a
+                # CONTROL-FLOW divergence -- the oracle re-validates, and that re-validation is
+                # what makes the TOCTOU window observable at all.
                 log("    APPROVED: " + approval_path(
                     task["file"], task["gate"],
                     typing.cast(dict, validated_approval_dir())["path"]))
