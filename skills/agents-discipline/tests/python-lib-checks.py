@@ -275,6 +275,20 @@ else:
                 # INFRASTRUCTURE, NOT A PORT DEFECT. A container denying killpg, or an odd PID
                 # namespace, must not surface as a suite CRASH -- that is the exact conflation
                 # gate-args-diff.sh keeps a CRASH guard for, and this row had no equivalent.
+                #
+                # EXECUTED, not merely written: injecting os.getpgid(-1) drives this clause and
+                # the suite exits 1 with exactly one red row (measured unpiped -- an earlier
+                # attempt read ${PIPESTATUS[0]}, which is a BASH array and expands to EMPTY in
+                # the zsh this harness runs under, so the exit code was never actually read).
+                #
+                # WHAT THAT INJECTION DOES *NOT* COVER, stated because the difference decides
+                # whether the cleanup below is sound: getpgid(-1) raises ProcessLookupError,
+                # meaning the group is ALREADY GONE. The case this clause is named for is EPERM
+                # from killpg -- the group is ALIVE and unkillable. Both are OSError so this
+                # clause catches them alike, but under EPERM the `finally` re-attempts the same
+                # killpg (raises again, swallowed) and then waits on a child nothing signalled,
+                # costing the bounded 10s and leaving a live supervisor. Control flow verified;
+                # cleanup under a live-but-unkillable group is NOT.
                 kill_infra_error = f"{type(exc).__name__}: {exc}"
                 break
             # Bounded: if the kill silently no-ops, an unbounded read() waits on the CHECK's own
