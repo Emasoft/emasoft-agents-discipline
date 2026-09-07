@@ -61,6 +61,24 @@ export const CASES = {
   // This is the single most likely way a naive port diverges, and it changes every byte after.
   "non-ascii check": oracle({ check: "echo na" + CH(0xef) + "ve" }),
   "emoji beyond the BMP": oracle({ check: "echo " + CH(0xd83d, 0xde00) }),
+  // A LONE HIGH SURROGATE -- not a well-formed character, and reachable: CPython
+  // surrogateescape-decodes sys.argv ITSELF, so a `--cwd` byte that is not valid UTF-8 arrives
+  // as U+DCxx and lands in this payload. The port CRASHED here (UnicodeEncodeError from
+  // sha256's strict encode) where the oracle returned a digest -- on the approval-identity
+  // path, the highest-ranked hazard in this port. Measured, then fixed by escaping lone
+  // surrogates the way JSON.stringify does; this row is what stops it coming back.
+  // GROUND -- and the first version of this comment claimed "mutation-isolated: dropping
+  // _js_json_text's substitution reddens this row and no other". THAT WAS FALSE, and the probe
+  // said so: NOTHING REDDENED. This differential compares the two DRIVERS' hand-built digests
+  // and never calls gates.gate_definition_digest, so no mutation of gates.py can reach it.
+  // Mutating the DRIVER'S own substitution does not work either -- the mutant CRASHES on this
+  // row (UnicodeEncodeError) instead of diverging, and guard 3 correctly refuses to score it.
+  //
+  // What this row actually proves is narrower and still worth having: two INDEPENDENT
+  // reimplementations of JSON.stringify agree on a lone surrogate. It could not have been added
+  // before the fix -- the driver crashed on it, which is how the SECOND copy of the bug was
+  // found. The PRODUCTION function is covered separately, in python-lib-checks, against node.
+  "lone surrogate": oracle({ check: "echo " + CH(0xd800) }),
   // Characters JSON MUST escape, where the two escape tables can differ.
   "control chars": oracle({ check: "a" + CH(1) + "b" + CH(31) + "c" }),
   "tab and newline": oracle({ check: "a" + CH(9) + "b" + CH(10) + "c" }),

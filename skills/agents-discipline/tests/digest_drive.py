@@ -18,6 +18,12 @@ sys.dont_write_bytecode = True
 import hashlib  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
+import re  # noqa: E402
+
+# Mirrors gates.py's _LONE_SURROGATE_RE. Deliberately duplicated rather than imported: this
+# driver's whole job is to reproduce JSON.stringify INDEPENDENTLY of the code under test, so
+# importing the production helper would make the differential compare gates.py with itself.
+_LONE_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts", "lib"))
 
@@ -57,6 +63,12 @@ CASES = {
     # chr(0x1F600) directly -- Python strings are code points, where JS needed a surrogate PAIR
     # (0xd83d, 0xde00) for the same character. The two spellings must produce the SAME bytes.
     "emoji beyond the BMP": oracle(check="echo " + chr(0x1F600)),
+    # See digest-drive.mjs for what this row closes: the port CRASHED here where the oracle
+    # returned a digest. chr(0xD800) is a lone HIGH surrogate -- in the .mjs it is CH(0xd800),
+    # one UTF-16 code unit; here it is one code point. The two spellings denote the same
+    # abstract string, which is the only thing that matters, because both drivers hand it to
+    # the SAME serialization contract and compare DIGESTS, not source bytes.
+    "lone surrogate": oracle(check="echo " + chr(0xD800)),
     "control chars": oracle(check="a" + chr(1) + "b" + chr(31) + "c"),
     "tab and newline": oracle(check="a" + chr(9) + "b" + chr(10) + "c"),
     "quote and backslash": oracle(check='a"b\\c'),
@@ -108,7 +120,15 @@ def _js_value(value):
         # json.dumps is CORRECT for strings -- the corpus proves it on control characters,
         # quote/backslash, U+2028/U+2029, non-ASCII and an astral character. ensure_ascii=False
         # because JSON.stringify never escapes non-ASCII and json.dumps escapes it by default.
-        return json.dumps(value, ensure_ascii=False)
+        #
+        # EXCEPT for a LONE SURROGATE, and this driver had the SAME defect as the production
+        # code it exists to check: ensure_ascii=False leaves it raw, and the encode at the
+        # bottom of this file then raises UnicodeEncodeError where the oracle returns a digest.
+        # Adding the row made the driver crash, which is how the second copy of the bug was
+        # found -- the fix in gates.py alone would have looked complete.
+        # JSON.stringify escapes it to the six ASCII characters \\ud800, so this does too.
+        return _LONE_SURROGATE_RE.sub(lambda m: "\\u%04x" % ord(m.group(0)),
+                                      json.dumps(value, ensure_ascii=False))
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):

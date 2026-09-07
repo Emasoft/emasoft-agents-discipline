@@ -923,6 +923,46 @@ MAX_CHECK_OUTPUT_BYTES = 1024 * 1024
 MAX_AUTOMATIC_EVIDENCE_CHARS = 900
 
 
+_LONE_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
+
+
+def _js_json_text(value):
+    """`JSON.stringify(value)` as TEXT -- including its handling of a lone surrogate.
+
+    `json.dumps(..., ensure_ascii=False)` is right for ordinary non-ASCII (JSON.stringify emits
+    the character, and the default ensure_ascii=True would escape it, changing every digest).
+    But it leaves a LONE SURROGATE raw, and the str it returns then CANNOT be encoded: sha256's
+    `.encode("utf-8")` raises UnicodeEncodeError where the oracle happily returns a digest.
+    MEASURED, both runtimes, same gate:
+        JS  gateDefinitionDigest -> 83768e4e4ac7e3b427800885528580d4f7af9609d3d2a406a79a7a21b84a50dd
+        PY  -> UnicodeEncodeError: surrogates not allowed
+    A crash where the oracle returns a value is the loudest possible divergence, and it sits on
+    the APPROVAL IDENTITY path -- the highest-ranked hazard in this port.
+
+    JSON.stringify ESCAPES a lone surrogate to the six ASCII characters `\\ud800`, so the fix is
+    to do the same and hand sha256 pure ASCII for those code points. Ordinary non-ASCII stays
+    raw. Verified: this reproduces the oracle's hex exactly for the measured gate above.
+
+    THE PREMISE THAT MADE THIS LOOK UNREACHABLE WAS FALSE, and it is written into two other
+    comments in this file (:96-102 and the write side): "a Python str carries lone surrogates
+    only from a surrogateescape decode, which nothing in this port performs". CPython
+    surrogateescape-decodes `sys.argv` ITSELF -- no explicit decode call appears anywhere.
+    Measured: `\\xff` in argv is U+DCFF to CPython and U+FFFD to node, so the two runtimes
+    diverge BEFORE any quoting, and gate_check.py's `--cwd` carries the result straight into
+    this payload. A justification that rests on "nothing calls X" has to account for what the
+    RUNTIME calls on the program's behalf.
+
+    NOT applied to sha256() itself: that function's divergence is a different one (Node's
+    createHash substitutes U+FFFD, hashing a LOSSY key so two paths can share one lock; this
+    port refuses instead), and its comment argues fail-closed is the safer answer. That case is
+    about hashing a raw path. This one is about reproducing JSON.stringify's TEXT, where the
+    oracle's own escaping means no surrogate ever reaches its hash.
+    """
+    return _LONE_SURROGATE_RE.sub(
+        lambda m: "\\u%04x" % ord(m.group(0)),
+        json.dumps(value, separators=(",", ":"), ensure_ascii=False))
+
+
 def gate_definition_digest(gate):
     """sha256(JSON.stringify([...])) over the fields that define a runnable gate, or None.
 
@@ -961,7 +1001,7 @@ def gate_definition_digest(gate):
     # depth, so the JS key-order helper has nothing to reorder. Adding it would be dead code
     # that reads as if key order were a live hazard in this function. It is not -- and it
     # cannot become one without editing the literal above.
-    return sha256(json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
+    return sha256(_js_json_text(payload))
 
 
 _DIGEST_HEX_RE = re.compile(r"^[a-f0-9]{64}\Z")

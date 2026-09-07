@@ -573,6 +573,52 @@ report(90 not in _exit_literals,
        str(sorted(_exit_literals)))
 completed.append("exit_sentinel")
 
+# --- gate_definition_digest on a LONE SURROGATE: the production function, against node -------
+# The port CRASHED here where the oracle returned a digest -- UnicodeEncodeError from sha256's
+# strict encode, on the APPROVAL IDENTITY path. Reachable, not theoretical: CPython
+# surrogateescape-decodes sys.argv itself (measured: b"\xff" is U+DCFF to CPython and U+FFFD to
+# node), and gate_check.py's --cwd carries the result into this payload.
+#
+# THIS EXISTS BECAUSE digest-diff.sh CANNOT COVER IT. That differential compares two hand-built
+# driver reimplementations and never calls gate_definition_digest, so a mutation of gates.py
+# reddens nothing there -- measured, after the row was added with a false "mutation-isolated"
+# claim. The row is fine for what it proves; this is the check that reaches the shipped code.
+_sur = chr(0xD800)
+_js_dig = subprocess.run(
+    ["node", "-e",
+     'import(process.argv[1]).then(m=>process.stdout.write(String(m.gateDefinitionDigest('
+     '{check:"echo \\ud800",expect:"ok",cwd:null}))))',
+     os.path.join(ROOT, "scripts", "lib", "gates.mjs")],
+    capture_output=True, text=True, timeout=60)
+# CAUGHT, because the failure mode being checked is a RAISE, not a wrong value. Letting it
+# propagate ends the run: measured against the pre-fix code, the suite exited 1 with
+# "TRUNCATED -- these sections never completed: parse_gates, short_write, enoent_probe,
+# dispatch" and no digest row at all. The truncation guard did its job, but a crash is not a
+# catch -- the diagnosis has to name THIS function, not four unrelated sections.
+try:
+    _py_dig = _g.gate_definition_digest({"check": "echo " + _sur, "expect": "ok", "cwd": None})
+except UnicodeEncodeError as exc:
+    _py_dig = "RAISED UnicodeEncodeError: %s" % exc
+report(_js_dig.returncode == 0 and len(_js_dig.stdout.strip()) == 64,
+       "digest: the oracle produced a digest for a lone-surrogate gate",
+       (_js_dig.stdout + _js_dig.stderr).strip()[-200:])
+report(_js_dig.stdout.strip() == _py_dig,
+       "digest: the port matches it instead of raising UnicodeEncodeError",
+       "js=%s py=%s" % (_js_dig.stdout.strip()[:16], str(_py_dig)[:16]))
+# Control that the check is not vacuous on ORDINARY non-ASCII, where ensure_ascii=False is
+# already required and the substitution must NOT fire.
+_js_na = subprocess.run(
+    ["node", "-e",
+     'import(process.argv[1]).then(m=>process.stdout.write(String(m.gateDefinitionDigest('
+     '{check:"echo na\\u00efve",expect:"ok",cwd:null}))))',
+     os.path.join(ROOT, "scripts", "lib", "gates.mjs")],
+    capture_output=True, text=True, timeout=60)
+report(_js_na.stdout.strip() == _g.gate_definition_digest(
+           {"check": "echo na" + chr(0xEF) + "ve", "expect": "ok", "cwd": None}),
+       "digest: ordinary non-ASCII still agrees (the escape did not over-fire)",
+       _js_na.stdout.strip()[:32])
+completed.append("digest_surrogate")
+
 # --- parse_gates: the whole parse result, field by field -----------------------------------
 # The drivers existed and NOTHING RAN THEM. 8424c59 cites "5/5 whole-object diffs identical" as
 # its verification, but that corpus lived in ad-hoc temp files and is gone — an unreproducible

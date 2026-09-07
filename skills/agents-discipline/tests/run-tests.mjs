@@ -14,6 +14,16 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+// Children inherit process.env, so one line covers every spawn site in this file. The other
+// three suites already carry it (dispatch-tests.mjs:19, ledger-tests, lint-tests); e5578a3
+// retrofitted the runtime selector here WITHOUT it, which is the half of the convention that
+// protects the MEASUREMENT: .pyc invalidation is (mtime, size), so a same-second edit that
+// preserves size executes stale bytecode. jsapi_drive.py:5-9 records that exact incident --
+// "the source looked right, every branch condition evaluated true, and the output was still
+// wrong". A worker was editing gate_check.py while the first baseline here was taken, which is
+// the worst possible timing for it.
+process.env.PYTHONDONTWRITEBYTECODE = "1";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 // `AD_RUNTIME=python node tests/run-tests.mjs` selects the port, matching the convention
 // dispatch-tests.mjs:22-26 established. The suite is held FIXED as the ORACLE and only the
