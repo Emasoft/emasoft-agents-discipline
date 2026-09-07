@@ -1024,6 +1024,41 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   outcome whenever the plan proposed a patch and the implementer found a removal. The only sound
   check is reading the code path the defect lives on. Everything else is a hint about where to
   read.
+  **AND I THEN SCORED SIX ITEMS OFF COMMENT TEXT, one paragraph after writing that sentence.** A
+  comment saying "this used to `continue`" is the author's CLAIM, not proof the current code is
+  right — the comment-overstates-the-code defect these suites exist to catch. Re-done against
+  executable code:
+  — **C0a**: `/^\*\*unit\s+([0-9]+)\b/i` per line, accumulating into a `Map`, with
+    `evidenceBlockFor` returning `?? ""` — line-anchored, so no header means UNBACKED. Code.
+  — **C1**: the ENOENT branch's `continue` is GONE; control falls through to
+    `if (Date.now() >= deadline) throw` then `await sleep(20)`. Code.
+  — **C2**: `new RegExp` count is `ledger-check 0` / `gates.mjs 1` — a POSITIVE CONTROL proving
+    the pattern matches where the construct exists, so the zero is real and not a fifth
+    empty-grep failure. Removal confirmed, not inferred.
+  — **C0d**: `templates/DELEGATION.md` is 52 lines and `## Evidence` IS line 52 — the
+    self-satisfying boilerplate is gone, and the literal `Unit 1`/`Unit 2` strings that the plan
+    said would let any artifact back those rows now count **0**.
+  — **C0e / C0f** legitimately rest on string content, because the artifact IS a sentence (a
+    `SKILL.md` claim and a `console.log` message). String evidence is the right kind there.
+  — **C0b**: the acceptance loop FAILS a no-op row rather than routing it to `unreproducible`,
+    and fails a row arriving after the budget is gone "which would turn an exhausted budget into
+    a free pass for every row after it". Code.
+  — **C3**: `ledger-check.mjs:39` is `text = readStableRegularFile(path, { label: "ledger" })` —
+    the LEDGER PATH ITSELF, which is what C3 was about. I had scored this off
+    `readStableRegularFile` appearing 3× — **the exact generic-name evidence I had disqualified
+    BY NAME one commit earlier**, and I never read line 39 until a review pointed at it. The
+    verdict was right and the evidence was the kind I had just condemned.
+  **The habit: when a verdict rests on a comment, the comment tells you WHICH LINES to read — it
+  is never the reading.**
+  **AND C4 IS NOT ABSENT — IT IS HALF DONE. I reported it absent because I picked markers for
+  only one of its two halves.** C4 asked for (1) a total deadline across the re-run loop and (2)
+  descendant reaping. My grep was `terminateProcessTree|detached` — half 2 only. Measured:
+  `AGENTS_DISCIPLINE_RERUN_BUDGET_MS` (`:482`), validated at `:485`, `rerunDeadline` at `:487`,
+  enforced per row at `:533` — **half 1 is IMPLEMENTED**, with the comment naming C4's own
+  rationale ("a 40-row ledger could legitimately occupy this process for `rows x 600s` with
+  nothing watching the total"). Half 2 is genuinely absent (0 refs).
+  **A multi-part item scored with markers for one part reports the whole item's status. Pick a
+  marker per part, or read the item.**
   Second, sharper: **all three were catchable, because a second command had already contradicted
   the first.** The `-i` case is literally two greps whose counts disagreed on screen — and I
   published anyway. **When two of your own outputs disagree, THAT is the finding; resolve it
