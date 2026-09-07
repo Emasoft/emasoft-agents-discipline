@@ -1058,11 +1058,15 @@ def main(argv):
                     # read(), not read1(), and that is DELIBERATE after being wrong about it.
                     # 3c78513 changed this line to read1() alongside the real fix in
                     # check_supervisor.py, justified by "the timeout path closes the handle, so
-                    # a blocked read() loses its buffer". THE PREMISE IS FALSE:
-                    # terminate_process_tree only SIGNALS -- it never closes child.stdout/stderr
-                    # (no close of either appears in lib/process_tree.py), and capture() closes
-                    # the handle only after its own loop has already exited. So the writer dies,
-                    # the reader gets EOF, and read() returns its partial buffer normally.
+                    # a blocked read() loses its buffer". THE PREMISE IS FALSE. capture() closes
+                    # the handle only after its own loop has already exited, and NO CLOSE-LIKE
+                    # CALL APPEARS ANYWHERE IN lib/process_tree.py -- searched for .close(),
+                    # os.close, communicate(, `with ...Popen(`, closefd and __exit__ across all
+                    # 377 lines, zero matches. (Stated as what was searched, not as "the
+                    # function only signals": terminate_process_tree's body is unread, and an
+                    # earlier version of this comment asserted the stronger form from a grep
+                    # that could not even have seen communicate().) So the writer dies, the
+                    # reader gets EOF, and read() returns its partial buffer normally.
                     # FALSIFIED, not argued: with this line reverted to read() and only the
                     # supervisor fixed, `echo starting; sleep 30` under --timeout 3 gives
                     # `output=starting`, byte-identical to the oracle. The read1() here changed
