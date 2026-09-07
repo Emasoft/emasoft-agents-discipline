@@ -607,6 +607,14 @@ def _js_surrogate_replacement(error):
     was "what node does per unpaired surrogate" -- the claim and the code disagreed, and the
     corpus could not tell because every fixture had at most one surrogate.
 
+    THE COUNT IS CODE POINTS AND NODE REPLACES PER CODE UNIT; they coincide only because this
+    handler is used with UTF-8, whose ONLY unencodable characters are the surrogates
+    U+D800-U+DFFF -- each exactly one code point and one UTF-16 unit. Hand it to an `ascii` or
+    `latin-1` stream and the equality breaks: U+1F600 is one Python code point and TWO UTF-16
+    units, so this would emit one U+FFFD where a node-equivalent emits two. Nothing does that
+    today (only force_utf8_streams names it, always with utf-8), and anyone who changes that has
+    to revisit this line rather than assume it generalizes.
+
     A valid astral character is a surrogate PAIR to UTF-16 but a single code point to Python, so
     it never reaches this handler at all -- MEASURED on U+1F600 (F0 9F 98 80) and U+10000
     (F0 90 80 80), both runtimes identical. Nor can two lone surrogates recombine at write time

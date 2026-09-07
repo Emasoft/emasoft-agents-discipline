@@ -57,9 +57,15 @@ fi
 # into this file four times -- twice producing a "divergence" whose two sides rendered
 # identically. A literal that creeps back in is invisible to every case above, so it is checked
 # directly. Tabs and newlines are ASCII and pass; only bytes >= 0x80 fail.
-if LC_ALL=C grep -qP '[^\x00-\x7F]' "${BASH_SOURCE[0]}"; then
-  echo "DIVERGE  this script's source carries a literal non-ASCII byte; build it from code points" >&2
-  LC_ALL=C grep -nP '[^\x00-\x7F]' "${BASH_SOURCE[0]}" >&2
+# `tr -d`, NOT `grep -P`. MEASURED: /usr/bin/grep on macOS exits 2 on -P ("unsupported"), and
+# `if grep -qP ...; then fail; fi` reads a non-zero exit as "no match" -- so on any machine whose
+# grep lacks -P (stock macOS, most BSD) the guard would PASS SILENTLY and protect nothing. It
+# happens to work here only because this PATH prepends GNU grep. A guard whose failure mode is
+# "quietly approve" is the thing this file exists to distrust, so it is written with tools that
+# cannot be missing: tr deletes every ASCII byte and wc counts what is left.
+_non_ascii_bytes=$(LC_ALL=C tr -d '\000-\177' < "${BASH_SOURCE[0]}" | wc -c | tr -d ' ')
+if [ "$_non_ascii_bytes" != 0 ]; then
+  echo "DIVERGE  this script's source carries $_non_ascii_bytes literal non-ASCII byte(s); build them from code points" >&2
   exit 1
 fi
 
@@ -166,15 +172,26 @@ fi
 # was worthless. Both escape hatches must be shut to reach the ASCII stream that a bare
 # container, a cron job, or a CI runner can still produce.
 #
-# gate-lint rather than gate-check: it writes its findings to STDOUT, which is the stream with
-# no fallback and therefore the one that fails loudly instead of quietly.
-LINT_ORACLE="$HERE/../scripts/gate-lint.mjs"
-LINT_PORT="$HERE/../scripts/gate_lint.py"
-c3="$WORK/c3"; mkdir -p "$c3"
-printf '# Gates\n\n- [ ] G1: x\n  CHECK: true\n  EXPECT: /src/%s/out.txt/\n' "$NON_ASCII" \
-  > "$c3/leaf.md"
-_hostile() {  # exe script -> stdout + exit + stderr, scrubbed
-  PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C "$1" "$2" "$c3/leaf.md" > "$WORK/.ho" 2> "$WORK/.he"
+# EVERY CLI THAT CALLS force_utf8_streams IS DRIVEN, not just gate-lint. The first version ran
+# gate-lint alone, on the reasoning that it writes findings to STDOUT -- the stream with no
+# backslashreplace fallback, so it fails loudly. That is still why gate-lint is the best single
+# row, and it was the wrong place to stop: three of the four call sites had NO case that would
+# notice their force_utf8_streams() call being deleted, while the commit's framing implied the
+# surface was covered. The library-level CASE 4 cannot see a missing call site either, by
+# construction.
+c3="$WORK/c3"
+_rebuild_c3() {
+  rm -rf "$c3"; mkdir -p "$c3/.agents-discipline/s/gates"
+  printf '# Gates\n\n- [ ] G1: x\n  CHECK: true\n  EXPECT: /src/%s/out.txt/\n' "$NON_ASCII" \
+    > "$c3/leaf.md"
+  cp "$c3/leaf.md" "$c3/.agents-discipline/s/gates/leaf.md"
+  printf '# Delegation\n\n| # | Unit | Files (mine) | Worker | Acceptance | Status |\n|---|---|---|---|---|---|\n| 1 | %s unit | src/a | w | `true` | pending |\n' \
+    "$NON_ASCII" > "$c3/DELEGATION.md"
+}
+_rebuild_c3
+_hostile() {  # exe script args... -> stdout + exit + stderr, scrubbed
+  local exe="$1" script="$2"; shift 2
+  PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C "$exe" "$script" "$@" > "$WORK/.ho" 2> "$WORK/.he"
   # $? CAPTURED ON ITS OWN LINE, BEFORE any expansion. The first version interpolated "$?"
   # inside the printf below, where bash expands arguments LEFT TO RIGHT: the preceding
   # $(_scrub ...) ran first and overwrote it, so the field carried sed's status -- 0 on both
@@ -185,20 +202,39 @@ _hostile() {  # exe script -> stdout + exit + stderr, scrubbed
   printf '%s\n--exit--\n%s\n--stderr--\n%s' \
     "$(_scrub "$c3" < "$WORK/.ho")" "$code" "$(_scrub "$c3" < "$WORK/.he")"
 }
-o_lint="$(_hostile "$NODE_ABS" "$LINT_ORACLE")"
-p_lint="$(_hostile "$PY_ABS" "$LINT_PORT")"
-if ! printf '%s' "$o_lint" | grep -q "$NON_ASCII"; then
-  printf 'DIVERGE  %-38s oracle lint output lacks the non-ASCII EXPECT; fixture reached nothing\n' \
-    "non-UTF-8 stdout"
-  fail=$((fail + 1)); FAILED+=("non-UTF-8 stdout")
-elif [ "$o_lint" = "$p_lint" ]; then
-  printf '  OK      %-38s identical on an ASCII stdout\n' "non-UTF-8 stdout"
-  pass=$((pass + 1))
-else
-  printf 'DIVERGE  %-38s\n' "non-UTF-8 stdout"
-  diff <(printf '%s\n' "$o_lint") <(printf '%s\n' "$p_lint")
-  fail=$((fail + 1)); FAILED+=("non-UTF-8 stdout")
-fi
+_hostile_case() {  # label oracle-basename port-basename args...
+  local label="$1" ora="$HERE/../scripts/$2" prt="$HERE/../scripts/$3"; shift 3
+  local o p
+  # THE FIXTURE IS REBUILT BETWEEN THE TWO RUNS, because one of these CLIs REWRITES the file it
+  # is handed: ledger-check appends a `receipt:` line, so the oracle ran first, modified the
+  # fixture, and the port then reported a receipt the oracle had not printed. MEASURED as a
+  # DIVERGE on `receipt: binds this exact content, last checked <ISO>` -- a harness artifact
+  # presented as a port defect, and the same first-run-mutates-the-second's-input hazard that
+  # made same-directory mandatory in stale-diff.sh, in the opposite direction.
+  _rebuild_c3
+  o="$(_hostile "$NODE_ABS" "$ora" "$@")"
+  _rebuild_c3
+  p="$(_hostile "$PY_ABS" "$prt" "$@")"
+  # NON-VACUITY per row: the ORACLE must have carried the non-ASCII text into its own output.
+  # Without it a CLI that printed nothing (wrong args, missing fixture) would compare equal to a
+  # port that also printed nothing, and the row would report OK for a command that did nothing.
+  if ! printf '%s' "$o" | grep -q "$NON_ASCII"; then
+    printf 'DIVERGE  %-38s oracle output lacks the non-ASCII text; fixture reached nothing\n' "$label"
+    printf '%s\n' "$o" | sed 's/^/    | /' | head -6
+    fail=$((fail + 1)); FAILED+=("$label"); return
+  fi
+  if [ "$o" = "$p" ]; then
+    printf '  OK      %-38s identical on an ASCII stdout\n' "$label"
+    pass=$((pass + 1)); return
+  fi
+  printf 'DIVERGE  %-38s\n' "$label"
+  diff <(printf '%s\n' "$o") <(printf '%s\n' "$p")
+  fail=$((fail + 1)); FAILED+=("$label")
+}
+
+_hostile_case "non-UTF-8 stdout: gate-lint"  gate-lint.mjs    gate_lint.py    "$c3/leaf.md"
+_hostile_case "non-UTF-8 stdout: gate-check" gate-check.mjs   gate_check.py   --root "$c3" --scope s --status
+_hostile_case "non-UTF-8 stdout: ledger"     ledger-check.mjs ledger_check.py "$c3/DELEGATION.md"
 
 # --- CASE 4: the STREAM HANDLER itself, on lone surrogates -----------------------------------
 # The one surface here that needs no CLI, so it is not contaminated by either defect that keeps
@@ -218,7 +254,23 @@ fi
 # point to Python, so it must pass through untouched; if the handler ever mangles it, every emoji
 # in every message breaks. A plain non-ASCII character must likewise be emitted raw. Without
 # them, a handler that replaced everything with U+FFFD would satisfy the first four rows.
-_surrogate_bytes() {  # exe -> hex bytes of the whole corpus
+#
+# WHAT THIS CASE DOES NOT COVER, stated because it drives the LIBRARY and not a CLI: it proves
+# the handler matches node, not that any shipped command reaches it. A CLI that never calls
+# force_utf8_streams would still diverge and this case would stay green -- CASE 3 is what holds
+# an actual CLI end-to-end. A CLI-level surrogate case is blocked on gate-lint's errno message
+# shape (recorded as deferred in d406b47), which contaminates the only argv vector that carries
+# a surrogate into a command.
+#
+# The repetition count is Python CODE POINTS while node replaces per UTF-16 CODE UNIT, and the
+# two cannot disagree here: the only characters UTF-8 refuses are the surrogates U+D800-U+DFFF,
+# and each of those is exactly one code point AND one code unit. No astral character is
+# unencodable, so no run can contain a code point worth two units.
+_surrogate_bytes() {  # runtime(node|py) -> hex bytes of the whole corpus
+  # An explicit reject on anything else, matching _write_fixture's `*)` guard. With a two-branch
+  # if/else, a typo in a caller ("nodejs") would silently take the Python branch and compare the
+  # PORT AGAINST ITSELF -- reporting OK for a comparison that never ran the oracle.
+  case "$1" in node|py) ;; *) echo "unknown runtime: $1" >&2; exit 2 ;; esac
   if [ "$1" = node ]; then
     "$NODE_ABS" -e '
       // String.fromCharCode / fromCodePoint on BOTH the surrogate and the plain non-ASCII row,
@@ -235,15 +287,19 @@ _surrogate_bytes() {  # exe -> hex bytes of the whole corpus
       ];
       process.stdout.write(rows.join("|"));'
   else
+    # The lib directory arrives as ARGV, not interpolated into the source. Interpolation was the
+    # first spelling and it embeds an arbitrary filesystem path inside a Python string literal:
+    # a repository checked out under a directory containing an apostrophe would produce a
+    # SyntaxError, and the case would fail for a reason that has nothing to do with encoding.
     "$PY_ABS" -c '
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath("'"$PORT"'")), "lib"))
+sys.path.insert(0, sys.argv[1])
 from jsapi import force_utf8_streams
 force_utf8_streams()
 rows = ["a" + chr(0xD800) + "b", "a" + chr(0xDFFF) + "b",
         chr(0xDC00) + chr(0xD800), chr(0xD800) + chr(0xD801) + chr(0xD802),
         "x" + chr(0x1F600) + "y", "caf" + chr(0xE9)]
-sys.stdout.write("|".join(rows))'
+sys.stdout.write("|".join(rows))' "$(cd "$(dirname "$PORT")/lib" && pwd)"
   fi | od -An -tx1 | tr -s ' \n' ' '
 }
 o_sur="$(_surrogate_bytes node)"
