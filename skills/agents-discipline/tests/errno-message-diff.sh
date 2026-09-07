@@ -20,6 +20,23 @@
 # EACH ROW DRIVES A DIFFERENT CLI, because the fix is per-call-site and has three times been
 # applied to one site while an identical sibling kept the defect.
 #
+# SIX ROWS ARE FIVE SITES AND TWO ERRNO CODES, not six independent proofs -- rows 2 and 5 share
+# gate_lint.py:248 and differ only in the code they deliver to it (EACCES, ENOTDIR). Both axes
+# matter and neither subsumes the other: the site axis catches a guard applied to one of two
+# adjacent lines, the code axis catches a prose mismatch between os.strerror() and libuv's table.
+# Counted honestly here because the same conflation already inflated a "6 of ~13 sites" figure
+# once, from a line-counting grep that over- and under-counts in both directions.
+#
+# WHAT THE MUTATIONS PROVE, and it took two kinds to cover it:
+#   DELETING a guard (-> a bare str()) reddens the row, which proves the row notices the guard's
+#     ABSENCE. Run per site: each reddens exactly its own row(s) and nothing else.
+#   PASSING THE WRONG SYSCALL (node_fs_message(error, "stat")) also reddens it -- and THAT is the
+#     failure this sweep actually risks, a one-word difference inside an otherwise perfect
+#     message. The delete-mutation produces a maximally different string that any needle would
+#     notice, so it is consistent with a row that would MISS a wrong constant. Measured on
+#     gate_lint.py:248: both its rows go red, so the scrubs leave the syscall word intact and the
+#     comparison is byte-exact.
+#
 # DIVERGE LINES START AT COLUMN 0 (see gate-args-diff.sh's note); every other verdict word keeps
 # a 2-space indent so mutate-probe.sh's anchored `^DIVERGE` grep stays the only trigger.
 set -uo pipefail
@@ -89,6 +106,21 @@ _scrub_tmp() {
 
 _row() {  # label  oracle-root  port-root  required-substring  [scrub-fn]
   local label="$1" o p needle="$4" scrub="${5:-_scrub}"
+  # THE SCRUB NAME IS CHECKED BEFORE IT IS CALLED, because a misspelled one degrades into a
+  # confusing verdict rather than a clear one. MEASURED: an unknown name gives exit 127 and EMPTY
+  # output, so both sides come back empty. The non-vacuity gate below then fires -- so the row
+  # does fail, loudly, which is the important half -- but it reports "fixture reached nothing",
+  # sending the reader to look at the FIXTURE when the fault is in the caller's fifth argument.
+  # This parameter was added in the same commit that scoped the temp scrub; a new indirection is
+  # exactly when to ask what its typo looks like.
+  # `declare -F`, not `command -v`: the question is "is this a shell FUNCTION", and command -v
+  # would also accept an external program that happens to share the name -- which would then be
+  # invoked with a root as argv and the stream on stdin, producing plausible garbage instead of
+  # a refusal.
+  if ! declare -F "$scrub" >/dev/null 2>&1; then
+    echo "errno-message-diff: no such scrub function '$scrub' for row '$label'" >&2
+    exit 2
+  fi
   o="$("$scrub" "$2" < "$WORK/.o")"; p="$("$scrub" "$3" < "$WORK/.p")"
   # NON-VACUITY: the oracle must have produced the message this row is about. Without it a
   # fixture that failed earlier (a bad flag, a missing arg) leaves both sides equal on some other

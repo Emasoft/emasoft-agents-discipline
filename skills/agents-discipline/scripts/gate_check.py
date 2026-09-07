@@ -1348,11 +1348,18 @@ def main(argv):
             # MEASURED FOR A FAILURE AT THE TEMP OPEN, WHICH IS NOT THE WHOLE WRITE PATH.
             # write_atomic opens a temp, writes, fsyncs, then RENAMES; the fixture (an unwritable
             # gates directory) fails at the first step. A failure at the rename would plausibly
-            # name `rename` and carry TWO paths, and no fixture here reaches it -- the pre-flight
-            # read rejects the shapes that would (a directory target, a symlink loop) before any
-            # write begins. So the claim is "open, for a failure at the open", not "open for
-            # every write failure", and the difference is exactly what the read-side sites got
-            # wrong when gate_lint's argument was reused at read_state.
+            # name `rename` and carry TWO paths, and no fixture here reaches it -- gate-check's
+            # own pre-flight read rejects the shapes that would (a directory target, a symlink
+            # loop) before any write begins. So the claim is "open, for a failure at the open",
+            # not "open for every write failure" -- the same distinction that went wrong when
+            # gate_lint's argument was reused at read_state.
+            #
+            # AND THAT PRE-FLIGHT IS GATE-CHECK'S, NOT write_atomic's. The ELOOP probe behind
+            # this note showed only that GATE-CHECK never reaches the write with a looped target;
+            # write_atomic's own behaviour there is untested, and its other callers -- dispatch's
+            # state write, the lease writer, append_status -- do not sit behind that pre-flight.
+            # A loop at the target would not affect the temp open at all (that path does not
+            # exist yet); it would surface at the rename, which is the step nothing measures.
             #     oracle  ... : EACCES: permission denied, open '<file>.<pid>.<hex>.tmp'
             #     port    ... : [Errno 13] Permission denied: '<file>.<pid>.<hex>.tmp'
             # THE PATH IS THE TEMP FILE, NOT `result["file"]`, and that is the durable finding: a
