@@ -36,6 +36,7 @@ import sys
 sys.dont_write_bytecode = True
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 import atexit
+import importlib.util
 import json
 import pathlib
 import shutil
@@ -156,6 +157,39 @@ regex_case("an invalid pattern", "(", "x")
 # \d must stay ASCII: JS's is [0-9] with or without the `u` flag, Python's is Unicode by
 # default. Compared rather than asserted, so a change on either side is caught.
 regex_case("an ASCII-only \\d against Arabic-Indic digits", r"^\d+$", "١٢٣")
+# THE TWO FLAG MAPS MUST AGREE. `regex_worker._FLAG_MAP` (used to MATCH) and
+# `gates._JS_FLAG_MAP` (used by `parse_regex` to VALIDATE) are separate dicts with identical
+# values today, and nothing makes them stay that way. A drift is silent and vacuous in the
+# worst direction: an EXPECT validated case-insensitively but matched case-sensitively still
+# "works" on every pattern where the flag is irrelevant, so the suite stays green.
+#
+# ASSERTED, not fixed by importing `gates` into the worker. That import was tried and reverted:
+# it makes the per-match subprocess pay gates.py's import on every EXPECT (MEASURED: 16.0ms ->
+# 27.2ms), and a coupling is a heavier answer than an equality check. The cost is small against
+# the 5000ms startup budget -- the reason to prefer the check is that it states the invariant
+# where a reader can see it, instead of implying it through an import.
+def _load_lib(alias, filename):
+    """Load one lib module by PATH, under an alias, so neither shadows a later import.
+
+    LIB goes on sys.path FIRST and stays: `gates.py` does `from jsapi import ...`, so a
+    path-load alone raises ModuleNotFoundError on its dependency -- measured, and it aborted
+    the whole suite (every later section reported as never-completed). The insert is what the
+    file already does at its process_tree section; it just has to happen before this point too.
+    """
+    if LIB not in sys.path:
+        sys.path.insert(0, LIB)
+    spec = importlib.util.spec_from_file_location(alias, os.path.join(LIB, filename))
+    assert spec is not None and spec.loader is not None, f"cannot load {filename}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_rw = _load_lib("_rw_flagmap", "regex_worker.py")
+_g = _load_lib("_gates_flagmap", "gates.py")
+report(_rw._FLAG_MAP == _g._JS_FLAG_MAP,
+       "regex_worker: its flag map equals gates._JS_FLAG_MAP (drift guard)",
+       f"worker={_rw._FLAG_MAP} gates={_g._JS_FLAG_MAP}")
 completed.append("regex_worker")
 
 # --- check_supervisor: same argv, compare exit code AND the pumped output ------------------

@@ -39,13 +39,19 @@ row() {                     # row <label> <source> <flags> <output>
     printf 'ok       %s\n' "$label"
   else
     differed=$((differed + 1))
-    DIVERGENT_LABELS="$DIVERGENT_LABELS$label
+    # KEYED ON THE INPUTS, not on $label. The label is prose -- documentation that should stay
+    # freely editable -- while the row's IDENTITY is the pattern and flags it feeds the worker.
+    # A label-keyed pin fails on a pure rename with "a row APPEARED / a row VANISHED", both
+    # false, and the correct response to a rename is exactly the "just update the list" the
+    # message forbids. This round renamed a row (`lazy quantifier`), which only escaped that
+    # trap because the row happens to sit in the AGREEING set.
+    DIVERGENT_KEYS="$DIVERGENT_KEYS$src<$flags>
 "
     printf 'DIVERGE  %s\n         js(%s): %s\n         py(%s): %s\n' \
       "$label" "$e1" "$o1" "$e2" "$o2"
   fi
 }
-DIVERGENT_LABELS=""
+DIVERGENT_KEYS=""
 
 # --- the engine-difference corpus -------------------------------------------------------
 # Each row names the property under test. A row that cannot distinguish the engines is a
@@ -108,14 +114,17 @@ echo "$rows rows, $differed divergent"
 # and can break others in the SAME commit. A set pin fails on any single change in either
 # direction, so it needs no separate swap control -- which is fortunate, because a swap control
 # is genuinely hard to construct and that is likely why the count version shipped.
-EXPECTED_DIVERGENT_SET='JS named group (?<n>)
-Python named group (?P<n>)
-backslash-A anchor
-backslash-Z anchor
-dollar before trailing newline
-empty character class
-unicode property escape'
-actual=$(printf '%s' "$DIVERGENT_LABELS" | LC_ALL=C sort)
+#
+# Entries are `<source><flags-in-angle-brackets>`, i.e. the row's INPUTS. Renaming a row's
+# prose label does not touch this list; changing what it TESTS does.
+EXPECTED_DIVERGENT_SET='(?<y>\d{4})<>
+(?P<y>\d+)<>
+\Aok<>
+\p{L}<u>
+a[]b<>
+ok$<>
+ok\Z<>'
+actual=$(printf '%s' "$DIVERGENT_KEYS" | LC_ALL=C sort)
 expected=$(printf '%s' "$EXPECTED_DIVERGENT_SET" | LC_ALL=C sort)
 if [ "$actual" != "$expected" ]; then
   echo "--- DIVERGENCE SET CHANGED ---"

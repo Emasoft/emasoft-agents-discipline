@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T02:47:00+0200
+updated: 2026-09-07T03:04:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -361,7 +361,9 @@ difference — but every call site has to drop the await). One item left:
    hand-written differential**: it is the strongest evidence class available here, because the
    assertions were written against the JS with no knowledge of a port.
 
-   **TWO MEASURED BLOCKERS on that route — neither is optional:**
+   **BLOCKERS on that route. These are what a survey of ONE suite found — `hardening-tests.mjs`
+   — plus one more spotted in `run-tests.mjs`. `stress-tests.mjs` and `dispatch-tests.mjs` were
+   NOT surveyed, so do not read this list as complete:**
    - **`run()` hardcodes the interpreter.** `hardening-tests.mjs:50` is
      `execFile(process.execPath, [script, ...args], …)` — node running a `.py` fails. Changing
      `GATE_CHECK` alone is NOT enough; the interpreter needs the same `PY ?` treatment
@@ -390,11 +392,23 @@ difference — but every call site has to drop the await). One item left:
    `lib/regex_worker.py` itself is UNCHANGED from `85a6c50` — see the two corrections below.
 
    **CORRECTION 1 — it was NOT "never run", and this note said so for one commit.**
-   `tests/python-lib-checks.py` has driven both sides since `85a6c50` via `regex_case`
-   (`:119-137`) — and it compares PARSED JSON, with `{error: true}` collapsing the message
-   text, because the two engines' diagnostics can never match. It had **2 rows**
-   (`an invalid pattern`, `an ASCII-only \d`). So the gap was CORPUS SIZE, not absence, and
-   the new file's contribution is 20 more rows, not first execution.
+   `tests/python-lib-checks.py` drives both sides via `regex_case` (`:119-137`), comparing
+   PARSED JSON with `{error: true}` collapsing the message text, because the two engines'
+   diagnostics can never match. It had **4 rows**. So the gap was CORPUS SIZE, not absence.
+
+   **The dates, measured — a first version of this correction guessed them and was wrong
+   twice.** It said "since `85a6c50`" (inferring the TEST's history from when the PORT was
+   added — two different facts) and "2 rows" (from `grep -c '^regex_case('`, which misses the
+   two calls assigned to variables — the same weak-predicate error, in the paragraph correcting
+   a weak-predicate error). Re-measured: `git log -S"def regex_case"` → **`12a975f`, position
+   45**, FOUR commits AFTER `85a6c50` (41). Between them the port was tested VACUOUSLY —
+   `12a975f`'s subject is *"the lib checks asserted the oracle's behaviour without running the
+   oracle"*, and its body records the oracle "could not even be started" (`node
+   regex-worker.mjs` produces nothing; it talks over `parentPort`).
+
+   **`12a975f` had ALREADY hit the whitespace-serialiser difference and chosen to PARSE rather
+   than change production.** That makes round 15's error precise: not a new mistake, but the
+   re-making of one this repo had correctly resolved four commits in.
 
    **CORRECTION 2 — a production edit justified by that false premise, now reverted.** The
    sequence is worth keeping because every step looked reasonable: a `Write` overwrote the
@@ -403,8 +417,24 @@ difference — but every call site has to drop the await). One item left:
    on `json.dumps`' `", "` vs `JSON.stringify`'s `","` → so the PRODUCTION serialiser was
    changed to satisfy the test. But the pre-existing differential had already solved that
    correctly by parsing. **A production file was edited to accommodate a redundant test.**
-   `regex_worker.py` is now byte-identical to `85a6c50` and the new corpus adopts
+   `regex_worker.py` is now byte-identical to `85a6c50` (verified with
+   `git diff 85a6c50 HEAD -- <path>`, empty) and the new corpus adopts
    `python-lib-checks.py`'s comparison policy instead of inventing a second one.
+
+   **The revert took THREE changes with it, and only one was actually downstream of the false
+   premise.** The compact separators were; the local-vs-imported flag map was not. Recorded
+   because "everything downstream is reverted" bundled them and retired all three with an
+   argument covering one:
+   - **The worker KEEPS its local `_FLAG_MAP`, deliberately.** Importing `gates` would drag a
+     1670-line module (which itself imports `jsapi`) into a process spawned per EXPECT match.
+     MEASURED: 16.0ms → 27.2ms startup. Small against `REGEX_STARTUP_TIMEOUT_MS` = 5000, so
+     cost is not the argument — the argument is that coupling a hot subprocess to the largest
+     module in the tree to deduplicate three dict entries is the wrong shape.
+   - **The drift it permits is real and is now covered by a TEST, not a coupling.**
+     `python-lib-checks.py` asserts `regex_worker._FLAG_MAP == gates._JS_FLAG_MAP`. Zero
+     runtime cost, states the invariant where a reader sees it. CONTROL: `"s": re.DOTALL` →
+     `re.VERBOSE` in the worker → the row FAILS and prints both maps. The choice had been
+     framed as duplicate-vs-import; the test is neither.
 
    **The general lesson, which outlives both: an UNTESTED file and a NONEXISTENT file look
    identical from the TRDD, and a WEAKLY-tested one looks identical to a well-tested one.**
@@ -448,7 +478,8 @@ difference — but every call site has to drop the await). One item left:
    EARLIER than the worker. **And `parse-gates-drive.mjs` has ZERO regex EXPECT rows**
    (measured), so that path has no differential coverage at all today.
 
-   **The pin is a SET of labels, not a count.** The first version compared `$differed` to `8`
+   **The pin is a SET, keyed on each row's INPUTS (`<source><flags>`) — not a count, and not
+   the prose label.** The first version compared `$differed` to `8`
    and printed "none new" — which under a SWAP (one row stops discriminating while a new
    defect appears) stays green and prints a sentence false by construction, in the one case it
    exists to catch. That is this project's own `reddens 9` failure shape rebuilt inside the
@@ -457,6 +488,16 @@ difference — but every call site has to drop the await). One item left:
    `$`→`\Z` recipe applied to the port → **7 divergent before AND after**, count identical,
    and the set pin named it exactly (`dollar before trailing newline` out, `dollar with m flag
    agrees` in). The count pin would have said "none new". Restored after; tree clean.
+
+   **A SECOND pin defect, found the same way and fixed: it first keyed on the LABEL.** A label
+   is prose — documentation that should stay freely editable — while a row's identity is the
+   pattern and flags it feeds the worker. A label-keyed pin fails on a pure rename with "a row
+   APPEARED / a row VANISHED", both false, and the correct response to a rename is exactly the
+   "do not just update the list" the message forbids — training the reader to distrust it. This
+   round RENAMED a row, which escaped the trap only because that row sits in the agreeing set.
+   **CONTROL PAIR, both run:** renaming a DIVERGENT row's label → still passes (a label-keyed
+   pin would have failed); the `$`→`\Z` swap → still caught, now naming
+   `ok$<>` out / `b$<m>` in, which is more diagnostic than the labels were.
 
    One row was RELABELLED rather than kept: `lazy quantifier` → `a.*?b matches at all`. The
    worker contract is `{matched: bool}` and lazy-vs-greedy changes WHAT is captured, never
@@ -496,6 +537,26 @@ difference — but every call site has to drop the await). One item left:
 
    The corpus carries labelled CONTROL rows plus a `rows < 15` vacuity gate, for the same
    reason `lease-diff.sh` does.
+
+   - **`run-tests.mjs` has its OWN `run()` that INJECTS `--approve`, keyed on the script
+     identity.** `:45` is `const needsApproval = script === GATE_CHECK && …`, `:46` prepends
+     `--approve`, and `:47` is again `execFile(process.execPath, …)`. So the retrofit must
+     update that identity comparison too, or every gate silently runs UNAPPROVED — which is
+     not a visible error, it is `gate-check.mjs:763-768` running ZERO commands and exiting 1.
+
+   **THE HIGHEST-RISK ITEM IN THE PORT ITSELF, and it is not a harness problem.** The approval
+   token is `sha256(JSON.stringify(oracle(file, gate)))` (`gate-check.mjs:340-360`), over
+   TWELVE fields: `schema`, `check`, `expect`, `cwd`, `shell`, `timeoutMs`, `maxOutputBytes`,
+   `regexTimeoutMs`, `regexStartupTimeoutMs`, `maxRegexWorkers`, `platform`, `path`. The port
+   must reproduce that digest BYTE-for-byte or **every approval silently fails to match and
+   every gate reports unapproved** — the failure mode above, with no message naming the cause.
+   Three specific hazards, all of which `jsapi.py` already has tools for (`js_json_object`,
+   `_js_number`), so use them rather than `json.dumps`:
+   - `JSON.stringify` emits insertion order with NO spaces; `json.dumps` defaults to `", "`
+     and `": "`. (The exact class that bit `regex_worker` this round.)
+   - JS renders `1.0` as `1`; Python renders `1.0`. Any float field diverges.
+   - `process.platform` vs `sys.platform` happen to agree on `darwin`/`linux`/`win32`, which
+     is luck worth not relying on silently — assert it rather than assume it.
 
    **ALSO: `mutate-probe.sh` does NOT work as the verdict reader for this route.** Its verdict
    greps `^DIVERGE` (`:140`), which only the hand-written differential drivers print. The
