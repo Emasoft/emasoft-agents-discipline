@@ -1499,9 +1499,20 @@ def write_atomic(file, text, root=None):
         raise OSError("could not create a unique temporary file for " + target)
     try:
         # Strict encode, unlike the READ side's errors="replace". Node's writeFileSync(fd, s,
-        # "utf8") substitutes U+FFFD for a lone surrogate; a Python str carrying one can only
-        # come from a surrogateescape decode, which nothing in this port performs, so a strict
-        # failure here means a caller built an unencodable string and should hear about it.
+        # "utf8") substitutes U+FFFD for a lone surrogate, so a strict failure here means a
+        # caller built an unencodable string and should hear about it.
+        #
+        # AN EARLIER VERSION JUSTIFIED THAT WITH "a Python str carrying one can only come from a
+        # surrogateescape decode, WHICH NOTHING IN THIS PORT PERFORMS". That premise is FALSE
+        # and it appeared at three sites: CPython surrogateescape-decodes sys.argv and the
+        # filesystem encoding ITSELF, with no explicit decode call anywhere. Two of the three
+        # sites were real crashes (the approval digest, the lock metadata). This one is kept
+        # STRICT deliberately, and on a different argument: every caller now routes its payload
+        # through _js_json_text, which escapes surrogates to ASCII, so a string arriving here
+        # still carrying one was NOT produced by the serializer -- it is a caller bug, and
+        # writing Node's lossy U+FFFD substitution of it would silently corrupt a file. The
+        # difference from the other two sites is that there the ORACLE loses nothing (it
+        # escapes) while here the oracle DOES lose (it substitutes).
         _write_all(fd, str(text).encode("utf-8"))
         os.fsync(fd)
         os.close(fd)
@@ -1609,10 +1620,25 @@ def with_file_lock(root, target, fn, timeout_ms=30000):
         # leaves the lock metadata as truncated JSON, the release loop's json.load raises
         # ValueError, that arm breaks WITHOUT unlinking, and the lock is held until a human
         # removes it. A partial write of an ownership record is worse than no record.
-        _write_all(fd, json.dumps(
+        # _js_json_text, not a bare json.dumps: `lock_target` is a RESOLVED PATH, and on Linux a
+        # repository path whose bytes are not valid UTF-8 reaches Python as U+DCxx through the
+        # filesystem encoding's surrogateescape -- the same runtime-supplied decode that makes
+        # the digest case reachable through argv. MEASURED at this exact payload shape:
+        #   PY  json.dumps(..., ensure_ascii=False).encode("utf-8") -> UnicodeEncodeError
+        #   JS  JSON.stringify(...)                                 -> 51 bytes of pure ASCII
+        # JSON.stringify ESCAPES the surrogate, so the oracle writes a faithful, reversible
+        # record and loses nothing.
+        #
+        # THIS IS NOT THE FAIL-CLOSED CASE sha256() defends, and the distinction decides the
+        # fix. There, Node's createHash SUBSTITUTES U+FFFD and hashes a LOSSY key, so two
+        # different paths can collide on one lock -- refusing is genuinely safer. Here nothing
+        # is lost, and refusing is strictly worse than the oracle: the comment below already
+        # records what a failed write of this record costs -- the release loop's json.load
+        # raises, that arm breaks WITHOUT unlinking, and the lock is held until a human removes
+        # it. The port would turn an unusual path into a permanently stuck lock.
+        _write_all(fd, _js_json_text(
             {"token": token, "pid": os.getpid(), "target": lock_target,
-             "at": int(time.time() * 1000)},
-            separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+             "at": int(time.time() * 1000)}).encode("utf-8"))
         identified = True
     except OSError:
         pass  # leave for manual cleanup rather than risk deleting a successor

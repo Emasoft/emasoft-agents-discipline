@@ -419,6 +419,13 @@ def update_dispatch(root, spec):
         # js_json_object, so the file's KEY ORDER matches the oracle's byte for byte. A wave
         # named "1" enumerates first in JS whatever order it was inserted, and both runtimes
         # write this same file during the migration.
+        # A bare json.dumps here, NOT gates._js_json_text, and the exemption is MEASURED rather
+        # than assumed. That helper exists because ensure_ascii=False leaves a lone surrogate
+        # raw and the encode then raises -- which crashed the approval digest and the lock
+        # metadata. This site cannot receive one: every string in `state` is an id or a handle,
+        # and both gates are charset-closed. Measured: validate_scope_id("a" + chr(0xDCFF))
+        # rejects with "must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/", and the handle check
+        # uses str.isprintable(), which is False for every surrogate.
         write_atomic(path, json.dumps(js_json_object(state), indent=2, ensure_ascii=False) + "\n",
                      root=root)
         return state["waves"][wave_id]

@@ -617,6 +617,44 @@ report(_js_na.stdout.strip() == _g.gate_definition_digest(
            {"check": "echo na" + chr(0xEF) + "ve", "expect": "ok", "cwd": None}),
        "digest: ordinary non-ASCII still agrees (the escape did not over-fire)",
        _js_na.stdout.strip()[:32])
+# THE SURROGATE IN THE `cwd` SLOT, which is the position the reachability argument actually
+# names -- `--cwd` is what carries an argv byte into this payload, and both checks above put the
+# surrogate in `check` instead. It passes for a reason (the substitution runs over the whole
+# dumped text, not per field, and str(cwd) on a str is identity), but "it passes for a reason"
+# is the phrasing this task keeps having to retract. One more object closes it.
+_js_cwd = subprocess.run(
+    ["node", "-e",
+     'import(process.argv[1]).then(m=>process.stdout.write(String(m.gateDefinitionDigest('
+     '{check:"echo ok",expect:"ok",cwd:"/tmp/\\udcff"}))))',
+     os.path.join(ROOT, "scripts", "lib", "gates.mjs")],
+    capture_output=True, text=True, timeout=60)
+try:
+    _py_cwd = _g.gate_definition_digest(
+        {"check": "echo ok", "expect": "ok", "cwd": "/tmp/" + chr(0xDCFF)})
+except UnicodeEncodeError as exc:
+    _py_cwd = "RAISED UnicodeEncodeError: %s" % exc
+report(len(_js_cwd.stdout.strip()) == 64 and _js_cwd.stdout.strip() == _py_cwd,
+       "digest: a surrogate in the cwd slot agrees too, not just in check",
+       "js=%s py=%s" % (_js_cwd.stdout.strip()[:16], str(_py_cwd)[:16]))
+# The LOCK-METADATA write is the same serializer contract at a second site, and it had the same
+# crash. Checked as TEXT rather than by writing a lock, because the property is the
+# serialization: a resolved path carrying a surrogateescape byte must produce the oracle's bytes
+# instead of raising. A failed write here is not a lost record -- gates.py's own comment says
+# the release loop's json.load then raises, that arm breaks WITHOUT unlinking, and the lock is
+# held until a human removes it.
+_lock_payload = {"token": "t", "pid": 1, "target": "/tmp/" + chr(0xDCFF), "at": 1}
+_js_lock = subprocess.run(
+    ["node", "-e",
+     'process.stdout.write(JSON.stringify({token:"t",pid:1,target:"/tmp/\\udcff",at:1}))'],
+    capture_output=True, text=True, timeout=60)
+try:
+    _py_lock = _g._js_json_text(_lock_payload)
+    _py_lock_bytes = len(_py_lock.encode("utf-8"))
+except UnicodeEncodeError as exc:
+    _py_lock, _py_lock_bytes = "RAISED: %s" % exc, -1
+report(_js_lock.stdout == _py_lock and _py_lock_bytes == len(_js_lock.stdout.encode("utf-8")),
+       "lock metadata: a surrogate in the resolved target serializes, byte for byte",
+       "js=%r py=%r" % (_js_lock.stdout[:48], str(_py_lock)[:48]))
 completed.append("digest_surrogate")
 
 # --- parse_gates: the whole parse result, field by field -----------------------------------
