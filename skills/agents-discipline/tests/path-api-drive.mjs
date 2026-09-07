@@ -24,10 +24,18 @@ export const CASES = {
   basename: ["/a/b", "/a/", "a", "/", "", "//", "/a//b//", "a/b/", ".", ".."],
   isAbsolute: ["/a", "a", "", "./a", "//a", "../a", "/"],
   // `["a//","b"]` and `["a/.","b"]` are the two cases `_js_join`'s OWN DOCSTRING names as the
-  // reasons it exists ("node's join("a//","b") is "a/b" and Python's is "a//b"") -- and neither
-  // was in this corpus, so nothing asserted them. Found by applying the rule the STATE block
-  // now carries: when a helper's docstring names the cases it exists to handle, the corpus
-  // exercising it must contain every one. Both PASS; the gap was in the assertions, not the code.
+  // reasons it exists -- and neither was in this corpus, so nothing asserted them. Both PASS;
+  // the gap was in the assertions, not the code.
+  //
+  // THEY WERE THEN TESTED RATHER THAN EXEMPTED, and the two came out DIFFERENTLY. They had
+  // been kept on the docstring-contract clause without checking whether any mutation isolates
+  // them, which is using an exemption to skip the work it exists to make unnecessary:
+  //   ["a/.","b"]  EARNS ITS PLACE OUTRIGHT. A normalizer handling `//` and `..` but not `.`
+  //                reddens THIS ROW ALONE. No exemption needed.
+  //   ["a//","b"]  REDUNDANT with `["a/","/b"]` two rows above, which produces the same
+  //                `a///b` shape. Every mutation tried reddens them together; none isolates
+  //                it. It is kept ONLY by the docstring clause -- correctly, since the
+  //                docstring names it, but the reader should know which of the two is which.
   join: [["/a", "b"], ["/a", "/b"], ["a", ""], ["", "b"], ["/a", ".."], ["/a", "b/"],
          ["a", "..", "..", "b"], [""], ["/"], ["a/", "/b"], ["a//", "b"], ["a/.", "b"]],
   relative: [["/a/b", "/a/b/c"], ["/a/b", "/a"], ["/a/b", "/a/b"], ["/a/b", "/x"],

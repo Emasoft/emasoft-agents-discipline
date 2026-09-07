@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T05:58:00+0200
+updated: 2026-09-07T06:14:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -50,14 +50,50 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > That rule is mechanical, needs no judgment about correctness, and would have caught this
 > before it was written.
 >
+> **ITS CEILING, which must be stated rather than assumed: satisfying it means the DOCUMENTED
+> hazards are covered, not that the corpus is adequate.** The rule derives test obligations
+> from PROSE, and prose is this document's least reliable artifact — every false claim
+> corrected this session was one ("five of seven", "one float", "since `85a6c50`", "2 rows",
+> "four causes", "10 PASS + 1"). Two things make it safe enough to use anyway, and both are
+> reasons, not hopes: an incomplete docstring UNDER-mandates and can never mandate a wrong row
+> (it fails toward a false negative), and "the docstring names case X" is a CHECKABLE claim —
+> you run X — unlike "this control discriminates", which is what kept going wrong.
+> A reader who ticks this box and concludes coverage is done has reproduced, one level up, the
+> failure the rule exists to prevent.
+>
+> **It does NOT license unbounded corpus growth, and the reason is worth stating because it is
+> the rule's real strength: the docstring's named cases are a FINITE SET THAT CLOSES.** The
+> obligation ends when every named case is present. b1f26ff's commit message defended it as
+> "a rule that finds missing coverage in code that happens to be correct is doing its job",
+> which generalises past its own bound — any rule that adds passing rows qualifies under that
+> phrasing. The bound is the enumeration, not the sentiment.
+>
 > **ORDERING AGAINST THE RULE ABOVE, which otherwise contradicts this one.** "If no mutation
-> isolates a row, that row does not earn its place" governs **branches in the implementation**;
-> this rule governs **rows in the corpus**. They are different objects, and applying the first
+> isolates a row, that row does not earn its place" governs **the thing UNDER TEST**; this rule
+> governs **the INPUTS used to test it**. That is the stable axis — NOT "implementation vs test
+> file", which this session's own actions refute: the `is_integer` fast path deleted under the
+> first rule lives in `tests/digest_drive.py`, a test file, and deleting it was right.
+> `_js_value`'s branches are under test even though they sit in a driver; `CASES` rows are
+> inputs even though they sit beside them. They are different objects, and applying the first
 > to the second deletes the fix: a `1e-7` row added *before* the bug was found is isolated by no
 > mutation (the obvious mutant is already killed by `1500.0`), so a mechanical reading would
 > delete it and the defect ships. **A row justified by a helper's documented contract earns its
 > place even when no mutation isolates it.** Note the first rule has already been used twice
 > this session to delete things correctly — which is what makes the ratchet dangerous.
+>
+> **BUT THE EXEMPTION IS A LAST RESORT, NOT A FIRST ANSWER — TEST BEFORE INVOKING IT.** Applied
+> to `_js_join`, I kept both new rows on the docstring clause without checking whether any
+> mutation isolates them. That is using an exemption to skip the work it exists to make
+> unnecessary. Tested afterwards, the two came out DIFFERENTLY:
+> - `["a/.","b"]` — **earns its place outright.** A normalizer handling `//` and `..` but not
+>   `.` reddens that row ALONE. The exemption was never needed.
+> - `["a//","b"]` — **redundant** with `["a/","/b"]`, which produces the same `a///b` shape.
+>   Every mutation tried reddens them together; none isolates it. Kept correctly on the
+>   docstring clause, but it is the only row here standing on that ground.
+>
+> So the order is: try to isolate the row first; reach for the docstring clause only when you
+> have failed and the docstring names the case. Otherwise the clause becomes a blanket excuse
+> and the corpus grows without a stopping condition.
 
 > **⚠ THE SUITE IS NOT ALL-GREEN, WHATEVER THE TALLY SAYS.** `regex-worker-diff.sh` exits 0
 > while **7 port divergences remain UNRESOLVED — ALL SEVEN, not "five of them", are ways the
@@ -815,12 +851,19 @@ difference — but every call site has to drop the await). One item left:
    `json.dumps(obj)` is WRONG here in four ways, every one silent, and each is now pinned by a
    mutation control that reddens:
 
-   | wrong default | JS | control reddens |
+   | wrong default | JS | what its control demonstrates |
    |---|---|---|
-   | `", "` / `": "` separators | `,` / `:` | **15 of 15 cases** |
-   | `ensure_ascii=True` escapes non-ASCII | never escapes | 4 cases (accented, emoji, U+2028, U+2029) |
-   | `1500.0` | `1500` | 2 cases |
-   | `Infinity` — **not valid JSON at all** | `null` | 2 cases |
+   | `", "` / `": "` separators | `,` / `:` | every case, since every case has multiple keys |
+   | `ensure_ascii=True` escapes non-ASCII | never escapes | only the rows carrying non-ASCII — accented, emoji, U+2028, U+2029 |
+   | `1500.0` | `1500` | every row reaching `_js_number` and differing there: `1500.0`, `-0.0`, `1e-7`, `0.000001` (`1.5` agrees; `inf`/`nan` short-circuit above it) |
+   | `Infinity` — **not valid JSON at all** | `null` | the two non-finite rows, which is all of them |
+
+   **No counts in that table, deliberately, and this is the second time that lesson had to be
+   learned in the same document.** It first read `15 / 4 / 2 / 2`, measured when the corpus held
+   15 cases. Three float rows were added and the numbers became `18 / 4 / 4 / 2` — stale in a
+   table presented as measurement, **one paragraph after the suite tally was dropped for exactly
+   this reason.** The conclusion was drawn and not applied to the adjacent table. Name what a
+   control demonstrates; a number drifts every time a row is added.
 
    The last is worse than a byte difference: the port would emit a document node cannot parse.
    `allow_nan=False` is set so a non-finite that escapes the conversion RAISES rather than
