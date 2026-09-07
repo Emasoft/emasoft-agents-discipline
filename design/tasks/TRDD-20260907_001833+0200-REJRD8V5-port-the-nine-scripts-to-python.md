@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T04:52:00+0200
+updated: 2026-09-07T05:06:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -31,6 +31,13 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > any divergence is a porting defect, never a re-specified test.* Under that rule there is no
 > "the engines differ and neither is wrong" category — a `(?<y>…)` the oracle accepts and the
 > port rejects is a defect, and so is a `(?P<y>…)` the port accepts and the oracle rejects.
+>
+> **SIX of the seven are fixable in stdlib `re`; ONE is not, and flattening that was the
+> error in the other direction.** `\p{L}` — Python's `re` has NO Unicode property escapes at
+> all. Closing it needs the third-party `regex` module or a hand-rolled property table, so it
+> is a divergence the emulate-vs-document decision may have to resolve as *document*, whatever
+> is chosen for the other six. Do not plan an emulation pass expecting all seven to close.
+>
 > Worst is `EXPECT: /ok$/`, which fails in the oracle and PASSES in the port on
 > output `gate-check` assembles without trimming. Exit 0 there means *no regression since the
 > set was pinned*, never *the port is correct*. Earlier commit messages in this TRDD's history
@@ -53,6 +60,12 @@ resuming session acts on this file). Correct form:
 - A finding that corrects a **false factual claim** — even pure prose — MUST be fixed. Wrong
   provenance, an inflated count, an unexecutable instruction: all misdirect the next session.
 - A finding that only **rewords an already-accurate claim** is the converged case. Log it, stop.
+
+**The criterion is only decidable if the finding carries its own refutation**, otherwise every
+reviewer classifies their finding as the first kind and it decides nothing. So: a "false claim"
+finding MUST name the specific proposition and the check that refutes it — a command, a line
+reference, a measurement. "Five of seven" was decidable that way (count the rows; `git log -S`
+the date). "The wording is unclear" is not, and belongs in the second bucket by default.
 
 ### DONE — but THE VERIFICATION STANDARD VARIES; read the per-bullet notes
 **NO bullet below was verified under the FINISHED harness. Not one.** That is the honest

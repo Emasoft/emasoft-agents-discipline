@@ -178,9 +178,13 @@ fi
 #             a check that is always red gets ignored, then "fixed" by weakening it.
 #   exit 3  -> a distinct "known defects, no regression" code IS the right shape, and a machine
 #             could then never tally this as PASS. NOT added, because nothing in this repo
-#             invokes this script: an exit-code protocol with no reader was added here once
-#             before and deleted for exactly that (R7). Add it in the SAME change that writes a
-#             batch runner, never speculatively.
+#             invokes this script. But the R7 precedent cited for that is WEAKER than it looks
+#             and should not be quoted as settling it: R7's codes were deleted because they did
+#             not DISCRIMINATE (the DIFFERS branch shared exit 0 with REDDENS) *and* had no
+#             reader. This one would discriminate a real state, and the harm is no longer
+#             hypothetical -- a tally counted this script as a plain PASS and reported seven
+#             unresolved port defects as green. Add the code in the SAME change that writes a
+#             batch runner, and treat that as due rather than speculative.
 #   exit 0 + a message that refuses to claim health -> what is here. It relies on a human
 #             reading the message, which is a real weakness and is why the wording is blunt.
 echo "--- $differed KNOWN PORT DIVERGENCES, UNRESOLVED (see TRDD) — set unchanged, no regression ---"
