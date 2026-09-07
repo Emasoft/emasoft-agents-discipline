@@ -32,6 +32,14 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from gates import parse_gates, read_stable_regular_file  # noqa: E402  # type: ignore[import-not-found]
+from jsapi import force_utf8_streams  # noqa: E402  # type: ignore[import-not-found]
+
+# BEFORE anything can print -- see the function's docstring. On this script the failure is not a
+# degraded message but a CRASH: MEASURED under `PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C`, a
+# non-ASCII EXPECT made the port die with UnicodeEncodeError partway through its report while the
+# oracle printed the warning. stderr defaults to backslashreplace and merely degrades; stdout,
+# which this script writes to, has no such fallback.
+force_utf8_streams()
 
 # The usage line is the ONE string that legitimately differs from the JS original: a
 # program names itself in its own usage line. Every other output string below is a

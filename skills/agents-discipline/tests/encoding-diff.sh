@@ -141,6 +141,46 @@ else
   fail=$((fail + 1)); FAILED+=("EXPECT warning text")
 fi
 
+# --- CASE 3: a NON-UTF-8 STDOUT, which is the environment the other two cases cannot reach ----
+# node writes UTF-8 to stdout/stderr whatever the locale says; CPython follows the locale. On an
+# ASCII stream the port therefore backslash-escapes on stderr and CRASHES on stdout, where there
+# is no backslashreplace fallback -- MEASURED, gate-lint died with UnicodeEncodeError partway
+# through its report while the oracle printed the warning.
+#
+# THE ENV IS THREE VARIABLES, NOT ONE, and that is the whole reason this case exists as its own
+# row. A bare LC_ALL=C measures nothing: PEP 538 locale coercion and PEP 540 UTF-8 mode promote
+# it back to UTF-8 before any output happens, so `sys.stdout.encoding` reports utf-8 and the
+# suite passes. An earlier commit recorded "green under LC_ALL=C" on exactly that basis and it
+# was worthless. Both escape hatches must be shut to reach the ASCII stream that a bare
+# container, a cron job, or a CI runner can still produce.
+#
+# gate-lint rather than gate-check: it writes its findings to STDOUT, which is the stream with
+# no fallback and therefore the one that fails loudly instead of quietly.
+LINT_ORACLE="$HERE/../scripts/gate-lint.mjs"
+LINT_PORT="$HERE/../scripts/gate_lint.py"
+c3="$WORK/c3"; mkdir -p "$c3"
+printf '# Gates\n\n- [ ] G1: x\n  CHECK: true\n  EXPECT: /src/%s/out.txt/\n' "$NON_ASCII" \
+  > "$c3/leaf.md"
+_hostile() {  # exe script -> stdout+exit, scrubbed
+  PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C "$1" "$2" "$c3/leaf.md" > "$WORK/.ho" 2> "$WORK/.he"
+  printf '%s\n--exit--\n%s\n--stderr--\n%s' \
+    "$(_scrub "$c3" < "$WORK/.ho")" "$?" "$(_scrub "$c3" < "$WORK/.he")"
+}
+o_lint="$(_hostile "$NODE_ABS" "$LINT_ORACLE")"
+p_lint="$(_hostile "$PY_ABS" "$LINT_PORT")"
+if ! printf '%s' "$o_lint" | grep -q "$NON_ASCII"; then
+  printf 'DIVERGE  %-38s oracle lint output lacks the non-ASCII EXPECT; fixture reached nothing\n' \
+    "non-UTF-8 stdout"
+  fail=$((fail + 1)); FAILED+=("non-UTF-8 stdout")
+elif [ "$o_lint" = "$p_lint" ]; then
+  printf '  OK      %-38s identical on an ASCII stdout\n' "non-UTF-8 stdout"
+  pass=$((pass + 1))
+else
+  printf 'DIVERGE  %-38s\n' "non-UTF-8 stdout"
+  diff <(printf '%s\n' "$o_lint") <(printf '%s\n' "$p_lint")
+  fail=$((fail + 1)); FAILED+=("non-UTF-8 stdout")
+fi
+
 echo
 if [ "$fail" = 0 ]; then
   echo "--- $pass non-ASCII surface(s) identical ---"

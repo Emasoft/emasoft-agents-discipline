@@ -29,6 +29,14 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from gates import read_stable_regular_file  # noqa: E402  # type: ignore[import-not-found]
+from jsapi import force_utf8_streams  # noqa: E402  # type: ignore[import-not-found]
+
+# BEFORE anything can print -- see the function's docstring. MEASURED under
+# `PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C`, a DELEGATION.md whose unit name carries one
+# non-ASCII character killed this script with UnicodeEncodeError at the row-listing print, where
+# the oracle printed the row. A ledger checker that dies on the ledger it was handed is the
+# loudest possible divergence.
+force_utf8_streams()
 
 # why: the same runner vocabulary as a word set — a regex alternation of shell names trips the
 # publish gate's injection scanner, and a dynamically built pattern trips its ReDoS rule.

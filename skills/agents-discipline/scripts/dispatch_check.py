@@ -14,7 +14,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from dispatch import (  # noqa: E402  # type: ignore[import-not-found]
     DispatchError, get_dispatch_wave, update_dispatch,
 )
-from jsapi import js_trim  # noqa: E402  # type: ignore[import-not-found]
+from jsapi import force_utf8_streams, js_trim  # noqa: E402  # type: ignore[import-not-found]
+
+# BEFORE anything can print -- see the function's docstring. This script's wave reports carry
+# leaf ids and abandon reasons straight from dispatch.json, so a non-ASCII one reaches stdout.
+force_utf8_streams()
 
 COMMANDS = ("open", "start", "seal", "return", "abandon", "status")
 OPTIONS = ("--root", "--scope", "--wave", "--leaf", "--handle", "--reason")

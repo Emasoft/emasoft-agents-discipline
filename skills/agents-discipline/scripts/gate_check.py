@@ -116,9 +116,16 @@ from gates import (  # noqa: E402  # type: ignore[import-not-found]
     # driftable copy -- the standing rule for every helper this project has already ported.
     _js_join, _js_json_text, _LONE_SURROGATE_RE, _path_is_inside,
 )
-from jsapi import js_json_object, js_length, js_slice, js_to_number, js_trim  # noqa: E402  # type: ignore[import-not-found]
+from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
+    force_utf8_streams, js_json_object, js_length, js_slice, js_to_number, js_trim)
 from dispatch import _iso_now, dispatch_status  # noqa: E402  # type: ignore[import-not-found]
 from process_tree import terminate_process_tree  # noqa: E402  # type: ignore[import-not-found]
+
+# BEFORE anything can print. node's stdout/stderr are UTF-8 whatever the locale is; CPython's
+# follow the locale, so on an ASCII stream this program backslash-escapes a character the oracle
+# prints. MEASURED under `PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C` -- see the function's
+# docstring for the transcript, and for why a bare `LC_ALL=C` measures nothing.
+force_utf8_streams()
 
 # gate-check.mjs:72 -- the sibling supervisor process that keeps a stable process-group
 # leader alive until CHECK's stdio closes. lib/regex_worker.py is the disposable one-shot

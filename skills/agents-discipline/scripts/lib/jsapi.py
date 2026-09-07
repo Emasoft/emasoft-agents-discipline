@@ -14,6 +14,9 @@ and where that answer reaches a file on disk or a message a human reads:
   - `parse_date` -- `Date.parse` treats a bare date as UTC and a bare date-TIME as LOCAL, accepts
     hour 24 exactly at 24:00:00, and rolls an out-of-range DAY into the next month while
     rejecting an out-of-range month. `datetime.fromisoformat` agrees with none of that.
+  - `force_utf8_streams` -- node writes UTF-8 to stdout/stderr unconditionally; CPython encodes
+    with whatever the locale says, so on an ASCII stream a non-ASCII message comes out
+    backslash-escaped where the oracle prints the character.
 
 Each is verified against Node by tests/jsapi-drive.mjs / tests/jsapi_drive.py, over a corpus
 that includes every case measured above.
@@ -22,6 +25,7 @@ that includes every case measured above.
 import datetime
 import decimal
 import re
+import sys
 
 # ---------------------------------------------------------------------------------------------
 # String.prototype.trim
@@ -567,3 +571,33 @@ def js_sort_key(value):
     That divergence is upstream of this function and cannot be repaired here.
     """
     return js_string(value).encode("utf-16-be", "surrogatepass")
+
+
+def force_utf8_streams():
+    """Make stdout/stderr UTF-8, because node's are, whatever the locale says.
+
+    MEASURED under `PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C`, same ledger, same gate, the
+    EXPECT warning for `/src/café/out.txt/`:
+
+        oracle  EXPECT "/src/café/out.txt/"
+        port    EXPECT "/src/caf\\xe9/out.txt/"
+
+    CPython picks its stream encoding from the locale and defaults to `backslashreplace` on
+    stderr, so an ASCII stream turns a character the oracle prints into an escape. Node's
+    process.stdout/stderr are UTF-8 unconditionally, so this is a fidelity defect, not a
+    platform difference to be tolerated.
+
+    THE EARLIER "green under LC_ALL=C" MEASUREMENT PROVED NOTHING, and that is the reusable
+    lesson: PEP 538 locale coercion and PEP 540 UTF-8 mode promote a bare `LC_ALL=C` back to
+    UTF-8, so the interpreter had already repaired the hostile setting before the test ran
+    (`sys.stdout.encoding` reported `utf-8`). Only disabling BOTH escape hatches reaches the
+    ASCII stream that CI, cron and a bare container can still produce. A hostile-environment
+    check that the runtime quietly fixes for you is not a check.
+
+    File writes were never affected -- those pass an explicit `encoding="utf-8"` -- which is why
+    the lease case stayed green while the warning case diverged.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8")
