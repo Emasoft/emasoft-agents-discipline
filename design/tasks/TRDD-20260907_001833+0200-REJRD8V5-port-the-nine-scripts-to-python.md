@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T06:56:58+0200
+updated: 2026-09-07T07:12:21+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -13,8 +13,31 @@ scope: project
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
 
-**WHERE THE PORT ACTUALLY IS (`d4a1acc`, and this line is the one to trust over anything older
-in this file).** `gate_check.py` is 851 lines against a 950-line oracle. `PORT_INCOMPLETE_EXIT`
+**gate-check.mjs IS FULLY PORTED (`d12f67f`, 2026-09-07). `PORT_INCOMPLETE_EXIT` IS GONE.**
+`gate_check.py` is 1402 lines covering `gate-check.mjs:27-950`. What backs the word "fully",
+stated because it is the strongest claim in this file and I read only a fraction of the last
+160 lines:
+
+| case | oracle | port | stdout | rewritten ledger |
+|---|---|---|---|---|
+| all gates pass | exit 0 | 0 | identical | identical |
+| a failing gate | exit 1 | 1 | identical | identical |
+| usage error | exit 2 | 2 | — | — |
+| **stale results** | exit 0 | 0 | identical | identical |
+
+The ledger column is the load-bearing one: **no differential in the suite reads a rewritten
+ledger**, so the section ported last had no coverage from the 8 runners at all.
+**Same-directory is mandatory** — a first attempt ran the two runtimes in separate temp dirs and
+showed two diffs (the approval token, and EVIDENCE's `cwd=`), both of which BIND to the path.
+The harness produced them, not the port.
+**The stale row is non-vacuous:** the fixture is built by running to green (box → `[x]`, automatic
+EVIDENCE written), then CHANGING the CHECK so the recorded `definition-sha256` no longer matches,
+and the oracle's output then contains "stale" — so the branch is entered, not skipped.
+**Still unexercised:** exit 3 (lease conflict — `lease-diff.sh` covers the lease machinery, not
+this exit path), concurrent ledger rewrites under the file lock, dispatch aggregation with real
+dispatch state, and ABANDON handling.
+
+**WHERE THE PORT ACTUALLY IS (`d4a1acc`, superseded above; kept for the boundary history).** `gate_check.py` is 851 lines against a 950-line oracle. `PORT_INCOMPLETE_EXIT`
 (90) fires from exactly ONE site, `:847`, now standing at `gate-check.mjs:775` — up from `:295`.
 Ported since: ledger loading, gate selection, `resolve_shell` (`:550`), and the
 approval-classification loop with a token store. NOT ported: CHECK execution (spawning
