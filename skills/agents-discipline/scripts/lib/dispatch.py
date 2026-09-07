@@ -419,13 +419,33 @@ def update_dispatch(root, spec):
         # js_json_object, so the file's KEY ORDER matches the oracle's byte for byte. A wave
         # named "1" enumerates first in JS whatever order it was inserted, and both runtimes
         # write this same file during the migration.
-        # A bare json.dumps here, NOT gates._js_json_text, and the exemption is MEASURED rather
-        # than assumed. That helper exists because ensure_ascii=False leaves a lone surrogate
-        # raw and the encode then raises -- which crashed the approval digest and the lock
-        # metadata. This site cannot receive one: every string in `state` is an id or a handle,
-        # and both gates are charset-closed. Measured: validate_scope_id("a" + chr(0xDCFF))
-        # rejects with "must match /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/", and the handle check
-        # uses str.isprintable(), which is False for every surrogate.
+        # A bare json.dumps here, NOT gates._js_json_text. THE EXEMPTION STANDS, BUT ITS ORIGINAL
+        # REASONING WAS WRONG ON BOTH HALVES AND THAT COST TWO SHIPPED CRASHES. It claimed "every
+        # string in `state` is an id or a handle, and both gates are charset-closed":
+        #   * `reason` is neither -- it is FREE TEXT, gated only by _valid_reason's control-char
+        #     and length checks. `--reason <one invalid argv byte>` exited 0 in the oracle and
+        #     died here with UnicodeEncodeError, mid-transaction.
+        #   * `handle` is free text too, and the validator this comment NAMED IS NOT THE ONE THAT
+        #     RUNS. It said str.isprintable() (False for every surrogate -- true, and irrelevant);
+        #     _valid_handle uses `_CONTROL.search(handle)`, and surrogates are outside that class.
+        #     So the handle crashed here as well, at the same line, unlooked-for because this
+        #     comment said it could not.
+        # A comment that names a validator has to name the one the code CALLS. This one would
+        # have told anyone who checked that the handle path was safe -- which is a hazard whether
+        # or not it is why the second crash site went unlooked-for (no test drove `--handle` with
+        # bad bytes either, and that is the duller and likelier explanation).
+        #
+        # AND THE FIX IS NOT TO ADD A SURROGATE GATE to _valid_handle or _valid_reason. By the
+        # time node's validators run it is holding U+FFFD, an ordinary printable character it
+        # accepts; a port-only surrogate rejection would be a FRESH divergence dressed as
+        # hardening. What actually makes this line safe now is upstream and
+        # unconditional: jsapi.normalize_argv() runs before any parsing in all four CLIs, so an
+        # argv value carrying invalid UTF-8 arrives as U+FFFD (node's own spelling) and no lone
+        # surrogate can reach `state` from a command line at all. Covered by tests/argv-diff.sh.
+        # The ONLY reason not to route this through _js_json_text is the one that survives:
+        # JSON.stringify ESCAPES a lone surrogate to six ASCII characters while the oracle here
+        # writes the CHARACTER -- measured, so the helper would trade a crash for a silent byte
+        # divergence in the file both runtimes read.
         write_atomic(path, json.dumps(js_json_object(state), indent=2, ensure_ascii=False) + "\n",
                      root=root)
         return state["waves"][wave_id]

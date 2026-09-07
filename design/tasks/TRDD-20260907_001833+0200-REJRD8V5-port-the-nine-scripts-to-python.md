@@ -47,14 +47,24 @@ as a side effect of driving two path-taking CLIs. Its first run went red on `led
 — the SAME `err.message`-vs-`str()` divergence `9071a84` fixed in gate-lint, at a second call
 site nobody swept for. Fixed in the same commit.
 
-**Next: sweep the remaining `error.message` interpolations.** `9071a84` and the ledger fix are
-two of a class. The oracle interpolates `error.message` at ~16 sites (`gate-check.mjs:126, 211,
-234, 241, 727, 748, 764, 855`, `dispatch-check.mjs:138`, `check-supervisor.mjs:24`); the port
-spells most of them `str(exc)` (`gate_check.py:448, 472, 478, 506, 523, 884, 941, 1320`,
-`dispatch_check.py:224`). NOT all are fs errors — the worker, spawn and regex sites are V8/CPython
-text where the guard correctly degrades to `str()` — so each site needs its errno checked rather
-than a blanket rewrite. `gate_check.py:929` already carries a note about exactly this asymmetry;
-read it first.
+**Next: sweep the remaining `error.message` interpolations.** `9071a84` (gate-lint) and the
+ledger fix are two of a class, both found one at a time rather than by looking.
+
+COUNTED, not sampled — an earlier version of this line said "~16 oracle sites and ~9 port sites"
+from a `head -20` grep whose output was truncated, which is the same defect one layer up:
+
+| oracle `.message` | port `str(exc)`/`str(error)` |
+|---|---|
+| `gate-check.mjs` 15 · `process-tree.mjs` 8 · `dispatch.mjs` 4 · `gate-lint.mjs` 2 · `gates.mjs` 2 · `check-supervisor.mjs` 2 · `dispatch-check.mjs` 1 · `regex-worker.mjs` 1 = **35** | `gate_check.py` 12 · `dispatch.py` 7 · `gates.py` 4 · `gate_lint.py` 2 · `check_supervisor.py` 2 · `dispatch_check.py` 1 · `regex_worker.py` 1 · `process_tree.py` 1 = **30** |
+
+That is the TRIAGE surface, not the fix list, and it is wrong in BOTH directions — it is a
+SPELLING grep. It over-counts (the worker, spawn and regex sites carry V8/CPython text where
+`str()` is correct and `_node_fs_message` would be wrong) and it under-counts (`f"{e}"`,
+`repr(err)`, `err.strerror`, or an error bound to a variable and interpolated later all evade
+it). So the numbers bound the reading, not the work. Each site needs its errno checked: the
+`_node_fs_message(...) if errno is not None else str(...)` guard degrades correctly by
+construction, but applying it blindly would claim node-shaped fidelity for messages node never
+produced. `gate_check.py:929` already carries a note about exactly this asymmetry; read it first.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
 

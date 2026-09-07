@@ -38,9 +38,13 @@
 # Cases 1-3 discriminate the decode AT THE FILE, where nothing intervenes. Cases 4-5 discriminate
 # it as expressed THROUGH the per-code-point stream handler -- so they are conditional on that
 # handler, which is not a hypothetical dependency: 2c98ecc fixed it emitting one U+FFFD per ERROR
-# instead of per CODE POINT, and under that spelling the port would print node's single
-# replacement and these rows would go green under the same mutation. Still correct guards (a
-# surrogate reaching the stream is a defect either way), just not independent of it.
+# instead of per CODE POINT. MEASURED that this matters, rather than reasoned from the fix's
+# shape: CPython's UTF-8 encoder hands the handler ONE error span covering BOTH of BAD_SEQ's
+# surrogates -- (start 1, end 3, length 2) for `x`+2 surrogates+`y`, against two length-1 spans
+# when the surrogates are separated by an ASCII byte. So under the per-ERROR spelling the port
+# would emit ONE replacement, match node, and these two rows would go GREEN under the same
+# mutation. Still correct guards (a surrogate reaching the stream is a defect either way), just
+# not independent of it.
 #
 # STILL NOT COVERED, and it is a property of the surface rather than an omission: gate-check.
 # Its argv values are charset-closed ids and PATHS, and on macOS a path carrying invalid UTF-8
