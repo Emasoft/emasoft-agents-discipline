@@ -60,6 +60,58 @@ def js_trim(value):
     return str(value).strip(_JS_WHITESPACE)
 
 
+# The JS numeric-literal grammar `Number(str)` accepts, MINUS the extensions Python's float()
+# adds. Anchored, so nothing trails. `5.` and `.5` are both legal; an exponent needs digits.
+_JS_DECIMAL_RE = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z")
+_JS_RADIX_PREFIX = {"0x": 16, "0X": 16, "0b": 2, "0B": 2, "0o": 8, "0O": 8}
+
+
+def js_to_number(value):
+    """`Number(value)` for a STRING -- the argv coercion, not `float()`.
+
+    `_js_number` is the OTHER direction (Number::toString). This one is what `timeoutValue`
+    and `jobCount` in gate-check.mjs apply to an argv string before range-checking it, so a
+    naive `float()` changes which command lines are accepted.
+
+    MEASURED against node; every case here differs from `float()` or would crash it:
+      ""        -> 0        float("") raises ValueError
+      " "       -> 0        whitespace-only is ZERO, not an error
+      "  12  "  -> 12       JS trims first (the ECMAScript set, via js_trim)
+      "0x10"    -> 16       float() raises; JS reads hex. Also 0b11 -> 3, 0o17 -> 15
+      "1_000"   -> NaN      float("1_000") is 1000 -- Python allows separators, JS does not
+      "Infinity"-> inf      float("inf") works but JS wants the exact spelling; "inf" is NaN
+      "12abc"   -> NaN      float() raises
+      "5."      -> 5        legal in both; ".5" -> 0.5 likewise
+      "1,000"   -> NaN      thousands separators are not numeric syntax
+      "--5"     -> NaN      only ONE sign, and none at all on a radix prefix
+
+    Returns a float (`float("nan")` for the NaN cases) so callers can use the same
+    `Number.isInteger` / range tests the oracle does.
+    """
+    text = js_trim(value)
+    if text == "":
+        return 0.0                                   # Number("") and Number(" ") are both 0
+    if text in ("Infinity", "+Infinity"):
+        return float("inf")
+    if text == "-Infinity":
+        return float("-inf")
+    radix = _JS_RADIX_PREFIX.get(text[:2])
+    if radix is not None:
+        # NO SIGN is permitted before a radix prefix -- Number("-0x10") is NaN, where
+        # int("-0x10", 16) happily returns -16. The slice below cannot see a sign anyway
+        # (it would have shifted the prefix), which is why this is checked by construction.
+        digits = text[2:]
+        if not digits:
+            return float("nan")                      # "0x" alone
+        try:
+            return float(int(digits, radix))
+        except ValueError:
+            return float("nan")
+    if not _JS_DECIMAL_RE.match(text):
+        return float("nan")                          # rejects 1_000, 12abc, 1e, 1,000, --5
+    return float(text)
+
+
 # ---------------------------------------------------------------------------------------------
 # Truthiness and String() -- the two coercions `x || ""` and `String(x)` perform
 # ---------------------------------------------------------------------------------------------
@@ -84,6 +136,8 @@ def js_truthy(value):
     if isinstance(value, (list, dict, tuple)):           # any object is truthy in JS, even empty
         return True
     return bool(value)
+
+
 
 
 def _js_number(value):
