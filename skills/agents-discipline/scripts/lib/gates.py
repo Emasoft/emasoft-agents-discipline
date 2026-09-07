@@ -160,12 +160,15 @@ def _same_snapshot(left, right):
 _NODE_MESSAGE_TYPES = {}
 
 
-def _node_message_error(error, syscall) -> OSError:
+_KEEP_FILENAME = object()
+
+
+def _node_message_error(error, syscall, filename=_KEEP_FILENAME) -> OSError:
     """Same OSError SUBCLASS and errno as `error`, but str() gives node's message.
 
     Annotated `-> OSError` at the ROOT rather than at each consumer: the subclass is built by a
     dynamic `type(...)` call, so the checker sees an opaque `_` and reads every `raise` of it --
-    here, in _node_call, _node_lstat and _mkdirs -- as raising a non-exception. One annotation
+    here, in _node_call, _node_lstat and mkdirs -- as raising a non-exception. One annotation
     plus one suppression at the return below settles all of them; annotating the consumers
     instead just moves the same complaint outward, one copy per hop.
 
@@ -198,8 +201,15 @@ def _node_message_error(error, syscall) -> OSError:
             or base.__str__(self)})  # pyright: ignore[reportCallIssue]
         _NODE_MESSAGE_TYPES[base] = subclass
     rebuilt = subclass(error.errno, error.strerror)
-    rebuilt.filename = error.filename
-    rebuilt._node_message = node_fs_message(error, syscall)
+    # `filename` OVERRIDES rather than mutating the caller's error, which is also the `from`
+    # cause: a mutated cause shows a path the OS never reported, destroying the one thing a raw
+    # cause is good for. The message is then computed from `rebuilt`, not `error`, so the
+    # override reaches the text too -- rebuilt carries no _node_message yet, so node_fs_message
+    # takes its normal path.
+    # A SENTINEL, not None: None is a REAL filename here (an fd-based failure -- fstat, read --
+    # has no path in either runtime, and node_fs_message renders that as a bare ", fstat").
+    rebuilt.filename = error.filename if filename is _KEEP_FILENAME else filename
+    rebuilt._node_message = node_fs_message(rebuilt, syscall)
     # `base` IS type(error) and error is an OSError, so every subclass built here derives from
     # OSError -- a fact the dynamic type() call hides from the checker but not from the runtime.
     return rebuilt  # pyright: ignore[reportReturnType]
@@ -216,10 +226,18 @@ def _node_call(syscall, call, *args, **kwargs):
     known is the only fix that does not ask every caller to guess; node_fs_message then prefers
     the attached message over the constant it was passed.
 
-    MEASURED, node against CPython on the same four failures: realpathSync reports `lstat`, and
-    BOTH runtimes name the failing COMPONENT ('/nonexistent-xyz') rather than the argument
-    ('/nonexistent-xyz/x'); fstat and read carry NO path in either, which node_fs_message's
-    existing suffix branch already renders as a bare ", fstat". So only the token was missing.
+    MEASURED, node against CPython: an fd-based failure (fstat, read, fsync) carries NO path in
+    EITHER runtime, which node_fs_message's suffix branch already renders as a bare ", fstat";
+    a path-based one (open, lstat) names the same path in both. So for these the token was the
+    only thing missing.
+
+    ONE CONSTANT PER CALL SITE IS ONLY VALID WHEN THE CALL MAKES ONE SYSCALL, which is the
+    limit this helper does not enforce and cannot. `realpath` broke it -- node walks the path
+    and reports whichever step failed, so its token varies BY ERRNO -- and it now has its own
+    `_node_realpath` with the measurements. Before wrapping a new call here, check that node
+    reports one syscall for it across errnos; "I measured one errno" is not that check. The
+    first version of this docstring said MEASURED on the strength of exactly one, and MEASURED
+    is the word that stops the next reader looking.
     """
     try:
         return call(*args, **kwargs)
@@ -245,9 +263,47 @@ def _node_mkdir_error(error, path) -> OSError:
 
     So the syscall token alone is not enough here: the path has to be overridden too, or the
     message names a directory the caller never asked about.
+
+    THE OVERRIDE IS A DATA CHANGE, not only a message change: the returned error's `.filename`
+    is the directory ASKED FOR, no longer the one that actually failed. Measured that nothing
+    reads it today -- `node_fs_message` is the only consumer of `.filename` in the port -- but a
+    future caller wanting the failing path must take it from the `__cause__`, which is left
+    unmutated precisely so it still carries what the OS said.
     """
-    error.filename = os.path.abspath(path)
-    return _node_message_error(error, "mkdir")
+    return _node_message_error(error, "mkdir", filename=os.path.abspath(path))
+
+
+def _node_realpath(target):
+    """os.path.realpath(strict=True), re-raising with node's shape -- whose syscall VARIES.
+
+    A single constant is provably wrong here, and the first version of this code used one.
+    node's realpathSync is a WALK, so the syscall it reports is whichever step failed. MEASURED
+    on macOS, five shapes, and they do not agree:
+
+        ELOOP (symlink loop)          -> stat
+        EACCES (unsearchable parent)  -> lstat
+        ENOTDIR (file as a component) -> lstat
+        ENOENT (missing component)    -> lstat
+        ENOENT (dangling symlink)     -> stat   AND node names the LINK, python the TARGET
+
+    ELOOP is exactly the errno this module cares most about -- read_stable_regular_file has a
+    dedicated branch for it -- so the flat `lstat` was wrong in the one case most likely to be
+    hit. The map below is measured for the four cases above it.
+
+    UNCLOSED, and stated rather than buried: the DANGLING-SYMLINK case still diverges twice
+    over. It is ENOENT, so this returns `lstat` where node says `stat`; and node reports the
+    link while `os.path.realpath` reports the target it could not resolve. Telling it apart from
+    a plain missing component means re-walking the path the way libuv does, which is the
+    runtime's own algorithm rather than a rule -- the same reason the JSON and regex parser
+    messages are accepted divergences. Unreachable through any CLI today: every caller reaches
+    realpath only AFTER an O_NOFOLLOW open of the same path succeeded, which a dangling link
+    cannot survive.
+    """
+    try:
+        return os.path.realpath(target, strict=True)
+    except OSError as error:
+        raise _node_message_error(
+            error, "stat" if error.errno == errno.ELOOP else "lstat") from error
 
 
 def _node_lstat(target):
@@ -422,8 +478,8 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
         # must pass a root from argv or a computed path, never from a parsed document. Today's
         # do (dispatch takes --root from the CLI); dispatch.py must keep it that way.
         canonical_root = (None if root is None
-                          else _node_call("lstat", os.path.realpath, os.path.abspath(root), strict=True))
-        canonical_before = _node_call("lstat", os.path.realpath, target, strict=True)
+                          else _node_realpath(os.path.abspath(root)))
+        canonical_before = _node_realpath(target)
         if canonical_root is not None and not _path_is_inside(canonical_root, canonical_before):
             raise OSError(f"{label} resolves outside the allowed root: {target}")
 
@@ -444,7 +500,7 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
             opened.st_ino, opened.st_dev, opened.st_size, opened.st_mtime_ns
         ):
             raise OSError(f"{label} changed while it was read: {target}")
-        if _node_call("lstat", os.path.realpath, target, strict=True) != canonical_before:
+        if _node_realpath(target) != canonical_before:
             raise OSError(f"{label} changed canonical location while it was read: {target}")
         # errors="replace", NOT strict. A ledger is prose a human pasted into, so one byte of
         # it is routinely not UTF-8 -- a latin-1 accent, a smart quote out of a word processor.
@@ -1326,6 +1382,31 @@ def _js_join(*parts):
 # who greps before changing it, and a hand-maintained caller list decays the same way the
 # commit-tally table did. The rename is cheap; deferring it as churn at two callers was right
 # then and stopped being right here.
+# libuv ships its OWN error table; os.strerror reads the C library's, and they agree FAR less
+# often than this function's first version assumed. MEASURED by forcing each code through node
+# and comparing to os.strerror(n).lower(): 3 of 7 forceable codes matched, 4 did not.
+#
+#     EACCES ENOENT ENOTDIR EBADF   agree
+#     EEXIST        node "file already exists"                 vs "file exists"
+#     EISDIR        node "illegal operation on a directory"    vs "is a directory"
+#     ELOOP         node "too many symbolic links encountered" vs "too many levels of symbolic links"
+#     ENAMETOOLONG  node "name too long"                       vs "file name too long"
+#
+# The lowercase-strerror rule was inferred from the three COMMON codes, which happen to be the
+# three that agree -- a sample that could not have revealed the rule was wrong. EEXIST matters
+# most: it is reachable through mkdirs, so it is not a theoretical entry.
+# STILL INCOMPLETE, and deliberately not guessed: codes that could not be forced here (EMFILE,
+# ENFILE, ENOMEM, EOVERFLOW, ENOSPC, EROFS, EPERM) are UNCONFIRMED either way. An absent entry
+# falls back to strerror, which is a coin flip on this evidence -- so add measurements, never
+# assumptions.
+_LIBUV_PROSE = {
+    errno.EEXIST: "file already exists",
+    errno.EISDIR: "illegal operation on a directory",
+    errno.ELOOP: "too many symbolic links encountered",
+    errno.ENAMETOOLONG: "name too long",
+}
+
+
 def node_fs_message(error, syscall):
     """Node's `error.message` for a failed fs call, which is NOT Python's `str(error)`.
 
@@ -1352,7 +1433,8 @@ def node_fs_message(error, syscall):
         return attached
     code = _err_code(error)
     number = getattr(error, "errno", None)
-    prose = os.strerror(number).lower() if number is not None else code
+    prose = ((_LIBUV_PROSE.get(number) or os.strerror(number).lower())
+             if number is not None else code)
     path = getattr(error, "filename", None)
     suffix = ", " + syscall + " '" + str(path) + "'" if path is not None else ", " + syscall
     return code + ": " + prose + suffix
@@ -1559,8 +1641,14 @@ def status_log_path(root, scope):
     return os.path.normpath(os.path.join(root, "agents-discipline-status.log"))
 
 
-def _mkdirs(path, mode=None):
+def mkdirs(path, mode=None):
     """Create `path` and its missing ancestors, applying `mode` to EVERY directory created.
+
+    PUBLIC, like node_fs_message and for the same reason: it is a CONTRACT, not a private
+    detail. It was `_mkdirs` while its only callers lived in this module, and gate_check.py
+    then reached for a bare `os.makedirs(directory, mode=0o700, exist_ok=True)` instead --
+    inheriting BOTH defects this function exists to prevent (see below and the mkdir token in
+    _node_mkdir_error). A helper the neighbours cannot import is a helper they will re-implement.
 
     os.makedirs applies `mode` only to the final component and leaves intermediates at the
     umask default; Node's recursive mkdirSync applies it to all of them. The tree created here
@@ -1615,7 +1703,7 @@ def _assert_safe_state_path(root, target):
         _assert_real_directory(
             state_root, state_root + " must be a real directory, not a link or file")
     parent = os.path.dirname(target)
-    _mkdirs(parent, 0o700)
+    mkdirs(parent, 0o700)
     _assert_real_directory(parent, parent + " must be a real directory")
 
 
@@ -1643,7 +1731,7 @@ def write_atomic(file, text, root=None):
         # No mode: the oracle's non-root branch calls mkdirSync WITHOUT one, so this tree gets
         # the umask default. Handing it 0o700 here would be a gratuitous divergence in the
         # branch that writes ordinary repository files, not coordination state.
-        _mkdirs(parent)
+        mkdirs(parent)
         _assert_real_directory(parent, parent + " must be a real directory")
     try:
         if statmod.S_ISLNK(os.lstat(target).st_mode):
@@ -1705,7 +1793,7 @@ def _lock_directory(root):
     canonical_root = os.path.realpath(os.path.abspath(root), strict=True)
     directory = os.path.join(canonical_root, LOCK_DIR)
     _assert_safe_state_path(canonical_root, directory)
-    _mkdirs(directory, 0o700)
+    mkdirs(directory, 0o700)
     _assert_real_directory(directory, directory + " must be a real directory")
     return directory
 

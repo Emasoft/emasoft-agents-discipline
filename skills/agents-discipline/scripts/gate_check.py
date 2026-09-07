@@ -106,7 +106,7 @@ sys.path.insert(0, _LIB_DIR)
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
     AGENTS_DISCIPLINE_DIR, MAX_AUTOMATIC_EVIDENCE_CHARS, MAX_CHECK_OUTPUT_BYTES,
     automatic_evidence_prefix, claim_leases, format_document, gate_definition_digest,
-    gate_state, js_basename, js_dirname, js_resolve, list_scopes, parse_gates, qualify,
+    gate_state, js_basename, js_dirname, js_resolve, list_scopes, mkdirs, parse_gates, qualify,
     read_stable_regular_file, release_leases, resolve_target, same_file_identity, sha256,
     sleep, stat_current_named_file, append_status, validate_scope_id, with_file_lock,
     write_atomic,
@@ -753,7 +753,16 @@ def main(argv):
         """
         directory = typing.cast(str, approval_dir)
         if create:
-            os.makedirs(directory, mode=0o700, exist_ok=True)
+            # mkdirs, NOT os.makedirs: this line inherited BOTH defects that helper exists to
+            # prevent, and neither was visible from here. (1) os.makedirs applies `mode` to the
+            # FINAL component only and leaves intermediates at the umask default, where the
+            # oracle's recursive mkdirSync applies it to all -- so an approval tree created
+            # through a missing parent had a world-readable ancestor above a 0700 leaf. (2) The
+            # escaping error named the wrong syscall: MEASURED, an unwritable approval parent
+            # gave node "EACCES: permission denied, mkdir '<dir>'" against this port's
+            # "... open '<dir>'", because the catch upstream hardcodes `open` and a bare
+            # makedirs attaches nothing to say otherwise.
+            mkdirs(directory, 0o700)
         elif not os.path.exists(directory):
             return None
         info = os.lstat(directory)

@@ -130,6 +130,11 @@ _scrub_lock() {
 # TIED TO ROW 9's FIXTURE NAMES, not to the concept its name suggests. A second approval row
 # using different directory names gets a silent no-op from this, and reports the unscrubbed
 # per-runtime path as a divergence that is not one. It needs its own scrub, not this one.
+# ROW 12's ALONE, per the scoping rule above. THE PROPERTY EVERY NEW SCRUB MUST BE CHECKED
+# AGAINST, and it is checked here rather than assumed: no scrub's pattern may overlap the syscall
+# token. `/mk-[op]/` requires a leading slash, a literal `-`, and a trailing slash; the token
+# `mkdir` has none of those, so the wrong-syscall mutation stays visible through this scrub.
+_scrub_mkdir() { _scrub "$1" | sed -e 's|/mk-[op]/|/<MKDIR>/|g'; }
 _scrub_approval() {
   _scrub "$1" \
     | sed -e 's|/appr-dir-[op]/|/<APPRDIR>/|g' \
@@ -380,6 +385,40 @@ done
 chmod 700 "$WORK/scan-o/.agents-discipline/s/gates" "$WORK/scan-p/.agents-discipline/s/gates"
 _row "gates.py unreadable gate dir (scandir)" "$WORK/scan-o" "$WORK/scan-p" \
   "cannot inspect gate directory"
+
+# --- ROW 12: `mkdir`, the FOURTH syscall, and the only row whose fix it caught ----------------
+# SAME SITE AS ROW 9, DIFFERENT SYSCALL DELIVERED TO IT -- the site/code split the header
+# describes for rows 2 and 5, and here it is the whole point. Row 9 pre-creates the approval
+# directory and chmod 000s it, so the failure is the file OPEN inside it. Point
+# AGENTS_DISCIPLINE_APPROVAL_DIR at a MISSING child of an unwritable parent instead and the same
+# site fails one syscall earlier, at the mkdir that would have created it. Row 9 was green
+# throughout; nothing here reached a mkdir until this row existed.
+#
+# WHAT IT CAUGHT, which is why it is not a formality: gate_check.py used a bare
+# `os.makedirs(directory, mode=0o700, exist_ok=True)` where the oracle uses recursive mkdirSync.
+# MEASURED before the fix -- node `EACCES: permission denied, mkdir '<dir>'` against the port's
+# `... open '<dir>'`, because the catch upstream hardcodes `open`. The same line also applied
+# 0o700 to the FINAL component only, leaving an intermediate at the umask default under an
+# approval tree; both defects are gone with one call to the shared `mkdirs`.
+#
+# HONEST ABOUT ITS EVIDENCE: this row was written AFTER its fix, so unlike the rows above it was
+# never observed red against the real defect in place -- only against a re-planted one. That is
+# the weaker form, and it is the reason to prefer writing the row first.
+for rt in o p; do
+  R="$WORK/mkroot-$rt"; mkdir -p "$R/.agents-discipline/s/gates" "$WORK/mk-$rt"
+  printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: echo ok\n  EXPECT: ok\n' \
+    > "$R/.agents-discipline/s/gates/leaf.md"
+  chmod 500 "$WORK/mk-$rt"
+done
+AGENTS_DISCIPLINE_APPROVAL_DIR="$WORK/mk-o/child" \
+  "$NODE_ABS" "$HERE/../scripts/gate-check.mjs" --root "$WORK/mkroot-o" --scope s --approve \
+  > /dev/null 2> "$WORK/.o"
+AGENTS_DISCIPLINE_APPROVAL_DIR="$WORK/mk-p/child" \
+  "$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/mkroot-p" --scope s --approve \
+  > /dev/null 2> "$WORK/.p"
+chmod 700 "$WORK/mk-o" "$WORK/mk-p"
+_row "gate-check unwritable approval PARENT (mkdir)" "$WORK/mkroot-o" "$WORK/mkroot-p" \
+  "could not record approval" _scrub_mkdir
 
 echo
 if [ "$fail" = 0 ]; then
