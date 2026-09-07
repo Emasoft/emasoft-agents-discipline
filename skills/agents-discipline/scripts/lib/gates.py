@@ -926,8 +926,14 @@ MAX_AUTOMATIC_EVIDENCE_CHARS = 900
 _LONE_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 
 
-def _js_json_text(value):
+def _js_json_text(value, indent=None):
     """`JSON.stringify(value)` as TEXT -- including its handling of a lone surrogate.
+
+    `indent=2` gives `JSON.stringify(value, null, 2)`: Python's pretty separators are `,` +
+    newline and `": "`, which is what JS emits too, so only the compact form needs the explicit
+    `separators`. The parameter exists so the pretty writers can reuse this ONE surrogate-aware
+    serializer instead of hand-rolling a second `json.dumps` -- a bare one shipped at the lease
+    write and diverged from the oracle on the first non-ASCII glob (see claim_leases).
 
     `json.dumps(..., ensure_ascii=False)` is right for ordinary non-ASCII (JSON.stringify emits
     the character, and the default ensure_ascii=True would escape it, changing every digest).
@@ -958,9 +964,10 @@ def _js_json_text(value):
     about hashing a raw path. This one is about reproducing JSON.stringify's TEXT, where the
     oracle's own escaping means no surrogate ever reaches its hash.
     """
+    separators = None if indent is not None else (",", ":")
     return _LONE_SURROGATE_RE.sub(
         lambda m: "\\u%04x" % ord(m.group(0)),
-        json.dumps(value, separators=(",", ":"), ensure_ascii=False))
+        json.dumps(value, indent=indent, separators=separators, ensure_ascii=False))
 
 
 def gate_definition_digest(gate):
@@ -1855,9 +1862,25 @@ def claim_leases(root, spec):
             return {"ok": False, "conflicts": conflicts}
         file = _js_join(_lock_directory(root),
                         sha256(spec["scope"] + "::" + spec["leaf"])[:24] + ".lease")
-        write_atomic(file, json.dumps({"scope": spec["scope"], "leaf": spec["leaf"],
-                                       "globs": normalized, "pid": os.getpid()},
-                                      indent=2) + "\n", root=root)
+        # _js_json_text, not a bare json.dumps. The bare call shipped WITHOUT ensure_ascii=False
+        # and diverged from gates.mjs:926 on the first non-ASCII OWNS glob -- MEASURED, same
+        # ledger, `OWNS: src/café/**`:
+        #     JS  "globs": ["src/café/**"]          <- the character, raw
+        #     PY  "globs": ["src/caf...e9/**"]      <- the same character as a 6-char ASCII
+        #                                              backslash-u escape, because ensure_ascii
+        #                                              defaults to True. Spelled in words here:
+        #                                              writing the escape literally in a comment
+        #                                              renders it as the character and the two
+        #                                              lines then look identical, which is a
+        #                                              worked example of a diff that proves
+        #                                              nothing -- it happened twice while this
+        #                                              comment was being written.
+        # It round-trips within one runtime (json.load decodes the escape back), which is why no
+        # behavioural test caught it; the FILE BYTES are the contract, and the lease file is
+        # read by whichever runtime holds the other end.
+        write_atomic(file, _js_json_text({"scope": spec["scope"], "leaf": spec["leaf"],
+                                          "globs": normalized, "pid": os.getpid()},
+                                         indent=2) + "\n", root=root)
         return {"ok": True, "file": file, "conflicts": [], "globs": normalized}
 
     return with_file_lock(root, _lease_registry(root), claim)
