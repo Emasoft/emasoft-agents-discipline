@@ -127,6 +127,9 @@ _scrub_lock() {
 # LEDGER PATH, which differs for the same reason. Both are per-runtime by construction and say
 # nothing about either implementation. The `.lock` suffix is write_atomic's, handled here rather
 # than by chaining _scrub_tmp so this row's scrub reads as one thing.
+# TIED TO ROW 9's FIXTURE NAMES, not to the concept its name suggests. A second approval row
+# using different directory names gets a silent no-op from this, and reports the unscrubbed
+# per-runtime path as a divergence that is not one. It needs its own scrub, not this one.
 _scrub_approval() {
   _scrub "$1" \
     | sed -e 's|/appr-dir-[op]/|/<APPRDIR>/|g' \
@@ -333,6 +336,25 @@ AGENTS_DISCIPLINE_APPROVAL_DIR="$WORK/appr-dir-p" \
 chmod 700 "$WORK/appr-dir-o" "$WORK/appr-dir-p"
 _row "gate-check unwritable approval dir" "$WORK/appr-o" "$WORK/appr-p" \
   "could not record approval" _scrub_approval
+
+# --- ROW 10: the `stat` syscall, and the two sites that hand-rolled the node shape -------------
+# EVERY ROW ABOVE MEASURES `open`, so none of them would notice a site that needs a DIFFERENT
+# syscall getting the wrong one. gate-check's `--root` inspection catches around a stat, and the
+# oracle says `stat` there -- so this row is the control for the constant itself, not just for
+# the message shape.
+# It also guards a REFACTOR: these two sites (:329 and :908) reproduced node_fs_message's output
+# by hand -- `name + ": " + prose + ", stat '" + path + "'"` -- and were CORRECT, which is why no
+# earlier row found them and why the spelling-grep for `str(exc)` did not list them. A private
+# copy of a function whose measured errno scope is documented elsewhere drifts silently when that
+# scope changes, so they now call the helper and this row is what says the output did not move.
+mkdir -p "$WORK/root-o" "$WORK/root-p"
+chmod 000 "$WORK/root-o" "$WORK/root-p"
+"$NODE_ABS" "$HERE/../scripts/gate-check.mjs" --root "$WORK/root-o/x" --scope s --status \
+  > /dev/null 2> "$WORK/.o"
+"$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/root-p/x" --scope s --status \
+  > /dev/null 2> "$WORK/.p"
+chmod 700 "$WORK/root-o" "$WORK/root-p"
+_row "gate-check unreadable root (stat)" "$WORK/root-o" "$WORK/root-p" "cannot inspect --root"
 
 echo
 if [ "$fail" = 0 ]; then

@@ -323,12 +323,19 @@ def as_directory(path, label):
         # OSError.errno is Optional, so the table lookup needs the guard even though every
         # errno reaching here in practice is a real one. "UNKNOWN" is the same fallback the
         # lookup already used, so the guard changes no reachable behaviour.
-        name = _errno.errorcode.get(exc.errno, "UNKNOWN") if exc.errno is not None else "UNKNOWN"
-        if name == "ENOENT":
+        if exc.errno == _errno.ENOENT:
             fail_usage(label + " does not exist: " + path)
-        description = (exc.strerror or "").lower()
-        fail_usage("cannot inspect " + label + " " + path + ": "
-                   + name + ": " + description + ", stat '" + path + "'")
+        # node_fs_message, not a hand-rolled copy of it. These six lines REPRODUCED that helper
+        # inline -- code lookup, lowercased strerror, `, stat '<path>'` suffix -- and they were
+        # CORRECT, which is why no differential found them and why the `str(exc)` grep that drove
+        # the errno sweep did not list them: they never spelled `str(exc)`. A private copy of a
+        # function whose measured errno scope is documented at ONE place drifts silently the day
+        # that scope changes, and nothing here would say so.
+        # `stat`, not `open`, and this is the sweep's only non-`open` site: the try wraps os.stat,
+        # and the oracle's statSync catch names `stat` too. Measured identical before and after
+        # this refactor, and row 10 of errno-message-diff.sh is what keeps it that way -- it was
+        # added BEFORE the change, for a site with no defect, purely to guard the edit.
+        fail_usage("cannot inspect " + label + " " + path + ": " + node_fs_message(exc, "stat"))
     if not _stat.S_ISDIR(stat_result.st_mode):
         fail_usage(label + " is not a directory: " + path)
 
@@ -543,6 +550,11 @@ def main(argv):
                 # unwritable locks/ directory); --release reaches its own line only when a lease
                 # already exists in a directory that has since become unwritable, which no static
                 # fixture builds. UNGUARDED and said so, rather than left to look covered.
+                # WHICH HALF IS MEASURED: the GUARD is certainly right -- `errno is not None`
+                # degrades to str() exactly as before when there is none. The SYSCALL CONSTANT is
+                # inherited from the twin and has never been observed at this line. One word, and
+                # a reader should know to check it rather than trust it because the block around
+                # it sounds settled.
                 error("gate-check: cannot release leases: "
                       + (node_fs_message(exc, "open") if exc.errno is not None else str(exc)))
                 sys.exit(2)
@@ -904,10 +916,12 @@ def main(argv):
                 if exc.errno == _errno.ENOENT:
                     fail_usage("gate " + qualify(ledger["file"], gate["id"])
                                + " CWD does not exist: " + cwd)
-                name = _errno.errorcode.get(exc.errno, "UNKNOWN") if exc.errno is not None else "UNKNOWN"
-                description = (exc.strerror or "").lower()
-                fail_usage("cannot inspect gate CWD " + cwd + ": " + name + ": " + description
-                           + ", stat '" + cwd + "'")
+                # The second hand-rolled copy, same six lines, same `stat` syscall, same reason
+                # for going through the helper instead -- see the --root site above. UNGUARDED
+                # by a row: reaching it needs a gate CWD that exists but cannot be stat'd, which
+                # means an unsearchable parent, and the ledger under it would then be unreadable
+                # first. Fixed as the twin of a site row 10 does cover.
+                fail_usage("cannot inspect gate CWD " + cwd + ": " + node_fs_message(exc, "stat"))
             else:
                 if not _stat.S_ISDIR(cwd_stat.st_mode):
                     fail_usage("gate " + qualify(ledger["file"], gate["id"])
@@ -1037,6 +1051,15 @@ def main(argv):
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 )
             except OSError as exc:
+                # NOT node_fs_message, and "str() is correct here" would be too generous -- it is
+                # the least wrong available. The errno sweep left this site and the two below
+                # alone on the strength of their WORDING ("worker", "spawn"); read instead:
+                # gate-check.mjs:557 wraps `new Worker(...)`, a V8 Error with no errno, while
+                # this wraps subprocess.Popen, which raises ENOENT/EACCES. So the two runtimes
+                # produce structurally different text by construction, and node_fs_message would
+                # invent an fs shape node never emits here. UNMEASURED DIVERGENCE, recorded as
+                # one rather than filed under "correct": nothing makes these two agree, and
+                # :985's note explains why that is out of scope rather than why it is fine.
                 return {"matched": False, "error": "EXPECT worker could not start: " + str(exc)}
             payload = _js_json_text({
                 "source": expectation["source"], "flags": expectation.get("flags") or "",
