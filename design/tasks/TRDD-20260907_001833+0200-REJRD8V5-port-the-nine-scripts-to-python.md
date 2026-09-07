@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T05:41:00+0200
+updated: 2026-09-07T05:36:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -23,6 +23,16 @@ test.
 this project — the recurring defect all session has been an assertion satisfied by something
 other than the property it names. Mutate the implementation, confirm the intended row reddens,
 revert. If no mutation isolates a row, that row does not earn its place.
+
+> **A CONTROL PROVES REACHABILITY. THE CORPUS DECIDES CORRECTNESS. They are different questions
+> and conflating them cost a real defect.** The digest serializer computed the right JS float
+> spelling with `_js_number` and then threw it away — `json.loads(...)` back to a Python float,
+> re-rendered by `json.dumps`. Wrong for exactly the cases `_js_number` exists to fix: JS `1e-7`
+> became `1e-07`, JS `0.000001` became `1e-06`. The mutation control on that very line **did
+> redden 2 cases**, and that was read as the line being RIGHT. It only ever proved the line did
+> *something*. The corpus held one float, `1500.0`, which is integral — so the round-trip
+> survived by accident and the defect was invisible. Ask BOTH: *can this check fail?* and
+> *does the corpus contain an input that distinguishes right from wrong here?*
 
 > **⚠ THE SUITE IS NOT ALL-GREEN, WHATEVER THE TALLY SAYS.** `regex-worker-diff.sh` exits 0
 > while **7 port divergences remain UNRESOLVED — ALL SEVEN, not "five of them", are ways the
