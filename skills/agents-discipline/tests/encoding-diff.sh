@@ -30,6 +30,12 @@ PY_ABS="$(command -v python3)"
 NODE_ABS="$(command -v node)"
 
 WORK="$(mktemp -d)"
+# CHECKED, because _rebuild_c3 now runs `rm -rf "$WORK/c3"` fourteen times per run. `set -u`
+# does NOT catch an empty assignment from a failed command substitution, so an unchecked
+# mktemp failure would make $c3 the literal "/c3" and turn a fixture reset into a recursive
+# delete at the filesystem root. Unlikely; unguarded destructive commands whose blast radius
+# grew in the same commit that multiplied their call count are worth one line.
+[ -n "$WORK" ] && [ -d "$WORK" ] || { echo "mktemp -d failed; refusing to build fixtures" >&2; exit 2; }
 trap 'rm -rf "$WORK"' EXIT
 
 pass=0; fail=0
@@ -63,6 +69,12 @@ fi
 # happens to work here only because this PATH prepends GNU grep. A guard whose failure mode is
 # "quietly approve" is the thing this file exists to distrust, so it is written with tools that
 # cannot be missing: tr deletes every ASCII byte and wc counts what is left.
+# BASH_SOURCE is checked before it is used. The tools were made unmissable (tr and wc are POSIX,
+# LC_ALL=C pins the byte semantics) and then the PATH EXPRESSION was left as a bashism: under a
+# shell without BASH_SOURCE it could expand empty, `tr < ""` fails, `wc -c` prints 0, and the
+# guard reads "clean" -- the grep -P defect one shell over, in the line that replaced it.
+[ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ] \
+  || { echo "DIVERGE  the ASCII-source guard cannot locate its own source" >&2; exit 2; }
 _non_ascii_bytes=$(LC_ALL=C tr -d '\000-\177' < "${BASH_SOURCE[0]}" | wc -c | tr -d ' ')
 if [ "$_non_ascii_bytes" != 0 ]; then
   echo "DIVERGE  this script's source carries $_non_ascii_bytes literal non-ASCII byte(s); build them from code points" >&2
@@ -84,7 +96,15 @@ fi
 # work in case 2 and NOTHING in case 1 (that file's content carries no path); <PID> is the
 # reverse. Both are applied to both because a scrub that is inert is free, and one that is
 # missing where it was needed is a false divergence.
-_scrub() { sed -e "s|$1|<ROOT>|g" -e 's/"pid": [0-9]*/"pid": <PID>/'; }
+# THE RESOLVED FORM IS SCRUBBED TOO. On macOS `mktemp -d` yields /var/folders/... while a path
+# that has been through realpath prints as /private/var/folders/... -- the same directory under
+# two spellings. A literal substitution of only the mktemp form leaves `/private<ROOT>` in the
+# output, which is a difference between the two runtimes only if they resolve differently, and
+# noise otherwise. MEASURED in this file's own dispatch row, whose first draft printed exactly
+# that. Both spellings map to <ROOT>, longest first so the /private form is consumed whole.
+_scrub() {
+  sed -e "s|/private$1|<ROOT>|g" -e "s|$1|<ROOT>|g" -e 's/"pid": [0-9]*/"pid": <PID>/'
+}
 
 # --- CASE 1: the lease file's BYTES -------------------------------------------------------
 # Two separate roots, one per runtime: a lease records a pid, so replaying the same claim
@@ -209,8 +229,12 @@ _hostile_case() {  # label oracle-basename port-basename args...
   # is handed: ledger-check appends a `receipt:` line, so the oracle ran first, modified the
   # fixture, and the port then reported a receipt the oracle had not printed. MEASURED as a
   # DIVERGE on `receipt: binds this exact content, last checked <ISO>` -- a harness artifact
-  # presented as a port defect, and the same first-run-mutates-the-second's-input hazard that
-  # made same-directory mandatory in stale-diff.sh, in the opposite direction.
+  # presented as a port defect. stale-diff.sh has the SAME hazard and it is worth naming
+  # precisely, because that file carries two different rules that are easy to merge into one
+  # wrong lineage: its rows must share ONE directory (the approval token binds the resolved
+  # path, so separate roots manufacture a diff), and SEPARATELY its _case rebuilds that
+  # directory between the two runs (the first run rewrites the ledger). This is the second rule,
+  # not an inversion of the first.
   _rebuild_c3
   o="$(_hostile "$NODE_ABS" "$ora" "$@")"
   _rebuild_c3
@@ -235,6 +259,46 @@ _hostile_case() {  # label oracle-basename port-basename args...
 _hostile_case "non-UTF-8 stdout: gate-lint"  gate-lint.mjs    gate_lint.py    "$c3/leaf.md"
 _hostile_case "non-UTF-8 stdout: gate-check" gate-check.mjs   gate_check.py   --root "$c3" --scope s --status
 _hostile_case "non-UTF-8 stdout: ledger"     ledger-check.mjs ledger_check.py "$c3/DELEGATION.md"
+
+# dispatch-check needs its OWN block: the non-ASCII text reaches its stdout only through an
+# abandon REASON, which requires a two-command sequence (open, then abandon) that
+# _hostile_case's single-invocation shape cannot express.
+#
+# THIS ROW EXISTS BECAUSE THE OMISSION WAS NOT PRINCIPLED. dispatch-check was the fourth CLI
+# calling force_utf8_streams and the only one still without a row, on the strength of an earlier
+# turn failing to construct a vector -- leaf ids are ASCII by validation, and a non-ASCII reason
+# did not surface in `status`. It surfaces in ABANDON's own line, which that attempt never ran.
+# "I could not build a vector" is a fact about the attempt, not about the surface.
+_dispatch_hostile() {  # exe script root -> the abandon line, scrubbed
+  local exe="$1" script="$2" root="$3"
+  PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C \
+    "$exe" "$script" open --root "$root" --scope s --wave w1 --leaf a >/dev/null 2>&1
+  PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C \
+    "$exe" "$script" abandon --root "$root" --scope s --wave w1 --reason "$NON_ASCII reason" \
+    > "$WORK/.do" 2> "$WORK/.de"
+  local code=$?
+  printf '%s\n--exit--\n%s\n--stderr--\n%s' \
+    "$(_scrub "$root" < "$WORK/.do")" "$code" "$(_scrub "$root" < "$WORK/.de")"
+}
+# Separate roots per runtime, never one shared: dispatch.json is written by the first run and
+# read by the second, so a shared root would have the port reporting a wave the oracle had
+# already abandoned -- the same mutation hazard _rebuild_c3 exists for, one file over.
+mkdir -p "$WORK/dispo" "$WORK/dispp"
+o_disp="$(_dispatch_hostile "$NODE_ABS" "$HERE/../scripts/dispatch-check.mjs" "$WORK/dispo")"
+p_disp="$(_dispatch_hostile "$PY_ABS" "$HERE/../scripts/dispatch_check.py" "$WORK/dispp")"
+if ! printf '%s' "$o_disp" | grep -q "$NON_ASCII"; then
+  printf 'DIVERGE  %-38s oracle abandon line lacks the non-ASCII reason; fixture reached nothing\n' \
+    "non-UTF-8 stdout: dispatch"
+  printf '%s\n' "$o_disp" | sed 's/^/    | /' | head -6
+  fail=$((fail + 1)); FAILED+=("non-UTF-8 stdout: dispatch")
+elif [ "$o_disp" = "$p_disp" ]; then
+  printf '  OK      %-38s identical on an ASCII stdout\n' "non-UTF-8 stdout: dispatch"
+  pass=$((pass + 1))
+else
+  printf 'DIVERGE  %-38s\n' "non-UTF-8 stdout: dispatch"
+  diff <(printf '%s\n' "$o_disp") <(printf '%s\n' "$p_disp")
+  fail=$((fail + 1)); FAILED+=("non-UTF-8 stdout: dispatch")
+fi
 
 # --- CASE 4: the STREAM HANDLER itself, on lone surrogates -----------------------------------
 # The one surface here that needs no CLI, so it is not contaminated by either defect that keeps
