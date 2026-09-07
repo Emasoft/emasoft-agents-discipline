@@ -154,7 +154,7 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   //
   // GROUNDS, MEASURED -- and the first version of this comment got them wrong twice.
   //
-  //   M1  `[0-9]` -> `\d` in _JS_DECIMAL_RE   reddens the THREE unicode-digit rows, together
+  //   M1  `[0-9]` -> `\d` in _JS_DECIMAL_RE   reddens the TWO unicode-digit rows, together
   //   M2' revert the radix whitelist to the   reddens "0x1_0" and "0x<U+0661>", together
   //       pre-fix `try/except ValueError`
   //
@@ -181,17 +181,27 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   //   a MECHANISM is named that would separate it -- and "named" means an implementation you
   //   can write down, not a story about one.
   //
-  // Applied honestly here, that keeps ONE row per class on solid ground and leaves three
-  // siblings. They are kept, and the reason is cost, not mechanism: U+FF11 and U+06F4 are
-  // different Unicode blocks, but every implementation anyone would actually write --
-  // `[0-9]`, `\d` + re.ASCII, str.isascii, str.isdecimal, category(c) == "Nd" -- treats all
-  // three identically, so no separating mechanism could be named. An earlier version of this
-  // comment asserted such a narrowing as if it were the reason; nobody had run it, and it is
-  // very likely impossible. Three free rows against a hazard class is a fine trade. Pretending
-  // they were isolated was not.
+  // APPLIED HONESTLY, THAT BOUND COST A ROW -- and the first version of this comment broke it
+  // in the sentence after stating it, keeping three siblings on "cost" while admitting no
+  // mechanism could be named. A bound its own first case violates is not a bound; "cost" would
+  // have been a FOURTH ground, unnamed, one paragraph after declaring the third. So each
+  // sibling was tested against the bound instead of excused from it:
+  //
+  //   U+FF11 (fullwidth) STAYS -- MECHANISM NAMED AND MEASURED. NFKC normalizes U+FF11 to
+  //     ASCII "1" and leaves U+0661 and U+06F4 unchanged (verified: NFKC of the three gives
+  //     "1", "<U+0661>", "<U+06F4>"). So a port written as
+  //     `_JS_DECIMAL_RE.match(unicodedata.normalize("NFKC", text))` -- an ordinary thing to
+  //     write -- ACCEPTS this row and rejects the other two. It catches a real implementation.
+  //   U+06F4 (Extended Arabic-Indic) IS GONE. No mechanism separates it from U+0661: every
+  //     implementation anyone would write -- `[0-9]`, `\d`+re.ASCII, str.isascii, str.isdecimal,
+  //     category(c) == "Nd", and NFKC -- treats the two identically. Under the bound it does not
+  //     earn its place, so it was deleted rather than kept on a story. (7bcace8 has it if a
+  //     mechanism is ever found.)
+  //   "0x1_0" and "0x<U+0661>" BOTH STAY -- they are different defects, and
+  //     `if "_" in digits: return nan` before `int()` fixes the underscore alone while leaving
+  //     the Unicode-digit hole open. That implementation greens one row and not the other.
   String.fromCharCode(0x0661, 0x0662),  // Arabic-Indic -- the pair that shipped as 12
-  String.fromCharCode(0xFF11),          // fullwidth ONE
-  String.fromCharCode(0x06F4),          // Extended Arabic-Indic FOUR
+  String.fromCharCode(0xFF11),          // fullwidth ONE -- separated by NFKC, see above
   "0x1_0",                              // int("1_0", 16) is 16; Number is NaN
   "0x" + String.fromCharCode(0x0661),   // the same hole reached through the radix path
 ];

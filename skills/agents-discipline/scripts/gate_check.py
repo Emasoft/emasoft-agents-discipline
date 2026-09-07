@@ -36,8 +36,11 @@ separate process whose status is read as DATA (:607 `settle(exitCode, signal)`, 
 Worker()` at :555, a thread with no exit site of its own.
 
 NONE OF THAT IS PROSE ANY MORE. python-lib-checks derives the literal set, asserts no computed
-exit, walks the real import list, and asserts no imported module exits -- with a vacuity control
-on the extraction itself. The line numbers above are a reader's shortcut to the same facts; the
+exit, walks the import CLOSURE to fixpoint (not one level -- a module gate-check imports may
+itself import something that exits, and that exit is still gate-check's), and asserts no module
+in that closure exits at all -- with vacuity controls on both extractions, because an empty set
+intersects nothing and exits nowhere, so a regex that matched none of its targets would pass
+every one of those rows by not looking. The line numbers above are a reader's shortcut; the
 check is what holds them true. (Earlier drafts cited :634/:685/:782 from a planning document
 rather than from the file. They were verified directly before being written here.)
 

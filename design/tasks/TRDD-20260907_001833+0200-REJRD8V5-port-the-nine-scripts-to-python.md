@@ -60,9 +60,14 @@ revert. If no mutation isolates a row, that row does not earn its place.
 >   into the only visible open work, which was the same file. **Drift was the rational response
 >   to a brief I had silently emptied**, not a failure of agent discipline — and no ownership
 >   scheme covers a path nobody was supposed to write.
->   **The prescription that fires early enough to matter: when you complete a running agent's
->   brief yourself, message it to stop BEFORE you commit — not after you notice it writing
->   files.** Neither earlier version of this post-mortem says that.
+>   **The prescription: when you complete a running agent's brief yourself, message it to stop
+>   BEFORE you commit — not after you notice it writing files.** Neither earlier version says
+>   that. **But read it together with the latency floor above, because it does NOT close the
+>   race — it narrows it.** A stop-before-commit is still a message, still delivered at the
+>   agent's next tool round, and a write already in flight still lands. The only mechanism here
+>   with no floor at all is committing early, which is why that is the lesson to carry and this
+>   is the habit. Stating the prescription without that caveat would have made a smaller race
+>   read as no race.
 >
 > **THE SAME TRAP, WALKED INTO AGAIN ON 2026-09-07 WHILE WRITING A MUTATION CLAIM — and this
 > time in the paragraph directly above's own subject matter.** 7bcace8 grounded five new

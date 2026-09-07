@@ -479,11 +479,25 @@ report(_shapes and not _unbacked,
 # argued for in a commit rather than added silently.
 _corpus = [json.loads(k[len("Number(string) "):]) for k, _v in _jr
            if k.startswith("Number(string) ")]
-_named = set(re.findall(r'"([^"]*)"', _gram.string[_gram.start():]) if _gram else [])
-_named |= set(re.findall(r'"([^"]*)"', pathlib.Path(LIB, "jsapi.py").read_text(encoding="utf-8")))
+# NAMED means named in js_to_number's DOCSTRING -- the enumerated block plus the MEASURED list
+# above it. A first version scanned the WHOLE FILE, which is far too permissive: it credited a
+# row to "documentation" whenever the string merely collided with a literal in the CODE.
+# Measured, 12 rows were named only outside the docstring, and the offenders show what that is
+# worth -- "" "0" "nan" "inf" "NaN" "Infinity" are `float("nan")`, `float("inf")` and an
+# empty-string comparison, not documentation of anything. Widening the scan is how the count
+# fell 31 -> 30; the row it "named" had not been documented, only coincidentally spelled.
+_jsapi_src = pathlib.Path(LIB, "jsapi.py").read_text(encoding="utf-8")
+_doc = re.search(r'def js_to_number\(value\):\n\s*"""(.*?)"""', _jsapi_src, re.S)
+report(bool(_doc), "jsapi: js_to_number's docstring was located", "" if _doc else "regex missed")
+_named = set(re.findall(r'"([^"]*)"', _doc.group(1))) if _doc else set()
 _unnamed = [s for s in _corpus if s not in _named]
-report(len(_unnamed) <= 30,          # control: 29 FAILs, reporting "30 unnamed of 65 rows"
-       "jsapi: the count of corpus rows named nowhere in jsapi.py has not grown",
+# A RATCHET, and its weakness is worth stating: the bound IS the current value, so the honest
+# way past it is to document the row, and the dishonest way is a one-character edit to this
+# number. Nothing stops the latter -- I changed it 31 -> 29 -> 30 myself in one session. What it
+# buys is that the edit must be MADE and appear in a diff, which an unnamed row otherwise never
+# does. It is a speed bump with a paper trail, not a gate.
+report(len(_unnamed) <= 30,          # control: 29 FAILs, naming the count in its detail string
+       "jsapi: the count of corpus rows named nowhere in the docstring has not grown",
        "%d unnamed of %d rows" % (len(_unnamed), len(_corpus)))
 completed.append("jsapi")
 
@@ -514,13 +528,34 @@ report(not _exit_computed, "gate-check: every exit code is a literal, so the set
 # only gate-check.mjs would bound a smaller domain than the sentence covers -- the same
 # argument-shape defect this block replaced. So the imports are read as well, and the two
 # NON-imported helpers are excluded by name with the reason each is safe.
-_imported = [m.group(1) for m in re.finditer(r'from "\./(lib/[\w-]+\.mjs)"', _gc)]
-_spawned = {"lib/check-supervisor.mjs",   # spawn() at :674 -- separate process, status read as
-            "lib/regex-worker.mjs"}       # data; Worker at :555 -- thread, not an exit source
-report(sorted(_imported) and not (set(_imported) & _spawned),
-       "gate-check: the spawned helpers are not also imported", str(sorted(_imported)))
+# NO _spawned TABLE HERE, DELIBERATELY. A draft asserted "check-supervisor.mjs and
+# regex-worker.mjs are not also imported" -- which buys nothing: it is already entailed by the
+# import closure below containing neither and exiting nowhere, and a hardcoded list of spawned
+# helpers is prose stored as a Python literal that a third helper would silently outdate. The
+# property is "nothing the oracle IMPORTS can exit"; that is what gets asserted. (They are
+# reached by spawn() at :674 and new Worker() at :555 -- a comment holds that fine.)
+#
+# TO FIXPOINT, not one level. A module gate-check imports may import something that exits, and
+# that exit is still gate-check's. One level would have passed today by luck -- the only
+# second-level edge is dispatch.mjs -> gates.mjs, which the direct list already covers -- and a
+# check that is correct by coincidence stops being correct without anyone editing it.
+_imported, _todo = set(), [_gc]
+while _todo:
+    _txt = _todo.pop()
+    for _m in re.finditer(r'from "\.(?:/lib)?/([\w-]+\.mjs)"', _txt):
+        _rel = "lib/" + _m.group(1)
+        if _rel in _imported:
+            continue
+        _imported.add(_rel)
+        _p = pathlib.Path(ROOT, "scripts", _rel)
+        if _p.exists():
+            _todo.append(_p.read_text(encoding="utf-8"))
+# Vacuity control, same reason as the exit-literal one: an empty set intersects nothing and
+# exits nowhere, so BOTH assertions below would pass on a regex that matched no import at all.
+report(len(_imported) >= 3, "gate-check: the import closure was actually walked",
+       str(sorted(_imported)))
 _imported_exits = {}
-for _rel in _imported:
+for _rel in sorted(_imported):
     _p = pathlib.Path(ROOT, "scripts", _rel)
     _t = _p.read_text(encoding="utf-8") if _p.exists() else ""
     _found = re.findall(r"process\.exit\(([^)]*)\)", _t)

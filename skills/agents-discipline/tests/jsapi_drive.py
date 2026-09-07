@@ -123,7 +123,7 @@ _NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3", "1e
                 # See jsapi-drive.mjs for the defect these close and the two mutations that
                 # isolate them. chr(), never a literal character: both drivers must hold the
                 # same bytes.
-                chr(0x0661) + chr(0x0662), chr(0xFF11), chr(0x06F4),
+                chr(0x0661) + chr(0x0662), chr(0xFF11),
                 "0x1_0", "0x" + chr(0x0661)]
 for _s in _NUM_STRINGS:
     _n = js_to_number(_s)
