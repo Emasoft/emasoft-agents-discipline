@@ -1448,7 +1448,11 @@ def _js_join(*parts):
 # then and stopped being right here.
 # libuv ships its OWN error table; os.strerror reads the C library's, and they agree FAR less
 # often than this function's first version assumed. MEASURED by forcing each code through node
-# and comparing to os.strerror(n).lower(): 3 of 7 forceable codes matched, 4 did not.
+# and comparing to os.strerror(n).lower(): 4 of the 8 forceable codes matched, 4 did not.
+# The count read "3 of 7" until 2026-09-07 and disagreed with the table three lines below it,
+# which lists EBADF among the agreeing codes -- EBADF was measured later (it is what the
+# python-lib-checks smoke row forces) and the summary line was never re-counted. Corrected by
+# counting the table, which is the only reason to keep the table adjacent to the count.
 #
 #     EACCES ENOENT ENOTDIR EBADF   agree
 #     EEXIST        node "file already exists"                 vs "file exists"
@@ -1504,16 +1508,19 @@ def node_fs_message(error, syscall):
     `os.strerror(n).lower()` is the FALLBACK, not the rule, and this docstring said otherwise
     until the table above existed. What was measured, and what it overturned:
 
-      - EACCES, ENOENT, ENOTDIR -- strerror's lowercase MATCHES libuv. These three were the
-        original evidence, and they are why the lowercase rule looked general.
+      - EACCES, ENOENT, ENOTDIR, EBADF -- strerror's lowercase MATCHES libuv. The first three
+        were the original evidence, and they are why the lowercase rule looked general.
       - EEXIST, EISDIR, ELOOP, ENAMETOOLONG -- strerror DISAGREES with libuv, in wording rather
         than case ("Too many levels of symbolic links" vs "too many symbolic links
         encountered"). They are in _LIBUV_PROSE for exactly that reason.
 
-    So the rule was inferred from three codes that happen to agree, and four of the seven
-    forceable codes break it. An errno in NEITHER group still falls through to strerror: a
-    smaller, quieter divergence than dropping the prose, but a divergence -- extend the table
-    rather than assume the fallback is right for a code nobody has forced.
+    So the rule was inferred from three codes that happen to agree, and HALF the forceable
+    codes break it -- 4 of 8, per the measured table above the _LIBUV_PROSE literal, which is
+    the authority here. Do not re-derive that ratio from this prose. An errno in NEITHER group
+    still falls through to strerror: a smaller, quieter divergence than dropping the prose, but
+    a divergence -- extend the table rather than assume the fallback is right for a code nobody
+    has forced. Seven more (EMFILE, ENFILE, ENOMEM, EOVERFLOW, ENOSPC, EROFS, EPERM) could not
+    be forced at all and are UNCONFIRMED in either direction.
     """
     # An ALREADY-ATTACHED message wins over the caller's `syscall`, because the caller guessed
     # and node_call knew. Seven sites pass "open" for read_stable_regular_file, which makes

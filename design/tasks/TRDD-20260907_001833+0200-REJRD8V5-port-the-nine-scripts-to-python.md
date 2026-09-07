@@ -847,8 +847,19 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   declared ELOOP "unverified" and any errno outside EACCES/ENOENT/ENOTDIR "UNCONFIRMED", while
   `_LIBUV_PROSE` three lines above already carried the measured libuv wording for ELOOP,
   EEXIST, EISDIR and ENAMETOOLONG. Rewritten to state the real finding: the lowercase rule was
-  inferred from three codes that happen to agree, and **four of the seven forceable codes break
-  it**. `os.strerror().lower()` is the fallback, not the rule.
+  inferred from three codes that happen to agree, and **HALF the forceable codes break it**.
+  `os.strerror().lower()` is the fallback, not the rule.
+- **THE COUNT ABOVE THAT TABLE WAS ITSELF STALE, and my first rewrite inherited it.** The
+  summary line read "3 of 7 forceable codes matched" while the table three lines below it lists
+  EIGHT: `EACCES ENOENT ENOTDIR EBADF` agree, four disagree. EBADF was measured later — it is
+  what the `python-lib-checks` smoke row forces — and the summary was never re-counted. I then
+  copied "four of the seven" into the new docstring **in the same commit whose message was
+  about claims outrunning measurement**, because I counted the sentence instead of the table
+  under it. Corrected to 4 of 8 at both sites, with the docstring now pointing at the table as
+  the authority rather than restating the ratio.
+  **The generalizable part: a count and its evidence table drift apart the moment a row is
+  added, and the count is the half that gets quoted.** Where both exist, make the prose defer to
+  the table explicitly — a second copy of a number is a second thing to keep true.
 
 ---
 
