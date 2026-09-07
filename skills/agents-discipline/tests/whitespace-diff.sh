@@ -82,6 +82,7 @@ declare -a CASE_BYTES=(
 # and for the reason stated there: `evidence: present` comes from the `## Evidence` section, never
 # from the Acceptance column, so a runnable command buys nothing and arms a landmine for whoever
 # later turns the re-run on.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
 _write_ledger() {
   local dest="$1" ws="$2" pad
   # `%b` expands the escapes in the ARGUMENT. The first spelling was `printf "$ws"`, which puts
@@ -106,7 +107,18 @@ _write_ledger() {
 # So a code point one runtime trims and the other does not shifts the count by one there, and the
 # consequence is not a mis-read cell -- it is EVERY row reported malformed in one runtime and
 # parsed normally in the other, from a byte no editor displays.
-# shellcheck disable=SC2329  # invoked indirectly as "$writer" from _case
+#
+# ALL SIX MEASURED on this surface against the pre-fix port (94027f7), not inferred from the cell
+# result -- and the measurement is why: U+FEFF diverges the OPPOSITE WAY from the other five.
+#
+#   node exit 0 `verified: 1`  vs  pre-fix port exit 2 `every row is malformed`   <- U+FEFF only
+#   node exit 2 `every row is malformed`  vs  pre-fix port exit 0 `verified: 1`   <- the other five
+#
+# So the port was PERMISSIVE on five vectors and OVER-STRICT on the sixth, and a header ledger that
+# one runtime closes is one the other refuses outright. Arguing the five by symmetry from the one
+# would have predicted the wrong direction here; the first version of this file asserted exactly
+# that symmetry and only U+001C had actually been run.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
 _write_ledger_hdr() {
   local dest="$1" ws="$2" pad
   pad="$(printf '%b' "$ws")"
@@ -161,26 +173,39 @@ _case() {
 # harness itself is broken -- wrong path, receipt bleed, a stray env var -- and the six rows after
 # it would "detect" a trim divergence that is really a defect in this file. A suite whose failures
 # cannot be distinguished from its own breakage reports nothing.
-_control_led="$WORK/control.md"
-_write_ledger "$_control_led" ''
-_c_o="$(_verdict node "$_control_led")"
-_c_p="$(_verdict py "$_control_led")"
-if [ "$_c_o" != "$_c_p" ]; then
-  printf 'DIVERGE  %-38s harness is broken; the cases below cannot be trusted\n' "control: plain verified"
-  printf '    oracle: %s\n' "$(printf '%s' "$_c_o" | tr '\n' '|')"
-  printf '    port  : %s\n' "$(printf '%s' "$_c_p" | tr '\n' '|')"
-  exit 1
-fi
-# AND the control must actually have reached the status parser. Both runtimes agreeing on exit 1
-# because the file was unreadable would satisfy the check above while proving nothing, so the
-# agreed verdict is asserted to be the one a recognized `verified` produces.
-if ! printf '%s' "$_c_o" | grep -q 'verified: *1'; then
-  printf 'DIVERGE  %-38s control never reached the status counter\n' "control: plain verified"
-  printf '    oracle: %s\n' "$(printf '%s' "$_c_o" | tr '\n' '|')"
-  exit 1
-fi
-printf '  OK      %-38s both runtimes count it verified\n' "control: plain verified"
-pass=$((pass + 1))
+#
+# ONE CONTROL PER WRITER, and that is the whole reason this is a function rather than the single
+# inline block it started as. A control vouches for the writer it runs and for no other: if
+# `_write_ledger_hdr` emitted a malformed ledger -- a dropped separator row, a header one column
+# wide -- its six cases would agree identically-broken across both runtimes and every one would
+# report OK. That is a vacuous pass, and from the output it is indistinguishable from real
+# coverage. The cell control cannot see it, because it never runs that writer.
+_control() {
+  local writer="$1" label="$2" led o p
+  led="$WORK/control-$writer.md"
+  "$writer" "$led" ''
+  o="$(_verdict node "$led")"
+  p="$(_verdict py "$led")"
+  if [ "$o" != "$p" ]; then
+    printf 'DIVERGE  %-38s harness is broken; the cases below cannot be trusted\n' "$label"
+    printf '    oracle: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
+    printf '    port  : %s\n' "$(printf '%s' "$p" | tr '\n' '|')"
+    exit 1
+  fi
+  # AND the control must actually have reached the status parser. Both runtimes agreeing on exit 1
+  # because the file was unreadable would satisfy the check above while proving nothing, so the
+  # agreed verdict is asserted to be the one a recognized `verified` produces.
+  if ! printf '%s' "$o" | grep -q 'verified: *1'; then
+    printf 'DIVERGE  %-38s control never reached the status counter\n' "$label"
+    printf '    oracle: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
+    exit 1
+  fi
+  printf '  OK      %-38s both runtimes count it verified\n' "$label"
+  pass=$((pass + 1))
+}
+
+_control _write_ledger     "control: cell writer"
+_control _write_ledger_hdr "control: header writer"
 
 for i in "${!CASE_NAME[@]}"; do
   _case "cell ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}"
