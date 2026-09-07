@@ -50,8 +50,14 @@ def _err_code(error):
             or str(error))
 
 
-def _write_all(fd, data):
+def write_all(fd, data):
     """os.write until the buffer is drained, because a single call may write FEWER bytes.
+
+    PUBLIC for the FOURTH time on this lesson, after node_fs_message, mkdirs and node_call --
+    and this one cost more than a message. gate_check's record_approval wrote its lock payload
+    with a RAW os.write, so a short write truncated the file the oracle's writeFileSync
+    (gate-check.mjs:494) would have written in full. The underscore is the only reason a
+    neighbour reached for the primitive instead of the helper written to prevent exactly that.
 
     Node's `writeFileSync(fd, ...)` loops internally; `os.write` returns a count and Python does
     not check it. The consequence is not a wrong message, it is data loss: on a short write
@@ -1867,9 +1873,9 @@ def write_atomic(file, text, root=None):
         # writeSync sibling: EBADF gives "EBADF: bad file descriptor, write" from both, and
         # fsyncSync gives `fsync`. Measuring the neighbouring API and generalizing is the realpath
         # mistake, and node_call's own docstring demands the check before wrapping.
-        # THE TOKEN ASSUMES _write_all ONLY WRITES. If that helper ever grows an lseek or fstat,
+        # THE TOKEN ASSUMES write_all ONLY WRITES. If that helper ever grows an lseek or fstat,
         # this goes silently wrong -- the same single-syscall precondition node_call documents.
-        node_call("write", _write_all, fd, str(text).encode("utf-8"))
+        node_call("write", write_all, fd, str(text).encode("utf-8"))
         node_call("fsync", os.fsync, fd)
         os.close(fd)
         fd = None
@@ -1974,7 +1980,7 @@ def with_file_lock(root, target, fn, timeout_ms=30000):
         # separators + ensure_ascii=False reproduce JSON.stringify byte for byte; the `target`
         # field is a filesystem path, so a non-ASCII repository name would otherwise be written
         # \u-escaped by one implementation and literally by the other.
-        # _write_all here too, and this site is the least obvious of the three: a short write
+        # write_all here too, and this site is the least obvious of the three: a short write
         # leaves the lock metadata as truncated JSON, the release loop's json.load raises
         # ValueError, that arm breaks WITHOUT unlinking, and the lock is held until a human
         # removes it. A partial write of an ownership record is worse than no record.
@@ -1994,7 +2000,7 @@ def with_file_lock(root, target, fn, timeout_ms=30000):
         # records what a failed write of this record costs -- the release loop's json.load
         # raises, that arm breaks WITHOUT unlinking, and the lock is held until a human removes
         # it. The port would turn an unusual path into a permanently stuck lock.
-        _write_all(fd, _js_json_text(
+        write_all(fd, _js_json_text(
             {"token": token, "pid": os.getpid(), "target": lock_target,
              "at": int(time.time() * 1000)}).encode("utf-8"))
         identified = True
@@ -2092,7 +2098,7 @@ def append_status(root, scope, line):
         if (not statmod.S_ISREG(opened.st_mode) or opened.st_nlink != 1
                 or (opened.st_ino, opened.st_dev) != (named.st_ino, named.st_dev)):
             raise OSError("refusing non-file or replaced status log " + path)
-        node_call("write", _write_all, fd,
+        node_call("write", write_all, fd,
                    (re.sub(r"[\r\n]+", " ", str(line)) + "\n").encode("utf-8"))
         node_call("fsync", os.fsync, fd)
         return path

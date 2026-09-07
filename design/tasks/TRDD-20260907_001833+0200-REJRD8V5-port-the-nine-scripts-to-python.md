@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T12:00:50+0200
+updated: 2026-09-07T12:09:51+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -625,7 +625,13 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   forced a token code change to smuggle them through.
   **It also targeted the symptom.** Docs-only commits generated review rounds because they
   ASSERTED UNVERIFIED CLAIMS, not because they lacked code — a docs commit that only corrects a
-  measured fact generates nothing. Factual corrections are explicitly exempt.
+  measured fact generates nothing.
+  **SHARPENED AGAIN, because "factual corrections are exempt" is self-adjudicated** and the
+  author decides what counts as factual: *a commit whose only content is documentation must
+  correct a claim that was MEASURED FALSE, and must NAME THE MEASUREMENT.* Tested against this
+  class, that admits the genuine corrections and excludes both the commit a review called
+  displacement and the one that was 150 lines of process rules about process rules — which the
+  first two drafts each let through.
 - **RENAME, so the rounds below stay decodable:** `_node_call` → **`node_call`** (public, at
   `25bd004`). The rounds still say `_node_call` because they record what was true when written
   and the write-side rule above forbids editing them — this line is the decoder, not a licence
@@ -645,19 +651,45 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   | function | call | verdict |
   |---|---|---|
   | `as_directory` | `os.stat` | already passes `stat` — correct |
-  | `print_oracle` | `os.stat(cwd)` | already passes `stat` — correct |
+  | `main` | `os.stat(cwd)` | already passes `stat` — correct |
   | `read_approval_file` | `os.open` | genuinely an open |
   | `record_approval` | `os.open(lock)` | genuinely an open |
-  | `record_approval` | **`os.write`** | **WAS A DEFECT — now wrapped** |
+  | `record_approval` | **`os.write`** | **TWO defects — see below** |
   | `record_approval` | `open(lock)`, `os.unlink` | swallowed, confirmed |
   | `resolve_shell` | `os.stat(candidate)` | swallowed, confirmed |
 
-  **THE NINTH SITE WAS FOUND BY THAT RE-DERIVATION.** `record_approval`'s `os.write` sits in a
-  `try` whose ONLY handler is a `finally`, so it propagates to the "could not record approval"
-  catch that hardcodes `open` where node says `write`. The first pass missed it by reading the
-  NEAREST `except` within thirty lines and taking it for the handler — the nearest one belongs to
-  the close in the `finally`. **Proximity is not the call graph**, and being caught inventing
-  function names is what forced the re-derivation that found it.
+  **THE FIRST VERSION OF THIS TABLE SAID `print_oracle` FOR THE cwd STAT, AND THAT WAS WRONG —
+  it is `main`.** The table was published as "re-derived mechanically", which reads as rigorous;
+  the method was a regex keeping the LAST `def` seen at any indentation, and gate_check.py's
+  functions are NESTED, so a site belonging to an outer function that follows a closed inner one
+  is misattributed. **That is "proximity is not the call graph" again — proximity in def-order
+  instead of source-order — bolded as a lesson in the same commit whose method violated it.**
+  Re-derived with `ast.parse`, which gives the true innermost enclosing scope; six of the seven
+  names held, and the one that broke is the one a reviewer flagged on purely semantic grounds
+  ("a function that prints a gate's oracle is not where CWD validation lives").
+
+  **THAT RE-DERIVATION FOUND A SITE WITH TWO DEFECTS, AND THE SMALLER ONE IS THE SYSCALL TOKEN.**
+  `record_approval`'s `os.write` sits in a `try` whose ONLY handler is a `finally`, so it
+  propagates to the "could not record approval" catch that hardcodes `open` where node says
+  `write`. The first pass missed it by reading the NEAREST `except` within thirty lines and
+  taking it for the handler — the nearest belongs to the close in the `finally`. **Proximity is
+  not the call graph.**
+
+  **THE BIGGER DEFECT IS DATA LOSS, AND MY FIRST FIX WRAPPED IT INSTEAD OF FIXING IT.** That line
+  used a RAW `os.write`, which returns a count and may write FEWER bytes — so a short write
+  truncated the approval-lock JSON that the oracle's `writeFileSync` (`gate-check.mjs:494`) writes
+  whole. `write_all` exists in this codebase for precisely this, and says so in its own docstring:
+  *"The consequence is not a wrong message, it is data loss."* `write_atomic` and `append_status`
+  both use it; this sibling reached for the primitive. **I hardened the error text on a line whose
+  real defect corrupts a file** — strictly worse than the divergence I fixed. Now
+  `node_call("write", write_all, fd, …)`.
+
+  **FOURTH INSTANCE OF ONE LESSON, and it has stopped being about naming:** `node_fs_message`,
+  `mkdirs`, `node_call`, now `write_all`. Every time a private helper in `gates.py` was needed
+  next door, the neighbour went without and grew a defect — three message defects and now a
+  data-loss one. **The generalization, not another rename:** a helper written to prevent a class
+  of bug must be importable by everyone who could hit that class, or the underscore itself becomes
+  the cause.
   **USER-VISIBLE, traced not assumed:** `read_approval_file` → `approval_exists` → the catch at
   `:987`, which prints `node_fs_message(exc, "open")`. So a failing `fstat`/`read` reached a user
   labelled `open`. **Evidence grade differs across the six, and the difference is real:** that
@@ -694,6 +726,14 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   as prose — it is not a call site, and it survived the scan because it does not start with `#`.
   The wide grep's 26-vs-25 for this file resolves the same way (a `# pathlib.Path` comment).
 
+- ⚠ **"EXHAUSTED" MEANS EVERY SITE HAS A SYSCALL-TOKEN VERDICT. IT DOES NOT MEAN EVERY SITE IS
+  CORRECT** — and the `write_all` data-loss bug is the proof: that site was found by the
+  enumeration, verdicted, and the verdict was "wrapped, correct" while it silently truncated a
+  file. An enumeration built to answer ONE question answers only that question, and the bolded
+  word invites the stronger reading. **Remaining count is 7, not the 8 stated below** — wrapping
+  the ninth site removed it from the population, which is the self-decrementing count this
+  document warned about, recurring inside the document that warns about it.
+
 - **THE ENUMERATION IS EXHAUSTED across all three files — and "exhausted" was published one
   commit too early.** It first went out while three verdicts were still "likely" and the
   population contained a non-site; it is true now, after those were read and the count
@@ -711,8 +751,11 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   grep over the oracles as suspect until the file is known to be NUL-free. The port's
   `ledger_check.py` has no NUL (it uses the `"\0"` escape, the same sentinel VALUE, so there is
   no behavioural divergence).
-  **BOUNDED BY A REPO-WIDE SCAN, not left as an anecdote:** every file in the repo excluding
-  `.git` and `__pycache__` was checked — **exactly one carries a NUL**, this file. So the hazard
+  **BOUNDED BY A GENUINELY REPO-WIDE SCAN — the first attempt was not one.** It used
+  `glob("**/*")`, which skips every DOTTED path by default, so `.github/`, `.claude/` and
+  `.janitor/` were never entered and the `.git` exclusion was redundant because glob had already
+  skipped it. Re-run with `Path.rglob`, which does not: **121 files, exactly one carries a NUL**,
+  this one. The claim survives; the scan behind its first publication did not exist. So the hazard
   is one known file, not an open question about the other ~15 sources and every test suite that
   has been grepped all session. The general form is what matters: **grep silently lies about any
   file containing a NUL**, returning no matches and a non-zero exit, so a "not found" is only

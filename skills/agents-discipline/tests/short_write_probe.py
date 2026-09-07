@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove gates._write_all handles a REAL short write, and that one can actually happen.
+"""Prove gates.write_all handles a REAL short write, and that one can actually happen.
 
 Runs as its own process because RLIMIT_FSIZE and the SIGXFSZ disposition are process-wide and
 the rlimit's HARD half cannot be raised again afterwards.
@@ -12,8 +12,8 @@ Three lines, and the CONTROL comes first because it licenses the other two: if a
 did not short-write here, nothing below is evidence of anything.
 
   control  -- a bare os.write on a regular file under RLIMIT_FSIZE returns SHORT
-  error    -- _write_all on that same shape surfaces the failure instead of truncating
-  success  -- _write_all delivers EVERY byte, across MORE THAN ONE write, when writes short
+  error    -- write_all on that same shape surfaces the failure instead of truncating
+  success  -- write_all delivers EVERY byte, across MORE THAN ONE write, when writes short
               but do not fail
 
 The third case is the one the fix exists for, and the first version of this probe did not have
@@ -29,7 +29,7 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts", "lib"))
-from gates import _write_all, write_atomic  # noqa: E402  # type: ignore[import-not-found]
+from gates import write_all, write_atomic  # noqa: E402  # type: ignore[import-not-found]
 
 PAYLOAD = b"x" * (256 * 1024)
 CAP = 65536
@@ -57,17 +57,17 @@ def _size_capped_cases(tmp):
     # A DIFFERENT file, so this starts from zero as the control did rather than from the cap.
     fd = os.open(os.path.join(tmp, "loop"), os.O_WRONLY | os.O_CREAT, 0o600)
     try:
-        _write_all(fd, PAYLOAD)
-        print("error: _write_all returned without error (WRONG if the control short-wrote)")
+        write_all(fd, PAYLOAD)
+        print("error: write_all returned without error (WRONG if the control short-wrote)")
     except OSError as error:
-        print(f"error: _write_all raised {type(error).__name__} errno={error.errno} "
+        print(f"error: write_all raised {type(error).__name__} errno={error.errno} "
               f"-> the caller SEES the failure")
     finally:
         os.close(fd)
 
 
 def _success_case():
-    """_write_all across MULTIPLE short writes that SUCCEED -- the path the fix exists for.
+    """write_all across MULTIPLE short writes that SUCCEED -- the path the fix exists for.
 
     Driven by a STUBBED os.write, and that is the whole point rather than a shortcut. Measured
     on three real file descriptors, in this order, each attempt discarded when it turned out to
@@ -78,7 +78,7 @@ def _success_case():
         macOS: ONE os.write call returned all 262144 bytes. The socket version of this case sat
         in the suite printing "ALL BYTES" while the loop body ran exactly once -- a row named
         "across multiple short writes" that had never executed a second iteration.
-      - a NON-blocking fd shorts, then raises EAGAIN, which _write_all does not handle and
+      - a NON-blocking fd shorts, then raises EAGAIN, which write_all does not handle and
         should not: every fd it is given in production is a blocking regular file.
 
     So no real descriptor can deliver a short-write-then-succeed sequence, and the loop's
@@ -106,15 +106,15 @@ def _success_case():
     # through the Python `os.write` name (checked by counting calls during a print), so the
     # probe's own output is unaffected. The fd is -1 so that if the stub ever failed to install,
     # the real os.write raises EBADF immediately instead of writing the payload somewhere.
-    gates_module = sys.modules[_write_all.__module__]
+    gates_module = sys.modules[write_all.__module__]
     gates_module.os.write = short_write
     try:
-        _write_all(-1, PAYLOAD)
+        write_all(-1, PAYLOAD)
     finally:
         gates_module.os.write = real_write
         # INSIDE the finally, and a raise rather than an `assert`. Placement: the check exists
         # for a future edit that moves the restore out of this block, and in that world a
-        # RAISING _write_all would skip both the restore and a check sitting after the
+        # RAISING write_all would skip both the restore and a check sitting after the
         # try/finally -- so the mutation control only ever exercised one of the two
         # combinations. Raise, because `python -O` and a stray PYTHONOPTIMIZE=1 in a CI image
         # both strip an assert, and a tripwire that vanishes under an env var is not one.
@@ -123,14 +123,14 @@ def _success_case():
 
     delivered = b"".join(chunks)
     ok = delivered == PAYLOAD and len(chunks) > 1
-    print(f"success: _write_all made {len(chunks)} write(s) delivering {len(delivered)} of "
+    print(f"success: write_all made {len(chunks)} write(s) delivering {len(delivered)} of "
           f"{len(PAYLOAD)} bytes -> {'ALL BYTES' if ok else 'TRUNCATED'}")
 
 
 def _atomic_case(tmp):
-    """The property the whole _write_all fix exists for: a FAILED write leaves the target intact.
+    """The property the whole write_all fix exists for: a FAILED write leaves the target intact.
 
-    Everything else here tests _write_all in isolation. The claim that motivated it is about
+    Everything else here tests write_all in isolation. The claim that motivated it is about
     write_atomic -- "a truncated dispatch.json fsync'd and renamed into position" -- and nothing
     exercised write_atomic under a failure DURING the write. The gates_helpers driver has six
     write_atomic rows and every one is a SETUP failure (symlink, a file where a directory must
@@ -155,7 +155,7 @@ def _atomic_case(tmp):
             raise OSError(errno.ENOSPC, "No space left on device")
         return real_write(fd, bytes(data[:4096]))
 
-    gates_module = sys.modules[_write_all.__module__]
+    gates_module = sys.modules[write_all.__module__]
     gates_module.os.write = fail_on_second
     raised = None
     try:
@@ -184,11 +184,11 @@ def _no_progress_case():
     hangs here rather than failing -- which is why this case asserts a raise, not a value.
     """
     real_write = os.write
-    gates_module = sys.modules[_write_all.__module__]
+    gates_module = sys.modules[write_all.__module__]
     gates_module.os.write = lambda fd, data: 0
     raised = None
     try:
-        _write_all(-1, b"x" * 4096)
+        write_all(-1, b"x" * 4096)
     except OSError as error:
         raised = error
     finally:

@@ -928,11 +928,11 @@ for _fixture in _fixtures:
     report(_ok, f"parse_gates: {_fixture.name} — whole parse result identical", _detail)
 completed.append("parse_gates")
 
-# --- short write: gates._write_all -----------------------------------------------------------
+# --- short write: gates.write_all -----------------------------------------------------------
 # No oracle row is possible: Node's writeFileSync(fd, ...) loops internally, so there is nothing
 # to compare against -- the port had to GROW the loop. Verified against its own control instead,
 # in a subprocess because RLIMIT_FSIZE is process-wide.
-# TimeoutExpired caught, not propagated: a regressed `written <= 0` guard makes _write_all spin
+# TimeoutExpired caught, not propagated: a regressed `written <= 0` guard makes write_all spin
 # forever, and MEASURED — removing that guard hangs the probe. Unwrapped, the timeout would take
 # down the whole run with a traceback instead of failing one row, so the one defect the guard
 # exists to prevent would also destroy the report that names it.
@@ -954,7 +954,7 @@ report("SHORT: True" in _lines.get("control", "") or "SKIPPED" in _lines.get("co
        "short_write: a bare os.write really does short-write here (control)",
        _lines.get("control", "MISSING"))
 report("raised OSError" in _lines.get("error", "") or "SKIPPED" in _lines.get("error", ""),
-       "short_write: _write_all surfaces the failure instead of truncating",
+       "short_write: write_all surfaces the failure instead of truncating",
        _lines.get("error", "MISSING"))
 # The SUCCESS path, which the first version of this probe did not have: proving the loop does not
 # truncate SILENTLY is not the same as proving it does not truncate. This one runs on every
@@ -974,7 +974,7 @@ report("BOUNDED" in _lines.get("noprogress", ""),
        "short_write: a 0-return raises instead of spinning forever",
        _lines.get("noprogress", "MISSING"))
 report("ALL BYTES" in _lines.get("success", "") or "SKIPPED" in _lines.get("success", ""),
-       "short_write: _write_all delivers every byte across multiple short writes",
+       "short_write: write_all delivers every byte across multiple short writes",
        _lines.get("success", "MISSING"))
 completed.append("short_write")
 
