@@ -48,6 +48,32 @@ const cases = [
   { name: "'verified' word is not evidence", file: "tests/fixtures/evidence-word-verified.md", want: 1 },
   { name: "backticked 'done' is not evidence", file: "tests/fixtures/evidence-backtick-done.md", want: 1 },
   { name: "vague phrase is not evidence", file: "tests/fixtures/evidence-vague-phrase.md", want: 1 },
+  {
+    // `want: 1` DOES NOT DISCRIMINATE -- an unknown status exits 1 too, which is precisely the
+    // behaviour that made this defect invisible: the verdict was already right and only the
+    // CLAIM behind it was wrong. Every assertion below is therefore on the text, and each names
+    // one requirement of the item rather than trusting one string to cover them all:
+    //   1. the status is KNOWN -- counted under its own name, never swept into `other`
+    //   2. the handoff is announced, and names the row
+    //   3. the row is NOT filed as work still in flight
+    //   4. the closing line says TERMINAL, not INCOMPLETE
+    // No `rerun: true`: the status branch sits outside the re-run block, and this case proves
+    // that by passing with the skip on rather than by my having read where the block starts.
+    name: "abandoned row is terminal, not incomplete",
+    file: "tests/fixtures/abandoned-row.md",
+    want: 1,
+    expect: [
+      "abandoned:   1",
+      "HANDOFF REQUIRED: 1 abandoned unit(s)",
+      "- #2 finance",
+      "-> ledger TERMINAL: HANDOFF REQUIRED",
+    ],
+    reject: [
+      "other:",                        // (1) swept into the unknown bucket
+      "- #2 finance [abandoned]",      // (3) listed under "unverified rows"
+      "-> ledger INCOMPLETE.",         // (4) "still coming" claim on terminal work
+    ],
+  },
   // rerun: true — see the SKIP_RERUN note below. These exercise the half of the
   // checker the skip disables: the no-op scan, acceptanceCommand, evidenceBlockFor,
   // existingArtifactsIn, and the `unbacked` verdict. Until this flag existed NONE of

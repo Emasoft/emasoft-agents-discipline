@@ -181,14 +181,25 @@ if not rows:
         fail(2, f"agents-discipline: {path} has a table header but every row is malformed:\n{detail}")
     fail(2, f"agents-discipline: {path} has a table header but no unit rows")
 
-counts = {"pending": 0, "done": 0, "verified": 0, "other": 0}
+# `abandoned` is TERMINAL-but-unsuccessful: the unit cannot be finished, its Evidence block
+# carries the reason, and the ledger reports a required handoff rather than completion. Kept OUT
+# of `unverified` because those two say opposite things -- one is "still coming", the other
+# "never coming". Mirrors the gate half (`gate_check` HANDOFF REQUIRED, exit 1).
+counts = {"pending": 0, "done": 0, "verified": 0, "abandoned": 0, "other": 0}
 unverified = []
+abandoned = []
 for r in rows:
-    if r["status"] in ("pending", "done", "verified"):
+    # Membership in `counts` itself, matching the oracle's hasOwnProperty test exactly -- a dict
+    # inherits no keys, so a status of `constructor`/`toString` lands in `other` here and used to
+    # VANISH in node (prototype lookup made its `=== undefined` guard false and stored NaN). The
+    # oracle was fixed to agree; this line is the shape both runtimes now share.
+    if r["status"] in counts:
         counts[r["status"]] += 1
     else:
         counts["other"] += 1
-    if r["status"] != "verified":
+    if r["status"] == "abandoned":
+        abandoned.append(r)
+    elif r["status"] != "verified":
         unverified.append(r)
 
 
@@ -625,6 +636,8 @@ print(f"  units:       {len(rows)}")
 print(f"  verified:    {counts['verified']}")
 print(f"  done:        {counts['done']}")
 print(f"  pending:     {counts['pending']}")
+if counts["abandoned"]:
+    print(f"  abandoned:   {counts['abandoned']}")
 if counts["other"]:
     print(f"  other:       {counts['other']}")
 if malformed:
@@ -673,6 +686,13 @@ if unverified:
     print("  unverified rows:")
     for r in unverified:
         print(f"    - #{r['unit']} {r['name']} [{r['status']}]")
+if abandoned:
+    # The reason lives in the row's Evidence block, deliberately NOT copied here: it is free-form
+    # text of unbounded length, and the gate half makes the same choice. This checker does NOT yet
+    # require an abandoned row to carry a reason -- that hole is a separate item.
+    print(f"  HANDOFF REQUIRED: {len(abandoned)} abandoned unit(s) — terminal and unsuccessful, not completion:")
+    for r in abandoned:
+        print(f"    - #{r['unit']} {r['name']}")
 if malformed:
     print("  malformed rows:")
     for m in malformed:
@@ -714,7 +734,15 @@ if prior and prior.group(2) != digest:
 elif prior:
     print(f"  receipt:     binds this exact content, last checked {prior.group(1)}")
 
-print("  -> ledger complete: every unit verified." if complete else "  -> ledger INCOMPLETE.")
+# Three-way, not two. An abandoned ledger is not "INCOMPLETE" -- that word promises the work is
+# still coming. It is terminal, and the exit code is unchanged (1 either way); only the claim
+# changes, which was the whole defect.
+if complete:
+    print("  -> ledger complete: every unit verified.")
+elif abandoned:
+    print("  -> ledger TERMINAL: HANDOFF REQUIRED — abandoned unit(s) will not be finished.")
+else:
+    print("  -> ledger INCOMPLETE.")
 
 # A run that SKIPPED the re-run did not verify anything, so it must not sign anything. Signing
 # it would mint exactly the artifact this receipt exists to make unforgeable: a PASS stamp on a
