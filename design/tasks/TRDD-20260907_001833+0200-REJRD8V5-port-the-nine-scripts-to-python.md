@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T06:09:30+0200
+updated: 2026-09-07T06:29:04+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -65,6 +65,35 @@ varies. Any divergence is a porting defect, never a re-specified test. `AD_RUNTI
 switches `dispatch-tests.mjs`, `lint-tests.mjs` and `ledger-tests.mjs` to the port. Paired
 drivers (`X-drive.mjs` / `X_drive.py`) dump every observable effect as JSON; the diff is the
 test.
+
+**CHECK EXECUTION — THE FAILURE PATHS, MEASURED (2026-09-07, after `9bec74a`).** That commit's
+verification line led with the 8 differentials, which is the WEAKEST evidence for it: only
+`gate-args-diff.sh` and `approval-diff.sh` touch `gate_check.py` and both stop before any CHECK
+runs. The 3-gate end-to-end run it also cited covers the happy path of a feature whose entire
+difficulty is its failure paths. Gathered afterwards, oracle vs port, all byte-identical:
+
+| path | evidence |
+|---|---|
+| output cap | a 2 MiB CHECK against the 1 MiB `MAX_OUTPUT_BYTES` — both FAIL identically |
+| per-check timeout | `sleep 30` under `--timeout 2` — both FAIL identically |
+| process-tree teardown | a CHECK backgrounding `sleep 41`, killed at timeout — **0 orphans in both** |
+| concurrency | `--jobs 2` and `--jobs 3` |
+| regex EXPECT | `/^version [0-9]+\.[0-9]+\.[0-9]+ ready/` matches, `/hello world/i` matches (flag map), `/^nomatch/` does not — all three agree, fingerprints included |
+
+**The teardown check needed THREE attempts and the first two measured my own harness.** `ps` and
+`grep` in one command puts the pattern in the grepping shell's argv; worse, the shell that RAN the
+test carried the sentinel too, because `sleep 41` sat inside its heredoc. Both readings returned
+"1 orphan" and both were the shell. Fixed by moving the CHECK into a SCRIPT FILE so no harness
+argv ever contains the sentinel, and grepping in a separate call with the bracket trick.
+**Then the control that makes the zero mean anything:** a deliberately orphaned `sleep 41` IS
+visible to the same predicate (pid 64547, measured). Without it, "0 orphans" is equally consistent
+with a working teardown and a grep that cannot see orphans at all.
+
+**`results: list` is the weaker annotation, recorded as such.** It silences the checker without
+documenting the element type — the same move as a `typing.cast`, flagged one commit earlier and
+repeated here. The truthful type during execution is `list[dict | None]`, which would re-raise the
+subscript errors at the read sites; those reads are safe only because `run_rolling` fills every
+slot before the loop, an invariant no annotation expresses. Pragmatic, not principled.
 
 **A PREDICATE THAT RETURNS THE SAME NUMBER BEFORE AND AFTER A CHANGE KNOWN TO MODIFY THE FILE IS
 MEASURING THE WRONG THING (2026-09-07).** To check that the regex agent had not cheat-shrunk the
