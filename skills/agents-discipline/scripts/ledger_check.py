@@ -141,7 +141,7 @@ if header_idx == -1:
 # `< 6` test, and `Status` is then read from the wrong cell. The row parses silently as
 # whatever the shifted text happens to say. Widening the table has the mirror problem: a row
 # omitting the new trailing columns reads them as missing forever, with no error.
-_header = lines[header_idx].strip()
+_header = lines[header_idx].strip(JS_TRIM)
 column_count = (
     len(_header.replace("\\|", " ").split("|"))
     - 1
@@ -151,7 +151,7 @@ column_count = (
 rows = []
 malformed = []
 for i in range(header_idx + 1, len(lines)):
-    line = lines[i].strip()
+    line = lines[i].strip(JS_TRIM)
     if not line:
         continue
     if not line.startswith("|"):
@@ -229,7 +229,7 @@ def is_strong_evidence(l):
     a measured result. Single words and generic phrases fail on purpose, so "verified" or
     "`done`" do not pass."""
     for s in CODE_SPAN.findall(l):
-        inner = s[1:-1].strip()
+        inner = s[1:-1].strip(JS_TRIM)
         if re.search(r"\s", inner) or re.search(r"[/.]", inner):
             return True
         # A runner word counts only when it IS the span -- `pytest`, `make`. The scan this
@@ -259,7 +259,7 @@ def is_strong_evidence(l):
 evidence_lines = []
 in_rules_section = False
 for i in range(header_idx + 1, len(lines)):
-    l = lines[i].strip()
+    l = lines[i].strip(JS_TRIM)
     if l == "":
         continue
     if re.match(r"^##\s+", l):
@@ -299,7 +299,7 @@ evidence_text = "\n".join(evidence_lines)
 # must now CREATE FILES at the paths it invented, non-empty, dated after the ledger began.
 #
 # STALE-ARTIFACT RULE: an artifact older than the ledger cannot be evidence FOR THIS RUN.
-artifact_paths = [m.strip() for m in CITATION.findall(evidence_text)]
+artifact_paths = [m.strip(JS_TRIM) for m in CITATION.findall(evidence_text)]
 
 # Per-unit Evidence blocks, sliced by LINE-INITIAL `**Unit N` headers. The per-unit regex this
 # replaced could not terminate a block -- both its lookaheads needed text the evidence scan
@@ -327,12 +327,12 @@ for line in evidence_text.split("\n"):
 
 
 def evidence_block_for(unit):
-    return evidence_blocks.get(str(unit).strip(), "")
+    return evidence_blocks.get(str(unit).strip(JS_TRIM), "")
 
 
 def existing_artifacts_in(block, bases):
     found = []
-    for rel in (m.strip() for m in CITATION.findall(block)):
+    for rel in (m.strip(JS_TRIM) for m in CITATION.findall(block)):
         cands = [rel] if os.path.isabs(rel) else [os.path.join(b, rel) for b in bases]
         if any(os.path.exists(c) for c in cands):
             found.append(rel)
@@ -418,7 +418,7 @@ if any(r["status"] == "verified" for r in rows):
 
 def acceptance_command(cell):
     for s in CODE_SPAN.findall(cell):
-        inner = s[1:-1].strip()
+        inner = s[1:-1].strip(JS_TRIM)
         # A command, not a bare path or a single word: it must have an argument or a runner.
         if re.search(r"\s", inner) and re.match(r"^[A-Za-z0-9_./-]+", inner):
             return inner
@@ -515,20 +515,20 @@ def wraps_whole(s, open_c, close_c):
 def is_noop_acceptance(raw):
     """With `||` and `;` refused upstream, the only remaining shape is an `&&` chain, and it is
     always-green exactly when EVERY link is."""
-    s = str(raw).strip()
+    s = str(raw).strip(JS_TRIM)
     # `( true )` and `{ true }` wrap the same command. The balance check is load-bearing:
     # an anchored `^\(...\)$` mangles `(echo a) && (echo b)` into `echo a) && (echo b`.
     for _ in range(4):
         before = s
         for open_c, close_c in (("(", ")"), ("{", "}")):
             if s.startswith(open_c) and s.endswith(close_c) and wraps_whole(s, open_c, close_c):
-                s = s[1:-1].strip()
+                s = s[1:-1].strip(JS_TRIM)
         if s == before:
             break
     if not s:
         return False
     # Judged on the MASKED text: a quoted `&&` is an argument, not a link.
-    parts = [p.strip() for p in mask_quoted(s).split("&&")]
+    parts = [p.strip(JS_TRIM) for p in mask_quoted(s).split("&&")]
     return all(ALWAYS_TRUE.match(p) for p in parts if p)
 
 
@@ -567,7 +567,7 @@ def _js_number(s):
         return float("nan")
 
 
-_budget_raw = (os.environ.get("AGENTS_DISCIPLINE_RERUN_BUDGET_MS") or "").strip()
+_budget_raw = (os.environ.get("AGENTS_DISCIPLINE_RERUN_BUDGET_MS") or "").strip(JS_TRIM)
 rerun_budget_ms = 600000.0 if _budget_raw == "" else _js_number(_budget_raw)
 # `x != x` is the NaN test; `in (inf, -inf)` the infinity one -- together, Number.isFinite.
 if not rerun_skipped and not (
@@ -588,7 +588,7 @@ if not rerun_skipped:
         # acceptance_command requires an argument -- so a bare `true` was not recognised as a
         # command at all and fell through to `unreproducible`, which does not fail. That is
         # the cheapest cheat in the file: one word, and the row passes. Scan first, extract second.
-        spans = [s[1:-1].strip() for s in CODE_SPAN.findall(r["acceptance"])]
+        spans = [s[1:-1].strip(JS_TRIM) for s in CODE_SPAN.findall(r["acceptance"])]
         # Truthiness, not `is not None`: the oracle's `find` + `if (chained)` skips an
         # empty-string match. Both predicates reject "" today, so this only matters to whoever
         # edits them next -- which is exactly when a silent semantic difference costs an hour.
