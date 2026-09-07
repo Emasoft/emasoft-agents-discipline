@@ -11,6 +11,30 @@ scope: project
 
 # Port all nine scripts to Python
 
+## ⏵ NEXT ACTION (2026-09-07, head `9071a84`)
+
+**Read `dispatch.py:429`, then fix `gates.py:1582` `write_atomic` raising on a lone surrogate
+reaching `dispatch.json`.** Reproduce with
+`dispatch_check.py abandon --root <d> --scope s --wave w1 --reason "$(printf 'bad\xffreason')"`
+after an `open`: the oracle prints `ABANDONED w1 …: bad<U+FFFD>reason`, the port dies with
+`UnicodeEncodeError … '\udcff'`. `dispatch.py:429` documents a MEASURED exemption from
+`_js_json_text` at that write — correct for its stated reason, wrong for surrogates — so read it
+before editing rather than applying the reflex fix.
+
+**Why this one and not more test work.** It is the last known defect that is IN THE PORT rather
+than in the harness, and it is a crash MID-WRITE to state both runtimes read. Measured over the
+encoding sweep: the first four commits fixed four pre-existing port defects; the next several
+fixed only defects introduced by their immediate predecessor, three of those in test files. That
+ratio inverted, and `encoding-diff.sh` is green with all seven rows proven to redden under a
+mutation. **Stop editing the test file.**
+
+Second item, lower: the errno fix in `9071a84` has NO differential row. `gate-args-diff.sh`
+drives gate-check only; `lint-tests.mjs` passes both before and after the fix, which is the
+evidence it does not cover the message. A row needs a new runner — not `encoding-diff.sh`, which
+has already grown into two subjects sharing only the word "encoding" (rows 1-2 are the
+`ensure_ascii` family at the default locale; rows 3-7 are the `force_utf8_streams` family under
+a hostile one). Split it if it grows again.
+
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
 
 **gate-check.mjs IS FULLY PORTED (`d12f67f`, 2026-09-07). `PORT_INCOMPLETE_EXIT` IS GONE.**
