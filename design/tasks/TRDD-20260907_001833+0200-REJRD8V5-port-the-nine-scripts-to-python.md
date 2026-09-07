@@ -87,6 +87,20 @@ ONE directory yields ONE file exactly when the signatures are equal. Measured 1;
 approving a CHECK edit instead, measures 2 — without it a counter stuck at 1 would "prove" the
 premise for free.
 
+> **CORRECTION to `db210ad`'s account of the Pyright findings.** It called the `:553`
+> "structurally unreachable" hint "a FALSE POSITIVE from platform narrowing" and argued that
+> silencing it would mean "deleting Windows support to satisfy a darwin type-check" — which
+> knocks down the weaker of two options (deleting the branch vs suppressing the diagnostic) and,
+> more to the point, was inferred from the adjacent `if sys.platform != "win32"` rather than
+> measured. MEASURED with the discriminator: `pyright --pythonplatform Darwin scripts/gate_check.py`
+> reports **ZERO** diagnostics, so the hint comes from the editor's LSP with a non-default rule
+> (`reportUnreachable`) enabled, not from the project's own settings. Under
+> `--pythonplatform Windows` two DIFFERENT findings appear — `os.geteuid`/`os.getuid` "not a
+> known attribute" at `:645` — and those are false positives too, for a reason worth recording:
+> the calls are guarded by `hasattr(os, "geteuid")`, mirroring the oracle's own
+> `typeof process.geteuid === "function"` (`gate-check.mjs:381`), and Pyright cannot narrow
+> through `hasattr`. Verified by reading both sides, not by the absence of a red squiggle.
+
 > **CORRECTION to `246e3e5`'s probe table.** Its two rows are labelled "disable digest disjunct
 > only" and they were NOT the same edit: the earlier probe disabled `fresh is None` **and** the
 > digest comparison; this turn's disabled the digest alone. The conclusion survives *a fortiori*

@@ -59,6 +59,15 @@ declare -a FAILED=()
 
 STALE_MSG="definition or runtime approval oracle changed"
 
+# THE CASE-3 PAIR, DEFINED ONCE. _write_fixture's `cwd-respelled` arm and _assert_pin both need
+# the same CHECK and the same two CWD spellings, and they used to hardcode them separately.
+# Nothing tied the copies together: editing the spelling in one would leave the premise row
+# certifying a pair CASE 3 no longer tests, while both kept passing -- the very failure the
+# premise row exists to prevent, displaced one level up.
+C3_CHECK='./check.sh'
+C3_CWD_BEFORE='.'
+C3_CWD_AFTER='./'
+
 # The ledger, and the CHECK script it names. The gate is written UNCHECKED so the run has to
 # execute it; --approve records the approval in APPROVALS on the first pass.
 _write_fixture() {
@@ -97,11 +106,10 @@ _write_fixture() {
       #     -   STALE leaf:G1: definition or runtime approval oracle changed; result not written
       #     - - [ ] G1: x        (oracle)
       #     + - [x] G1: x        (port, plus a fresh EVIDENCE line)
-      printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./check.sh\n  EXPECT: ok\n  CWD: .\n' \
-        > "$root/.agents-discipline/s/gates/leaf.md"
-      printf '#!/bin/sh\nprintf "%s" > .agents-discipline/s/gates/leaf.md\necho ok\n' \
-        '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./check.sh\n  EXPECT: ok\n  CWD: ./\n' \
-        > "$root/check.sh"
+      printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: %s\n  EXPECT: ok\n  CWD: %s\n' \
+        "$C3_CHECK" "$C3_CWD_BEFORE" > "$root/.agents-discipline/s/gates/leaf.md"
+      printf '#!/bin/sh\nprintf "# Gates\\n\\nOWNS: src/**\\n\\n- [ ] G1: x\\n  CHECK: %s\\n  EXPECT: ok\\n  CWD: %s\\n" > .agents-discipline/s/gates/leaf.md\necho ok\n' \
+        "$C3_CHECK" "$C3_CWD_AFTER" > "$root/check.sh"
       ;;
     stable)
       printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./check.sh\n  EXPECT: ok\n' \
@@ -195,16 +203,28 @@ _case() {
 # Approving both spellings into one directory and counting tokens therefore measures signature
 # equality with no access to the hash itself. The control approves a CHECK edit instead, which
 # MUST produce 2 -- otherwise a counter stuck at 1 would "prove" the premise for free.
+# CHECK and CWD are passed as SEPARATE arguments, never packed into one string split on a
+# delimiter. A `${body%%|*}` / `${body##*|}` pair was the first spelling here and it is exactly
+# the kind of cleverness that fails silently: a CHECK containing a pipe would mis-split, both
+# rows would still produce SOME count, and the control could not tell you the wrong ledgers had
+# been measured.
 _assert_pin() {
-  local root="$1" dir="$2" want="$3" label="$4" first="$5" second="$6"
+  local exe="$1" script="$2" dir="$3" want="$4" label="$5" check1="$6" cwd1="$7" check2="$8" cwd2="$9"
+  # THE SAME ROOT CASE 3 USES. The token hashes resolve(file), so a scratch root would measure
+  # signature equality for a DIFFERENT file path and attach the conclusion to c3 by inference.
+  # _case rebuilds this directory from scratch before its own run, so there is no interference.
+  local root="$WORK/c3" ledger
   rm -rf "$root" "$dir"; mkdir -p "$root/.agents-discipline/s/gates" "$dir"; chmod 700 "$dir"
   printf '#!/bin/sh\necho ok\n' > "$root/check.sh"; chmod +x "$root/check.sh"
-  local ledger="$root/.agents-discipline/s/gates/leaf.md" body
-  for body in "$first" "$second"; do
+  ledger="$root/.agents-discipline/s/gates/leaf.md"
+  local i
+  for i in 1 2; do
+    local c w
+    if [ "$i" = 1 ]; then c="$check1"; w="$cwd1"; else c="$check2"; w="$cwd2"; fi
     printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: %s\n  EXPECT: ok\n  CWD: %s\n' \
-      "${body%%|*}" "${body##*|}" > "$ledger"
+      "$c" "$w" > "$ledger"
     AGENTS_DISCIPLINE_APPROVAL_DIR="$dir" \
-      "$NODE_ABS" "$ORACLE" --root "$root" --scope s --approve --reverify >/dev/null 2>&1
+      "$exe" "$script" --root "$root" --scope s --approve --reverify >/dev/null 2>&1
   done
   local n; n=$(find "$dir" -maxdepth 1 -name '*.json' -type f | wc -l | tr -d ' ')
   if [ "$n" = "$want" ]; then
@@ -215,8 +235,19 @@ _assert_pin() {
   fail=$((fail + 1)); FAILED+=("$label")
 }
 
-_assert_pin "$WORK/p1" "$WORK/a1" 1 "PREMISE CWD respelling is signature-equal" './check.sh|.' './check.sh|./'
-_assert_pin "$WORK/p2" "$WORK/a2" 2 "CONTROL a CHECK edit is not"              './check.sh|.' './check.sh -q|.'
+# RUN FOR BOTH RUNTIMES. The premise is a property of the code UNDER TEST, not just the oracle:
+# if gate_check.py's approval_oracle_signature ever normalized gate.cwd differently, the port
+# would mint 2 tokens where the oracle mints 1, CASE 3 would still pass (both print STALE, for
+# different reasons), and the pin would be certified on the oracle while being false for the
+# port. An oracle-only premise check cannot see that.
+_assert_pin "$NODE_ABS" "$ORACLE" "$WORK/a1" 1 "PREMISE oracle respelling is sig-equal" \
+  "$C3_CHECK" "$C3_CWD_BEFORE" "$C3_CHECK" "$C3_CWD_AFTER"
+_assert_pin "$PY_ABS" "$PORT" "$WORK/a2" 1 "PREMISE port respelling is sig-equal" \
+  "$C3_CHECK" "$C3_CWD_BEFORE" "$C3_CHECK" "$C3_CWD_AFTER"
+_assert_pin "$NODE_ABS" "$ORACLE" "$WORK/a3" 2 "CONTROL a CHECK edit is not" \
+  "$C3_CHECK" "$C3_CWD_BEFORE" "$C3_CHECK -q" "$C3_CWD_BEFORE"
+_assert_pin "$PY_ABS" "$PORT" "$WORK/a4" 2 "CONTROL port CHECK edit is not" \
+  "$C3_CHECK" "$C3_CWD_BEFORE" "$C3_CHECK -q" "$C3_CWD_BEFORE"
 _reset_approvals
 
 _case "self-mutating CHECK is STALE"   mutating       present c1
@@ -225,7 +256,11 @@ _case "CWD respelled pins the digest"  cwd-respelled  present c3
 
 echo
 if [ "$fail" = 0 ]; then
-  echo "--- all identical ($pass cases) ---"
+  # NOT "all identical (N cases)". The rows are two KINDS of evidence and only one of them is a
+  # cross-runtime comparison: the PREMISE/CONTROL rows count approval tokens within a SINGLE
+  # runtime and compare nothing between them. A single denominator invites the summary to be
+  # quoted as N oracle-vs-port comparisons, which over-reads it by four.
+  echo "--- $((pass - 4)) differential(s) identical; 4 premise/control assertion(s) held ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"
