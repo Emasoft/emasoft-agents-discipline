@@ -33,6 +33,18 @@ jobs:
       - name: Run zero-dependency test suite
         run: npm test
 
+      # The twelve *-diff.sh suites are the PORT'S PRIMARY FIDELITY INSTRUMENT -- each runs the
+      # .mjs oracle and the .py port on the same input and compares exit code, stdout and
+      # stderr. Until 2026-09-07 not one of them was wired to CI or to `npm test`, so every
+      # "identical" claim in the port rested on someone remembering to type them by hand.
+      # NOT folded into `npm test`: they are bash, and several probe DIRECTORY PERMISSION BITS
+      # (chmod 300), which has no Windows meaning -- hence the guard rather than a matrix-wide
+      # step. Coverage on windows-latest is therefore the node suites only, and that gap is
+      # deliberate and recorded, not accidental.
+      - name: Run node-vs-python differential suites
+        if: runner.os != 'Windows'
+        run: npm run test:diff
+
   windows-node-22-14:
     name: windows-latest / node 22.14.0 (libuv 1.49.2)
     runs-on: windows-latest

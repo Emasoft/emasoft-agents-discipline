@@ -858,6 +858,29 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   assertions.** Exit code answers "did anything fail", never "was anything checked" — and this
   file already records a runner that "prints 21/21; it counts the skip as a pass". That is what
   the suites' own vacuity-control rows are for, and they are per-row, not per-suite.
+- **THE TWELVE DIFFERENTIAL SUITES RAN IN NO CI AND IN NO `npm test` UNTIL 2026-09-07 — FIXED.**
+  `approval argv digest discovery encoding errno-message gate-args lease path-api regex-worker
+  stale tonumber`, each running the `.mjs` oracle and the `.py` port on one input and comparing
+  exit code, stdout and stderr. **They are the port's primary fidelity instrument, and not one
+  was wired to anything** — every "identical" claim in this file rested on someone remembering
+  to type `bash tests/<x>-diff.sh`. Measured: `grep -rn 'errno-message-diff' .github/workflows/
+  package.json` → empty; `grep -rhoE '[a-z-]+-diff\.sh'` over both → empty.
+  Now `npm run test:diff` (a `for` loop with `|| exit 1`) plus a `test-matrix.yml` step. All 12
+  pass; the loop was proven to fail and short-circuit on a planted failing script before being
+  wired. **NOT folded into `npm test`**: they are bash and several probe directory permission
+  bits, so the CI step is guarded `if: runner.os != 'Windows'` — windows-latest keeps node-suite
+  coverage only, deliberately and recorded.
+  **This inverts what several commits above were about.** I spent them fixing a portability bug
+  in a row CI *does* run, while the instrument that would actually catch cross-platform
+  divergence was not wired to CI at all.
+- **HOW FAR THE HOST-SCOPING REACHES, stated at full width because the version in `gates.py` is
+  narrower:** every differential suite runs node and python **on the same machine**, so every
+  "identical" claim in this port means *identical on darwin*. Not only the `_LIBUV_PROSE`
+  partition — every errno message, path-semantics assumption and permission-dependent row. And
+  the permission rows are Unix-scoped by construction (`chmod 300` has no Windows meaning), so
+  on Windows the differential coverage would shrink rather than fail. Now that CI runs them on
+  ubuntu and macos, glibc-vs-darwin divergence will surface on the next push — which is the
+  first time this port has had any evidence off one host.
 - **COVERAGE:** 14 differential rows; only 4 of the 7 suites honour `AD_RUNTIME`
   (`contract-tests`, `hardening-tests`, `stress-tests` are node-only and cannot exercise the
   port). Rows 12-14 depend on DIRECTORY permission bits and are gated by their own probe.

@@ -1081,17 +1081,25 @@ try:
     _zero_text = "NO ERROR"
 except OSError as _error:
     _zero_text = str(_error)
-# ASSERTS THE STRUCTURE ONLY, NEVER THE LIBC PROSE, and the first version got this wrong in a
-# way that would have broken CI on two of three platforms. It also asserted
-# `"undefined error: 0" in _zero_text` -- which is `os.strerror(0)` on DARWIN. glibc returns
-# "Success" for errno 0, so on ubuntu-latest and windows-latest (both in the test matrix, node
-# 16/20/24) the message is `zero: success, lstat` and that clause fails -- a red row blaming the
-# errno-0 guard for a libc difference, which is the opposite of what a tripwire is for.
-# `startswith("zero: ")` is portable BY CONSTRUCTION: "zero" is the strerror THIS TEST authored,
-# surfaced by _err_code's fallback when errno has no name, so no libc supplies it.
+# ASSERTS "WAS IT RESHAPED", NEVER ANY PROSE -- and it took two tries to get the assertion down
+# to something no platform can perturb.
+#   v1 asserted `"undefined error: 0" in _zero_text`. That is `os.strerror(0)` on DARWIN; glibc
+#     says "Success", musl "No error information". test-matrix.yml runs ubuntu, windows AND
+#     macos, and tests/ ships in the plugin, so it reddens for users -- while its label sends
+#     them to investigate the errno-0 guard. A tripwire wired to the wrong door.
+#   v2 asserted `startswith("zero: ")`, called portable "by construction". It is NOT: the "zero"
+#     token appears only because `_err_code` does `errno.errorcode.get(0)` FIRST and finds
+#     nothing, falling through to the authored strerror. `0 not in errno.errorcode` is measured
+#     on darwin ONLY; Windows ships WSA* names in that same table and I cannot check it here.
+#     Same single-platform inference as v1, one layer deeper.
+# THIS FORM depends on neither. `[Errno N] strerror` is CPython's OWN OSError.__str__ shape, so
+# "does the text start with '[Errno '" answers "was this raised verbatim or reshaped" without
+# reference to any errno table or libc string -- which IS the question the guard decides. The
+# suffix is safe for a different reason: the error is built with two args, so `.filename` is
+# None and node_fs_message takes its no-path branch, `", " + syscall`.
 # MEASURED that it still discriminates: widening the guard to `if not error.errno` yields
 # `[Errno 0] zero` and this is the ONLY row of the four that fails.
-report(_zero_text.startswith("zero: ") and _zero_text.endswith(", lstat"),
+report(not _zero_text.startswith("[Errno ") and _zero_text.endswith(", lstat"),
        "node_call on errno 0 emits the AUTHORED TEXT as the error code (tripwire, not a spec)",
        _zero_text)
 

@@ -1474,12 +1474,9 @@ def _js_join(*parts):
 #                             string, so this format cannot distinguish a measured match from
 #                             an assumed one.
 #
-# THE PARTITION ITSELF IS DARWIN-MEASURED, and WHICH codes need an override is a property of the
-# HOST's libc, not a fixed fact: libuv's table is compiled in and stable, while the fallback is
-# os.strerror(n), which is glibc on Linux and musl on Alpine. A code that agrees here can
-# disagree there and would need a _LIBUV_PROSE entry that this table does not have. The 14
-# differential rows do NOT cover this -- they run node and python on the SAME machine, so they
-# confirm agreement on the host and say nothing about any other libc. UNVERIFIED off darwin.
+# THE PARTITION IS DARWIN-MEASURED: libuv's table is compiled in, but the fallback is the HOST's
+# libc (glibc and musl differ), so WHICH codes need an override is host-dependent, not fixed.
+# Unverified off darwin -- reasoning in TRDD-REJRD8V5.
 
 #     EEXIST        node "file already exists"                 vs "file exists"
 #     EISDIR        node "illegal operation on a directory"    vs "is a directory"
