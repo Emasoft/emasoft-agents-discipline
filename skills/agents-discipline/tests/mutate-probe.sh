@@ -48,7 +48,25 @@ if [ $# -lt 1 ]; then echo "$label -> PROBE FAILED (no runner given)" >&2; exit 
 # no runner has to remember a column-0 convention, and one fragile output-shape contract is
 # gone. The anchor existed to avoid matching DIVERGE inside prose; the only prose near it is
 # lease-diff.sh's `diff | head -20`, whose lines begin with <, >, - or a digit.
-DIVERGE_RE='^[[:space:]]*DIVERGE'
+# THE TRAILING SEPARATOR IS REQUIRED, and it is the half that stops the loosening from opening a
+# worse hole than it closed. Dropping the column-0 anchor lets any indented line containing the
+# token match -- and a PYTHON TRACEBACK quotes source lines, indented, while this repo's test
+# files now carry the word DIVERGE in dozens of comments. Tracebacks reach runner output
+# verbatim (measured: the driver-side probe's UnicodeEncodeError did exactly that).
+#
+# THE COSTS ARE NOT SYMMETRIC, which is why this is worth a second condition. A false NOTHING
+# REDDENED is a verdict this project has learned to distrust, and guard -1 plus selftest case 5
+# exist to catch it. A false REDDENS is the DESIRED outcome of a probe: it gets recorded as a
+# grounding and nothing in the harness questions it. There is no guard, no selftest case, and no
+# reviewer instinct pointed at a spurious catch -- and the set difference does not help, because
+# a traceback line appears only AFTER mutation and so lands squarely in `comm -13` as newly
+# diverging.
+#
+# Every real emission across all seven runners is `DIVERGE` followed by a space (measured:
+# `printf 'DIVERGE  %-42s'` in four, `echo "DIVERGE <label>"` in three). The summary banners
+# `--- DIVERGENCES ABOVE ---` and `--- DIVERGENCE SET CHANGED` do not match: they start with
+# `---`, and `DIVERGENCES` puts an N where the separator must be.
+DIVERGE_RE='^[[:space:]]*DIVERGE[[:space:]]'
 backup=$(mktemp)
 cp "$target" "$backup"
 # PRINTED, because a SIGKILL skips the trap and leaves the mutant in place; without this the
@@ -154,9 +172,12 @@ baseline_out=$(cat "$backup.baseline")
 # variant(s)). A free catch for a mutation with no relationship to the code under test, which
 # is precisely the false positive guard 0 exists to prevent.
 #
-# The fix is to count the baseline's own DIVERGE lines and report the DELTA. Exit status is a
-# summary the runner is free to define; the lines are the measurement.
-baseline_diverged=$(printf '%s\n' "$baseline_out" | grep -cE "$DIVERGE_RE")
+# The first fix counted the baseline's DIVERGE lines and reported the DELTA. That was replaced
+# by the SET DIFFERENCE at the verdict (a delta nets to zero when a mutation heals one
+# divergence and introduces another), which reads $baseline_out directly -- so the count this
+# line used to compute has no reader and is DELETED. Exit status is a summary the runner is free
+# to define; the lines are the measurement, and the labels are the measurement that cannot
+# cancel.
 # A success-marker grep ("--- all identical ---") sat here and was REMOVED. Both runners print
 # that banner IFF they exit 0, so it was exactly redundant with the check above; its only
 # effect that was not redundant was rejecting any OTHER differential runner, and the realistic
@@ -195,7 +216,7 @@ esac
 
 output=$("$@" 2>&1)
 # THE RUNNER MUST SPEAK THIS SCRIPT'S VOCABULARY, and until this guard existed nothing checked
-# it. The verdict below is `grep -cE '^DIVERGE'` over the runner's stdout, so ANY runner that
+# it. The verdict below greps the runner's stdout for $DIVERGE_RE, so ANY runner that
 # reports divergence some other way scores zero and lands in the NOTHING REDDENED branch --
 # indistinguishable from a mutation with genuinely no coverage.
 #
