@@ -332,10 +332,23 @@ def as_directory(path, label):
         # function whose measured errno scope is documented at ONE place drifts silently the day
         # that scope changes, and nothing here would say so.
         # `stat`, not `open`, and this is the sweep's only non-`open` site: the try wraps os.stat,
-        # and the oracle's statSync catch names `stat` too. Measured identical before and after
-        # this refactor, and row 10 of errno-message-diff.sh is what keeps it that way -- it was
+        # and the oracle's statSync catch names `stat` too. Row 10 of errno-message-diff.sh was
         # added BEFORE the change, for a site with no defect, purely to guard the edit.
-        fail_usage("cannot inspect " + label + " " + path + ": " + node_fs_message(exc, "stat"))
+        #
+        # THE `errno is not None` GUARD IS NOT DECORATION HERE, and the first version of this
+        # refactor dropped it because the hand-rolled code carried its own UNKNOWN fallback.
+        # MEASURED, old expression against the helper on the same exception:
+        #     errno=None       old `UNKNOWN: , stat '/p'`
+        #                      new `[Errno None] None: '/p': [Errno None] None: '/p', stat '/p'`
+        #     unknown errno    old `UNKNOWN: weird failure, stat '/p'`
+        #                      new `Weird Failure: unknown error: 99999, stat '/p'`
+        # Row 10 exercises EACCES, where the two agree exactly, so it stayed green through a
+        # change that was NOT the pure refactor its commit called it. Neither case is reachable
+        # -- os.stat always sets an errno -- but replacing a sane fallback with garbage on the
+        # argument that nothing reaches it is how the next defect gets in, and the guard makes
+        # this site's shape identical to every other one in the sweep.
+        fail_usage("cannot inspect " + label + " " + path + ": "
+                   + (node_fs_message(exc, "stat") if exc.errno is not None else str(exc)))
     if not _stat.S_ISDIR(stat_result.st_mode):
         fail_usage(label + " is not a directory: " + path)
 
@@ -917,11 +930,15 @@ def main(argv):
                     fail_usage("gate " + qualify(ledger["file"], gate["id"])
                                + " CWD does not exist: " + cwd)
                 # The second hand-rolled copy, same six lines, same `stat` syscall, same reason
-                # for going through the helper instead -- see the --root site above. UNGUARDED
-                # by a row: reaching it needs a gate CWD that exists but cannot be stat'd, which
-                # means an unsearchable parent, and the ledger under it would then be unreadable
-                # first. Fixed as the twin of a site row 10 does cover.
-                fail_usage("cannot inspect gate CWD " + cwd + ": " + node_fs_message(exc, "stat"))
+                # for going through the helper instead -- see the --root site above, including
+                # the `errno is not None` guard and why dropping it was not the pure refactor it
+                # was called. UNGUARDED by a row: reaching it needs a gate CWD that exists but
+                # cannot be stat'd, which means an unsearchable parent, and the ledger under it
+                # would then be unreadable first. So this site was never RUN in either form --
+                # the previous commit called both copies "correct" on one measurement taken at
+                # the OTHER one, which is an assertion by symmetry wearing a measurement's words.
+                fail_usage("cannot inspect gate CWD " + cwd + ": "
+                           + (node_fs_message(exc, "stat") if exc.errno is not None else str(exc)))
             else:
                 if not _stat.S_ISDIR(cwd_stat.st_mode):
                     fail_usage("gate " + qualify(ledger["file"], gate["id"])

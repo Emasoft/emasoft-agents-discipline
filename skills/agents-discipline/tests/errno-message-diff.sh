@@ -354,6 +354,11 @@ chmod 000 "$WORK/root-o" "$WORK/root-p"
 "$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/root-p/x" --scope s --status \
   > /dev/null 2> "$WORK/.p"
 chmod 700 "$WORK/root-o" "$WORK/root-p"
+# THE NEEDLE IS WHAT SEPARATES THE TWO BRANCHES here, not decoration: `chmod 000` on the parent
+# denies SEARCH, so the stat fails at the parent with EACCES before it can learn whether `x`
+# exists. If a filesystem ever answered ENOENT instead, the code exits earlier with
+# `--root does not exist:` -- which does NOT contain this needle, so the row would report
+# "fixture reached nothing" rather than comparing the wrong branch.
 _row "gate-check unreadable root (stat)" "$WORK/root-o" "$WORK/root-p" "cannot inspect --root"
 
 echo

@@ -61,10 +61,30 @@ That is the TRIAGE surface, not the fix list, and it is wrong in BOTH directions
 SPELLING grep. It over-counts (the worker, spawn and regex sites carry V8/CPython text where
 `str()` is correct and `node_fs_message` would be wrong) and it under-counts (`f"{e}"`,
 `repr(err)`, `err.strerror`, or an error bound to a variable and interpolated later all evade
-it). So the numbers bound the reading, not the work. Each site needs its errno checked: the
-`node_fs_message(...) if errno is not None else str(...)` guard degrades correctly by
-construction, but applying it blindly would claim node-shaped fidelity for messages node never
-produced. `gate_check.py:929` already carries a note about exactly this asymmetry; read it first.
+it). So the numbers bound the reading, not the work.
+
+**ENUMERATE WITH THE SHAPE GREP, and use this exact form** — the one used on `gate_check.py`
+had an over-broad filter and only luck kept it from hiding sites:
+
+```
+grep -nE 'except .* as [a-z_]+:' <file>          # 1. the binders
+grep -nE '\b(exc|error|err)\b' <file> | grep -vE '^\s*[0-9]+:\s*#'   # 2. every use, comments out
+```
+
+Step 2 must NOT filter `error\(`. The port's own logging function is named `error`, so a filter
+on it drops exactly the lines that EMIT these messages — `error("...: " + str(exc))` — which is
+most of the sites in every module. That filter was in the `gate_check.py` pass and hid nothing
+only because an unfiltered grep had been read first in the same turn. The spelling grep's
+blindness was found by widening; the shape grep's own filter would have reintroduced it.
+
+Then each site needs its errno checked: the `node_fs_message(...) if errno is not None else
+str(...)` guard degrades correctly by construction, but applying it blindly would claim
+node-shaped fidelity for messages node never produced. `gate_check.py:1063` carries the worked
+example — the oracle wraps `new Worker(...)` (V8, no errno) where the port wraps
+`subprocess.Popen` (ENOENT/EACCES), so the two diverge by construction and neither spelling
+fixes it. **And never drop the `errno is not None` guard even where the old code carried its own
+fallback**: measured, the helper on an errno-less OSError returns
+`[Errno None] None: '/p': [Errno None] None: '/p', stat '/p'`, not a sane sentinel.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
 
