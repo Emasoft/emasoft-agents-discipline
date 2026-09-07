@@ -28,11 +28,16 @@ export const CASES = {
   relative: [["/a/b", "/a/b/c"], ["/a/b", "/a"], ["/a/b", "/a/b"], ["/a/b", "/x"],
              ["/a/b", "/a/b/../c"], ["/a//b", "/a/b/c"], ["/a/b/", "/a/b/c/"],
              ["/a/b", "/a/bc"], ["/a", "/a/../a/x"], ["/", "/a"],
-             // Two branches of js_relative had NO row reaching them, found by reading the
-             // transcription against node rather than by any control: `["/a","/"]` is the
-             // to-is-root arm (`i == 0` -> last_common_sep = 0), and `["/a/bc","/a/b"]` is the
-             // from-longer non-boundary arm. `["/","/a"]` above covers only the mirror of the
-             // first, which is what made the omission look deliberate.
+             // `["/a","/"]` closes a REAL gap: js_relative's to-is-root arm
+             // (`i == 0` -> last_common_sep = 0) had no row reaching it. MEASURED by running
+             // that mutation against the PREVIOUS corpus, where it was SILENT.
+             //
+             // `["/a/bc","/a/b"]` does NOT close a gap and is kept only as a distinct shape.
+             // It was added in the same commit under the same claim, and the same measurement
+             // showed the from-longer branch was ALREADY covered -- the mutation reddened
+             // against the old corpus too. Two rows were asserted as gap-closing on the
+             // strength of one having been verified; running the control against the OLD
+             // corpus is the step that separates "this row is needed" from "this row is new".
              ["/a", "/"], ["/a/bc", "/a/b"]],
   // The `//` rows are the ones that matter most and were MISSING from the first corpus.
   // POSIX gives exactly two leading slashes implementation-defined meaning: Python's

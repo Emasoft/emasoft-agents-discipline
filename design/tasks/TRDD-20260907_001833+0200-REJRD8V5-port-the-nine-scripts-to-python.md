@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T04:16:00+0200
+updated: 2026-09-07T04:26:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -691,26 +691,34 @@ difference — but every call site has to drop the await). One item left:
    written an hour after documenting it. **Ad-hoc probes need the parse-don't-byte-compare
    policy as much as the committed differentials do.**
 
-   **DO THE DIGEST DIFFERENTIAL FIRST — BEFORE writing `gate_check.py`, and before the suite
-   retrofit. This is an ORDERING instruction, and it is here because FOUR distinct causes
-   produce a BYTE-IDENTICAL symptom.** This document flags them in three separate places
-   without ever saying they are indistinguishable:
-   1. a digest mismatch → "every approval silently fails to match";
-   2. missing `run-tests.mjs`'s `--approve` injection → "every gate silently runs UNAPPROVED";
-   3. the unapproved branch → "runs ZERO commands and exits 1";
-   4. ordinary port bugs.
+   **DO THE DIGEST DIFFERENTIAL EARLY — and here is the ACCURATE version of why, after a first
+   draft overstated it.** That draft claimed FOUR causes produce a byte-identical symptom. Read
+   against the code (`:744-768`), it is TWO:
+   - **A digest mismatch** and **a missing `--approve` injection** are genuinely
+     indistinguishable: both make `approvalExists` return false, so both print
+     `APPROVAL REQUIRED` via `printOracle` and then
+     `NOT RUN: inspect this oracle, then re-run with --approve`. Same two lines, same stream.
+   - **An approval-infrastructure failure is NOT** — `:748` prints
+     `gate-check: could not validate approval for …: <message>` to **stderr**. A discriminator
+     already exists for that one; do not go looking for a mystery there.
+   - Ordinary port bugs surface however they surface. Lumping them in was padding.
 
-   All four surface as *a mass of gates reporting unapproved, no command executed, no message
-   naming a cause*. And the advice above — "port first, retrofit the suites once there is
-   something to point them at" — routes a resuming session straight into that wall: write 950
-   lines, retrofit four suites, run, and face four candidate causes with no discriminator.
+   **The reason to do it early survives, and `printOracle` is why.** It prints FIVE of the
+   twelve digest fields — `check`, `expect`, `cwd`, `shell`, `PATH` (`:511-519`). So a
+   divergence in those five is visible by eye in the failure output. **The other seven —
+   `schema`, `timeoutMs`, `maxOutputBytes`, `regexTimeoutMs`, `regexStartupTimeoutMs`,
+   `maxRegexWorkers`, `platform` — are never printed**, and they are exactly the fields where
+   JS and Python formatting differs (JS renders `1.0` as `1`; `sys.platform` carries version
+   digits). A divergence there is invisible in the output AND indistinguishable from a missing
+   `--approve`. That is the gap worth closing by measurement rather than by debugging.
 
-   The fix is cheap and settles one candidate before the ambiguity can form: **a ~10-line
-   differential comparing `sha256(JSON.stringify(oracle(file, gate)))` across the two runtimes
-   on a fixed gate**, in the style of `path-api-diff.sh`. It needs no `gate_check.py` — only
-   `oracle()`'s twelve fields — and it is the highest-ranked hazard in this document. Do it
-   first, and a later wall of unapproved gates has three candidates instead of four, one of
-   them already excluded by measurement.
+   **Feasibility caveat, since the first draft called it "~10 lines, needs no `gate_check.py`":**
+   `oracle()` reads module-level state established during argument parsing — `shell`
+   (`resolveShell`), `timeoutSeconds`, `pathValue`, `approvalDir`. A differential must either
+   reproduce those or pin them to fixed values. Pinning is legitimate and keeps it small — the
+   seven unprinted fields are constants or `platform`, so a fixed-input comparison of
+   `sha256(JSON.stringify(oracle(...)))` still answers the question — but it is not free, and
+   calling it trivial was a guess.
 
    **ALSO: `mutate-probe.sh` does NOT work as the verdict reader for this route.** Its verdict
    greps `^DIVERGE` (`:140`), which only the hand-written differential drivers print. The
