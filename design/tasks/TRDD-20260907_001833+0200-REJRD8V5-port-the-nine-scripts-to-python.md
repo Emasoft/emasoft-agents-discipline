@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T11:16:05+0200
+updated: 2026-09-07T11:18:29+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -396,9 +396,24 @@ running it. Run now:
 that audit is NOT done, and this is the honest state of the sweep. **Correcting the review that
 prompted this:** `process_tree.py`, `check_supervisor.py`, `regex_worker.py` and `jsapi.py` were
 predicted to be unswept liabilities — measured, they contain ZERO matching fs calls, so their
-absence from the sweep costs nothing on this axis. `process_tree._err_code` remains a deliberate
-duplicate and now differs from its sibling by the prose table; that is a real divergence between
-the two copies, but it is about `_err_code`, not about unwrapped syscalls.
+absence from the sweep costs nothing on this axis.
+
+**RE-CHECKED WITH A MUCH WIDER PATTERN**, because the first grep only covered `os.<fsname>(` and a
+claim published as first-hand measurement should survive its own method being doubted: adding
+`open(`, `pathlib`, `shutil`, `io.open` and a bare `os.<anything>(` finds `regex_worker.py` and
+`jsapi.py` still at ZERO, and `process_tree.py`/`check_supervisor.py` carrying only PROCESS calls
+— `os.getpgid`, `os.killpg`, `os.getcwd`, `os.strerror`. No filesystem call in any of the four.
+
+**AND THE MODULE IS OUT OF SCOPE FOR THIS CLASS ENTIRELY, for a better reason than "no fs
+calls".** `process_tree.py` never emits an fs-shaped message: the oracle formats these as
+`error.code || error.message` (`process-tree.mjs:31,65,74,81,87,122,158`) and the port's
+`_err_code` is that same ladder, so BOTH emit the errno NAME (`ESRCH`), not prose. Neither the
+syscall token nor `_LIBUV_PROSE` can apply. Confirmed too that node's process errors have a
+DIFFERENT GRAMMAR from its fs errors — `process.kill` gives `kill ESRCH`, not
+`ESRCH: no such process, kill` — so importing the fs rules here would have been actively wrong.
+The `_err_code` duplication stays a deliberate divergence between two copies, and it is about the
+FALLBACK rung (oracle `error.message` vs port `strerror`), reachable only when `code` is absent,
+which is the accepted runtime-message class.
 
 **2. TWO ROWS COULD NOT PROTECT THEMSELVES.** Rows 12 and 13 used the OUTER prefix as their
 non-vacuity needle (`could not record approval`, `cannot claim leases`). Both survive any authored
