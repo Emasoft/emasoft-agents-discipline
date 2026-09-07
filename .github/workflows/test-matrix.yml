@@ -37,16 +37,12 @@ jobs:
       # .mjs oracle and the .py port on the same input and compares exit code, stdout and
       # stderr. Until 2026-09-07 not one of them was wired to CI or to `npm test`, so every
       # "identical" claim in the port rested on someone remembering to type them by hand.
-      # NOT folded into `npm test`: they are bash, and several probe DIRECTORY PERMISSION BITS
-      # (chmod 300), which has no Windows meaning -- hence the guard rather than a matrix-wide
-      # step. Coverage on windows-latest is therefore the node suites only, and that gap is
-      # deliberate and recorded, not accidental.
-      # THE GUARD IS LOAD-BEARING FOR THE SCRIPT ITSELF, not only for what the suites contain:
-      # `test:diff` is a POSIX `for ... do ... done` loop, and npm's script-shell on Windows is
-      # cmd, where that is not valid syntax at all. So making the twelve Windows-tolerant would
-      # NOT make it safe to drop this `if:` -- the runner would still have to be rewritten.
-      # A failing suite is caught here even though it exits 2 rather than 1: the loop's
-      # `|| exit 1` fires on ANY non-zero, and 2 is what the permission probes use to refuse.
+      # NOT a matrix-wide step: they are bash, and SEVERAL of them probe DIRECTORY PERMISSION
+      # BITS (chmod 300), which has no Windows meaning. Windows keeps node-suite coverage only --
+      # deliberate, not accidental. Reasoning and the darwin row-count baseline: TRDD-REJRD8V5.
+      # Making the twelve Windows-tolerant would NOT make it safe to drop this `if:` -- npm's
+      # script-shell defaults to cmd there, where this POSIX loop is not valid syntax (RECALLED,
+      # not measured here, and a repo .npmrc could change it -- so lean on the chmod reason).
       - name: Run node-vs-python differential suites
         if: runner.os != 'Windows'
         run: npm run test:diff

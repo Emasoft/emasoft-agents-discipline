@@ -905,12 +905,112 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   **"GATED BY THEIR OWN PROBE" MEANT A LOUD REFUSAL, AND THAT PHRASING MISLED A REVIEWER INTO
   THE MOST PLAUSIBLE SILENT FAILURE THIS PORT COULD HAVE HAD** — probe-gated rows self-skipping
   on a new platform, suite still exiting 0, cross-platform coverage shrinking with no signal.
-  Worth chasing, and MEASURED FALSE: the probe `exit 2`s (three sites in `errno-message-diff.sh`
-  — chmod 300 must deny a scan AND allow a write, each asserted separately), and across all
-  twelve suites there is exactly ONE occurrence of the word "skip", in a comment that reads
-  *"It is not skipped"*. No suite has a silent-skip path. A `chmod 300` semantics difference on
-  ubuntu therefore REDDENS CI rather than quietly reducing coverage, because `exit 2` is
-  non-zero and the runner's `|| exit 1` fires on any non-zero.
+  Worth chasing. **My first refutation of it was itself unsound, and the corrected one is
+  narrower.**
+  *What I claimed:* the probes `exit 2`, and "across all twelve suites there is exactly ONE
+  occurrence of the word skip". *What was wrong:* there are **FOUR**. The table that found them
+  used `grep -ciE`; the follow-up I read them with dropped the `-i`, so it matched only the
+  literal lowercase `skipping` and missed three files. **I published "exactly ONE" in a commit
+  message while it contradicted my own table two commands earlier, and did not notice.** All
+  four are comments, so the conclusion held — but the evidence for it did not.
+  *And the method was wrong even where the count was right:* **grepping for the WORD "skip"
+  cannot establish the absence of a skip MECHANISM.** A suite can omit rows via an `if` that
+  does not fire, an empty `for` list, a `case` with no matching branch, or a `command -v x ||`
+  bail — none of which contain the word. Reading a keyword search as proof of absence is the
+  error class this file is full of.
+  *The refutation that actually holds, on structure rather than vocabulary:*
+  — **no suite has an early clean exit**: every `exit 0` in all twelve is at the tail, so none
+    can bail out mid-run reporting success;
+  — **`errno-message-diff.sh` has 14 `_row` calls, ALL at top level, ZERO indented** — matching
+    its printed `14` exactly. No row sits inside a conditional, so the count is structural and
+    cannot shrink without editing the file. That is the suite the concern was about.
+  — **and a top-level CALL SITE is not the same as an unconditionally MEANINGFUL row** — a
+    review made exactly that objection, that a conditional setup step could leave a later
+    top-level row comparing two identical *wrong* error paths, or that the skip could live one
+    indirection away inside the helper. Checked, and the helper already guards it: `_row` runs
+    an explicit **NON-VACUITY** assertion — if the oracle's output does not contain the needle
+    the row is named for, it reports `DIVERGE … oracle did not reach the errno branch; fixture
+    reached nothing` and increments `fail`. A fixture that broke earlier therefore REDDENS
+    instead of reporting agreement about a branch neither side reached. (It also `exit 2`s on a
+    missing scrub function, via `declare -F` rather than `command -v`, so a same-named external
+    program cannot be invoked in its place.) That is stronger than the structural argument
+    above, and it was already in the suite — I had not read it when I wrote the weaker one.
+  — the probes `exit 2` (three sites: chmod 300 must deny a scan AND allow a write, asserted
+    separately), and `exit 2` drives the runner's `|| exit 1` — verified with a scratchpad suite,
+    not assumed.
+  **NOT verified: the internal row structure of the other TEN suites.** They use different
+  helper names (`row`, `print`, `reject_case`, `cli_sequence`, `_argv_case`, …) and my check
+  only covered `_row`/`_case`/`_check`. A conditional row in one of them would still shrink
+  silently. Also worth stating because I read my own table backwards at first: ten of the twelve
+  have NO loud gate at all, which is not reassurance — it means nothing in those ten would stop
+  an implicit skip if one existed.
+  **THE KNOWN-CORRECT ENFORCEMENT, deliberately NOT built — and the REASON matters more than the
+  decision:** assert each suite's printed row count against a baseline (the counters already
+  exist, only the assertion is missing). Not built because **no cross-platform observation exists
+  yet to size the risk** — NOT because the mechanism has been ruled out. My first draft said "the
+  mechanism has not been shown to exist in any suite examined", which is an evidential claim my
+  coverage cannot support: I examined **2 of 12**, and not a random 2 — they are the two whose
+  helper happened to match a grep I had already written. The ten unexamined ones include exactly
+  the FS- and permission-touching suites (`discovery`, `lease`, `approval`, `path-api`) a
+  platform change would actually perturb. A null result from an 83%-unsearched space predicts
+  nothing; the qualifier "in any suite examined" was carrying all the honesty in a position a
+  skimming reader drops.
+  **AND THE TRIGGER I WROTE HAS NO OBSERVER.** "If an ubuntu count ever differs from darwin's,
+  build this immediately" requires a human to compare two numbers across two platforms and two
+  green logs. Nothing does that; nothing alerts on it. **A trigger with no observer is a decision
+  never to build it, phrased as a decision to build it later.** So the darwin baseline is written
+  down HERE, to be compared against the first ubuntu run — all six re-measured 2026-09-07, not
+  recalled:
+
+  | suite | darwin final line |
+  |---|---|
+  | `errno-message` | `--- 14 errno message(s) identical ---` |
+  | `tonumber` | `--- 36 cases, 16 distinct results, identical ---` |
+  | `digest` | `--- 23 cases, digests identical ---` |
+  | `argv` | `--- 5 argv decode(s) identical ---` |
+  | `encoding` | `--- 7 non-ASCII surface(s) identical ---` |
+  | `stale` | `--- 3 differential(s) identical; 4 premise/control assertion(s) held ---` |
+
+  **AND CAPTURING ALL TWELVE EXPOSED THE HOLE IN THIS WHOLE IDEA: only SIX suites print a count
+  at all.** The other six cannot be compared this way, and two of them print the exact shape that
+  hides a shrink:
+
+  | suite | final line | comparable? |
+  |---|---|---|
+  | `discovery` | `--- all identical ---` | **NO — no number** |
+  | `lease` | `--- all identical ---` | **NO — no number** |
+  | `approval` | prose (`…same tokens, same bodies, same idempotence…`) | no |
+  | `gate-args` | prose (`…rejects identically, and accepts the same vectors.`) | no |
+  | `path-api` | `--- known port gaps only (), set unchanged ---` | partial (a SET, not a count) |
+  | `regex-worker` | `exit 0 means NOTHING NEW, not 'the port is correct'. Do not tally this as a plain PASS.` | **explicitly refuses to be tallied** |
+
+  So the count-baseline enforcement I called "known-correct" would cover **half** the suites, and
+  `discovery`/`lease` — both filesystem-touching, both among the ten whose row structure was
+  never inspected — are precisely where a platform-dependent shrink would land AND where "all
+  identical" would report it as success. **Anyone building this must first make those six emit a
+  count; the assertion is the easy half.** That is a stronger reason to defer than the one I
+  first gave, and it was found by capturing twelve outputs instead of the six I already had.
+  **n=4, and the invariant is NOT "check your flags"** — that is too generic to change anything.
+  `| head` truncating, `-h` stripping file attribution, `-i` dropped between two runs of "the
+  same" search, and a **NUL byte in `ledger-check.mjs` making plain `grep -c` print NOTHING** —
+  each returned a **well-formed, plausible result that silently UNDER-reported**, and each was
+  then quoted as proof of an **ABSENCE**. grep's failure mode is uniformly *fewer hits than
+  reality*, never more — so **a grep can support "X exists here" and never "X exists nowhere"**.
+  That asymmetry is the actionable part.
+  **The fourth is the only one I CAUGHT, and how is the part worth encoding: `grep -c` on a text
+  file ALWAYS prints a number, even zero. Empty stdout from `-c` is therefore not "no matches",
+  it is "grep declined to read the file"** — here, binary classification from that NUL. `-a`
+  flipped it to `0`/`3`/`0`/`5`. Distinguishing *empty* from *zero* is a cheap habit that would
+  have caught it; treating them alike is what made the other three invisible.
+  **And the ASYMMETRY RUNS BOTH WAYS, which the sentence above does not cover.** Absence of a
+  name the PLAN ITSELF PRESCRIBES (`escapeRegExp`, `abandoned`) is decent evidence the work is
+  undone. Presence of a GENERIC name (`readStableRegularFile` ×3, `unbacked` ×5) is evidence of
+  nothing — the identifier can be there for an unrelated read while the defect's own line is
+  untouched. Prescribed-name absence informs; generic-name presence does not.
+  Second, sharper: **all three were catchable, because a second command had already contradicted
+  the first.** The `-i` case is literally two greps whose counts disagreed on screen — and I
+  published anyway. **When two of your own outputs disagree, THAT is the finding; resolve it
+  before either becomes evidence.**
   **The defect was in my prose, not the code:** "gated by their own probe" reads as "skipped
   when the probe declines". Say "refuses to run" when the gate exits non-zero — a reviewer
   reasoning from the wrong verb chased a failure mode that does not exist.
