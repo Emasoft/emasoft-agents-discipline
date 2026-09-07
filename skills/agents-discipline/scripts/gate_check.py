@@ -621,14 +621,22 @@ def main(argv):
             raise RuntimeError(str(path) + " must not grant group or other permissions")
 
     def validated_approval_dir(create=False):
-        """gate-check.mjs:394-406."""
+        """gate-check.mjs:394-406.
+
+        `approval_dir` is None under --status (the :324-329 ternaries), and a type checker
+        cannot see that this function is then unreachable: --status makes the gate loop
+        `continue` before anything is pushed to `pending`, so the loop that calls this never
+        has a task. cast() rather than an assert -- an assert would add a runtime check the
+        oracle does not have, and this file's job is to match the oracle, not improve on it.
+        """
+        directory = typing.cast(str, approval_dir)
         if create:
-            os.makedirs(approval_dir, mode=0o700, exist_ok=True)
-        elif not os.path.exists(approval_dir):
+            os.makedirs(directory, mode=0o700, exist_ok=True)
+        elif not os.path.exists(directory):
             return None
-        info = os.lstat(approval_dir)
-        assert_private_approval_entry(approval_dir, info, "directory")
-        canonical = os.path.realpath(approval_dir)
+        info = os.lstat(directory)
+        assert_private_approval_entry(directory, info, "directory")
+        canonical = os.path.realpath(directory)
         if _path_is_inside(canonical_root, canonical):
             raise RuntimeError("approval directory resolves inside the repository root: " + canonical)
         canonical_info = os.lstat(canonical)
@@ -705,7 +713,9 @@ def main(argv):
         """gate-check.mjs:467-509. Synchronous, unlike the oracle's async lock-wait loop --
         this whole file is synchronous, the same shape difference with_file_lock documents in
         lib/gates.py."""
-        store = validated_approval_dir(create=True)
+        # create=True, so the `return None` arm above is unreachable here -- that arm fires only
+        # when the directory is ABSENT and we were not asked to create it.
+        store = typing.cast(dict, validated_approval_dir(create=True))
         token = approval_path(file, gate, store["path"])
         lock = token + ".lock"
         deadline = time.monotonic() + 10.0
@@ -841,8 +851,19 @@ def main(argv):
                 continue
             try:
                 record_approval(task["file"], task["gate"])
-                log("    APPROVED: " + approval_path(task["file"], task["gate"],
-                                                       validated_approval_dir()["path"]))
+                # FAITHFUL TO AN ORACLE QUIRK, DELIBERATELY NOT "FIXED". gate-check.mjs:762 is
+                #     approvalPath(task.file, task.gate, validatedApprovalDir().path)
+                # -- `create` defaults to false, so if the approval directory vanished between
+                # record_approval creating it and this line, the oracle dereferences null and
+                # throws, and the catch below turns that into an approvalInfrastructureFailures
+                # bump. The port must do the SAME thing: cast() keeps the null-deref (a TypeError
+                # here, "Cannot read properties of null" there), both land in the same handler.
+                # Passing record_approval's already-validated `store` would be tidier AND would
+                # be a divergence -- the oracle re-validates, and that re-validation is what
+                # makes the TOCTOU window observable at all.
+                log("    APPROVED: " + approval_path(
+                    task["file"], task["gate"],
+                    typing.cast(dict, validated_approval_dir())["path"]))
             except Exception as exc:  # noqa: BLE001
                 error("gate-check: could not record approval for "
                       + qualify(task["file"], task["gate"]["id"]) + ": " + str(exc))
