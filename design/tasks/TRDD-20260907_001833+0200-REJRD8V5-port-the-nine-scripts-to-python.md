@@ -30,8 +30,13 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > control loop written this session branched on the differential's EXIT CODE — under which a
 > mutant that fails to import exits non-zero and reads as REDDENS. Re-verified 2026-09-07 with
 > an explicit import check: the three `path-api` controls (`js_dirname`'s `//`-root arm,
-> `_normalize_string`'s `.` case, `js_relative`'s separator test) all import cleanly and reddened
-> genuinely, so those counts stand. **But copy the guard, not just the loop:** check the mutant
+> `_normalize_string`'s `.` case, `js_relative`'s separator test) and the three `digest` controls
+> (separators → 18, `ensure_ascii` → 4, `_js_number` → 4) all parse, run without a traceback, and
+> reddened genuinely. **SIX verified, and that is the whole claim — the `regex-worker` controls
+> were NOT re-checked** and used the same exit-code loop, so their counts are unconfirmed. A
+> first version of this note said "those counts stand" after checking three, generalising from a
+> sample to the population in the paragraph about not doing that.
+> **Copy the guard, not just the loop:** check the mutant
 > imports before believing a non-zero exit, and count per-case rather than trusting the status.
 >
 > **A CONTROL PROVES REACHABILITY. THE CORPUS DECIDES CORRECTNESS.** The digest serializer
