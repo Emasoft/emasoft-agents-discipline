@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T02:03:45+0200
+updated: 2026-09-07T02:14:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -39,35 +39,69 @@ reading as current-standard — worse than the undifferentiated heading, because
 implied a verified boundary. The counts are RECORDED, not verified to the standard this
 document asserts elsewhere.
 
-**What to actually do, since "re-run them" is not executable as it stands:** the original
-mutations were typed inline into shell calls and exist only in a transcript that compaction
-discards — nothing in the repo records them. So do NOT go looking for a list. Instead, when
-`gate-check.mjs` work touches one of these functions, write a FRESH control for it through
-`mutate-probe.sh` at that point. The differentials themselves (`discovery-diff.sh`,
+**Where the original mutations live — MEASURED per commit, because a blanket claim here was
+wrong once already.** A previous version of this paragraph said "nothing in the repo records
+them, so do NOT go looking for a list." That was false AND actively harmful: it foreclosed the
+one check that would have exposed it. Commit MESSAGES are in the repo and survive compaction.
+Checked with `git show -s --format=%B <sha>`:
+
+| commit | bullet | mutations recorded in the message? |
+|---|---|---|
+| `ec565d6` | `format_document`/`qualify` (4th) | **YES** — a literal `Mutation matrix, each caught:` with all four rows (`eol.join -> "\n".join`, `finalNewline` arm disabled, `js_basename -> os.path.basename`, `\.md\Z -> \.md$`) |
+| `1598e34` | `globs_overlap` | no — 9-line message |
+| `673356a` | discovery | no — 18-line message |
+
+So the 4th bullet's controls ARE re-runnable verbatim; the other two are not. For those, write
+a FRESH control through `mutate-probe.sh` when `gate-check.mjs` work touches the function —
+and record the mutation in that commit's message, which is what made `ec565d6` recoverable. The differentials themselves (`discovery-diff.sh`,
 `lease-diff.sh`, `python-lib-checks.py`, the oracle's own suite for `dispatch.py`) are
 unaffected by any of this and still pass — what is uncertain is only whether each recorded
 CONTROL discriminated, not whether the port matches the oracle.
 
-**`dispatch.py` is deliberately NOT marked, and its bullet says why.** It predates
-`mutate-probe.sh` like the rest, but its evidence is not a mutation control at all: the
-ORACLE'S OWN test suite was run against the port. That suite was written against the JS with
-no knowledge of a Python port, so it cannot have been tuned to pass — which makes it STRONGER
-evidence than a control the same session wrote for a differential the same session designed.
-Marking it would have sent a resuming session to re-verify the best-evidenced item in this
-file, and to do it with a weaker method.
+**`dispatch.py` is deliberately NOT marked** — different evidence class, not a newer date. Its
+evidence is not a mutation control: `tests/dispatch-tests.mjs` — the ORACLE'S OWN suite, with
+its assertions unchanged — is pointed at the port by ONE env var, `AD_RUNTIME=python`
+(`dispatch-tests.mjs:25-26` picks `dispatch_check.py` over `dispatch-check.mjs`; `:59` picks
+the interpreter). Assertions written against the JS, re-run against the Python: that is
+stronger than a control this session wrote for a differential this session designed.
+
+**But it is NOT "21/21", and the previous phrasing here said "cannot have been tuned to pass",
+which is too strong.** MEASURED 2026-09-07, `AD_RUNTIME=python node tests/dispatch-tests.mjs`
+→ exit 0, prints `21/21 passed`, **and one test SKIPPED** (`dispatch-tests.mjs:313`). The
+runner counts a skip as a pass, so its own summary hides the gap — the same vacuity class this
+document exists to catch, found in the bullet claiming the best evidence.
+
+So the honest count is **20 executed, 1 skipped**. The skipped case swaps a file mid-read by
+preloading a `.cjs` that monkeypatches `fs.lstatSync` — a mechanism that cannot drive a Python
+process. **Uncovered under python: `read_stable_regular_file`'s mid-read replacement guard**,
+which is a security path, not a cosmetic one. The suite states this in its own comment; the
+TRDD did not, and a resuming session reads the TRDD.
+
+**`AD_RUNTIME` is the TEMPLATE for the remaining `gate-check.mjs` port**, and it is the only
+route that yields this evidence class — see the gate-check section below.
 
 - ⚠ OLD-STANDARD — `lib/gates.py`: `read_stable_regular_file`, `write_atomic`, `with_file_lock`,
   `append_status`, `parse_gates`, `validate_scope_id`, `scope_root`, `normalize_owns_glob`,
   `_write_all`
-- `lib/dispatch.py` + `dispatch_check.py` — 21/21 under the ORACLE'S OWN suite. Not marked, and
-  not because it is newer: see the paragraph above. Different evidence class, and the strongest
-  one here.
+- `lib/dispatch.py` + `dispatch_check.py` — **20 executed + 1 SKIPPED** under the ORACLE'S OWN
+  suite via `AD_RUNTIME=python` (the runner prints `21/21`; it counts the skip as a pass). Not
+  marked, and not because it is newer — see the paragraph above. Best evidence class here, with
+  one named hole: `read_stable_regular_file`'s mid-read guard is not exercised under python.
+  Plus `dispatch-cli-drive.sh`, a hand-written 11-row byte-differential over the CLI surface —
+  that half IS the same class as the discovery and lease differentials.
+  **NON-VACUITY CONTROL, run 2026-09-07** (it did not exist before, and "the adapter is the
+  tunable surface" was a fair objection until it did): `validate_state` mutated to `return
+  state` as its first statement → **20/21, exit 1**; restored → 21/21, `git status` clean. The
+  `AD_RUNTIME` adapter demonstrably REACHES the port. It reddened ONE test, so this proves
+  reachability, not thoroughness — do not quote it as the latter.
 - ⚠ OLD-STANDARD — `lib/jsapi.py`: `js_object_key_order`, `js_json_object`, `js_length`,
   `js_slice`, `locale_compare_key`, `parse_date`, `js_trim`, `js_truthy`,
   `js_string`/`_js_number`
-- `gates.py`: `gate_definition_digest`, `automatic_evidence_prefix`, `classify_gate_evidence`,
-  `gate_state`, `tail`, `format_document`, `qualify`, `js_basename`
-- `gates.py`: `globs_overlap`, `literal_prefix` — 18 pairs, each dumped in BOTH directions.
+- ⚠ OLD-STANDARD — `gates.py`: `gate_definition_digest`, `automatic_evidence_prefix`,
+  `classify_gate_evidence`, `gate_state`, `tail`, `format_document`, `qualify`, `js_basename`.
+  **The most recoverable of the marked bullets**: `ec565d6`'s message records all four of its
+  mutations verbatim, so these controls can be re-run exactly rather than reinvented.
+- ⚠ OLD-STANDARD — `gates.py`: `globs_overlap`, `literal_prefix` — 18 pairs, BOTH directions.
   Six mutation controls all redden. The doubling is EARNED, not defensive: dropping the `or`
   from the wildcard test changes only ODD indices (measured `[1, 3, 15, 17, 19]`), so a
   one-direction corpus ships that defect. Symmetry is a discriminating property here — it
@@ -76,13 +110,17 @@ file, and to do it with a weaker method.
   divergence has no site here. The measured `OWNS:` placeholder disjointness is PINNED as a
   row, so the port reproduces the defect rather than quietly diverging from the oracle.
 
-- `gates.py`: `stat_current_named_file` (36e3785) and `claim_leases` / `release_leases` /
-  `read_leases` / `sleep` (f3a4c86). The leases have their own STATEFUL 22-step differential
+- **SPLIT BULLET — the only one that is half-and-half, so read the SHAs, not the marker.**
+  ⚠ OLD-STANDARD for `stat_current_named_file` (`36e3785`, position 105, BEFORE `f3a4c86` at
+  108); CURRENT STANDARD for `claim_leases` / `release_leases` / `read_leases` / `sleep`
+  (`f3a4c86` — the commit that created `mutate-probe.sh`, so its controls ran under it).
+  The leases have their own STATEFUL 22-step differential
   (`tests/lease-diff.sh`) — the first place `globs_overlap` runs against real lock FILES. Four
   controls redden, two only after adding records that ISOLATE the filename-identity and
   glob-normalization checks: the tampered records already there fail the SHAPE test first, so
   neither check was ever the sole reason for a rejection.
-- `gates.py`: `list_scopes`, `scope_files`, `legacy_files`, `resolve_target`,
+- ⚠ OLD-STANDARD (`673356a`, position 98) — `gates.py`: `list_scopes`, `scope_files`,
+  `legacy_files`, `resolve_target`,
   `same_file_identity`, and the private `_named_entry` / `_real_directory_inside` /
   `_markdown_discovery` / `_scope_discovery` / `_legacy_discovery`. Eight tree shapes
   (`tests/discovery-diff.sh` + `build-discovery-tree.py`), now NINE shapes; nine mutation
@@ -284,7 +322,38 @@ difference — but every call site has to drop the await). One item left:
    `readApprovalFile`, `validatedApprovalDir`, `assertPrivateApprovalEntry`), the runner
    (`runCheck`, `runRolling`, `safeRegexMatch` and its Worker), and evidence rewriting
    (`insertOrUpdateEvidence`). It also spawns two siblings needing their own ports —
-   `lib/check-supervisor.mjs` and `lib/regex-worker.mjs` — plus `lib/process-tree.mjs`, ported.
+   `lib/check-supervisor.mjs` (46 lines) and `lib/regex-worker.mjs` (9) — plus
+   `lib/process-tree.mjs`, ported.
+
+   **THE VERIFICATION ROUTE, decided and measured 2026-09-07 — this is the `AD_RUNTIME`
+   template the `dispatch.py` bullet forward-references.** `dispatch-tests.mjs` reaches the
+   port through ONE env var, assertions untouched (`:25-26` pick the script, `:59` picks the
+   interpreter). Do the same for `gate-check`: `run-tests.mjs:18`, `hardening-tests.mjs:20`,
+   `stress-tests.mjs:17` and `dispatch-tests.mjs:27` each define `const GATE_CHECK = join(HERE,
+   "..", "scripts", "gate-check.mjs")` — one line per suite. **Prefer this over a new
+   hand-written differential**: it is the strongest evidence class available here, because the
+   assertions were written against the JS with no knowledge of a port.
+
+   **TWO MEASURED BLOCKERS on that route — neither is optional:**
+   - **`run()` hardcodes the interpreter.** `hardening-tests.mjs:50` is
+     `execFile(process.execPath, [script, ...args], …)` — node running a `.py` fails. Changing
+     `GATE_CHECK` alone is NOT enough; the interpreter needs the same `PY ?` treatment
+     `dispatch-tests.mjs:59` already uses. A port that flips only the constant will fail in a
+     way that looks like a port defect.
+   - **`self-check.mjs` asserts on gate-check's JS SOURCE TEXT and cannot transfer.** Measured:
+     `:190` (`src.includes("i !== tIdx + 1")`), `:197` (`"writeAtomic"`), `:198`
+     (`"withFileLock"`), plus `:203`, `:211`, `:334`. These are string searches over the `.mjs`
+     file. They will pass unchanged against the Python port while testing NOTHING about it —
+     a vacuous-green, the exact failure class this document is about. Decide per check: port
+     the assertion to the Python spelling, or mark it JS-only. Do NOT leave them silently
+     green.
+
+   **ALSO: `mutate-probe.sh` does NOT work as the verdict reader for this route.** Its verdict
+   greps `^DIVERGE` (`:140`), which only the hand-written differential drivers print. The
+   oracle suites signal by EXIT CODE and an `N/M passed` line, so a real kill reports
+   `NOTHING REDDENED`. Its guards (unique anchor, edit changed the file, mutant imports,
+   baseline green) are still worth having — read the exit code yourself rather than its
+   verdict, as the dispatch non-vacuity control above did.
 
    **Use `tests/mutate-probe.sh` for every control, and pass anchors as ordinary QUOTED
    arguments** — never `"$(eval echo $old)"`, which strips all leading whitespace. Read the
@@ -311,8 +380,12 @@ difference — but every call site has to drop the await). One item left:
    concurrently — decide THAT, not the abstract question. An earlier phrasing here said only
    "decide before writing it, not during", which read as though both options were still open.
 
-**Completeness, re-measured soundly (2026-09-07).** `gate-check.mjs` imports **23** names from
-`lib/gates.mjs` and **none** is missing from `gates.py`. The presence test is now
+**Completeness — PRESENCE ONLY; do not read it as readiness (2026-09-07).** `gate-check.mjs`
+imports **23** names from `lib/gates.mjs` and all 23 are PRESENT BY NAME in `gates.py`.
+**Signatures are NOT verified**, and the STATE block separately records that three functions
+took kwargs where the rest take options dicts — so "none missing" is a green light to start
+reading, not a green light on the interface. The word "soundly" below describes the fixed
+PREDICATE, not the sufficiency of the property it tests. The presence test is now
 `^(def |class )<name>\b` or `^<name>\s*[:=]` — not the earlier `^(def |_?)<name>\b`, which
 reduced to "the name appears at column 0 on any line" and could only produce a false PRESENT.
 
