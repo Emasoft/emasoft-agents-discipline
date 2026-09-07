@@ -115,7 +115,11 @@ _NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3", "1e
                 "0x1f", "0X1F", "-0x10", "0x", "0b101", "0o17", "1_000", "nan", "NaN", "inf",
                 "Infinity", "-Infinity", "+Infinity", "infinity", "12abc", "abc", "  12  ",
                 "1,000", "0.1", "1e400", "-0", "--5", "1e", "+-1",
-                chr(0xFEFF) + "12", chr(0x2028) + "12", chr(0x00A0) + "12"]
+                chr(0xFEFF) + "12", chr(0x2028) + "12", chr(0x00A0) + "12",
+                # See jsapi-drive.mjs for what each of these pins in the numeric grammar.
+                "0.", "1.e3", " +0x10", "0X", "1e+3", "1e999", "+", "-", ".", "1.2.3",
+                "0.0e0", "+.5", "-.5", "00", "010", ".e3", "0b", "0o", "0xg", " 0x10 ",
+                "+0x10", "1 2"]
 for _s in _NUM_STRINGS:
     _n = js_to_number(_s)
     # ensure_ascii=False, because the JS side labels with JSON.stringify, which NEVER escapes

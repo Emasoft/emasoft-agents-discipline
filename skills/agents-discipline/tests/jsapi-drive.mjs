@@ -118,7 +118,14 @@ for (const n of NUMS) out.push(["String(number) " + JSON.stringify(String(n)), S
 const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3", "1e-3",
   "0x1f", "0X1F", "-0x10", "0x", "0b101", "0o17", "1_000", "nan", "NaN", "inf", "Infinity",
   "-Infinity", "+Infinity", "infinity", "12abc", "abc", "  12  ", "1,000", "0.1", "1e400",
-  "-0", "--5", "1e", "+-1", "\u{FEFF}12", "\u{2028}12", "\u{00A0}12"];
+  "-0", "--5", "1e", "+-1", "\u{FEFF}12", "\u{2028}12", "\u{00A0}12",
+  // GRAMMAR EDGE CASES. The port matches JS with an anchored regex plus radix prefixes, and
+  // these are the shapes where a regex written from memory usually gets it wrong: "1.e3" is
+  // LEGAL (trailing dot then exponent), a sign before a radix prefix is NOT ("+0x10" is NaN
+  // though " 0x10 " is 16), "0X"/"0b"/"0o" with no digits are NaN, and a lone sign or dot is
+  // NaN. All verified identical before being added, not added hoping they would be.
+  "0.", "1.e3", " +0x10", "0X", "1e+3", "1e999", "+", "-", ".", "1.2.3", "0.0e0", "+.5",
+  "-.5", "00", "010", ".e3", "0b", "0o", "0xg", " 0x10 ", "+0x10", "1 2"];
 for (const s of NUM_STRINGS) {
   const n = Number(s);
   out.push(["Number(string) " + JSON.stringify(s), Number.isNaN(n) ? "NaN" : String(n)]);
