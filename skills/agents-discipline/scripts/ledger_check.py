@@ -720,8 +720,14 @@ if abandoned:
     # would put an unsupportable accusation about a correct author into the ledger's own output.
     print(f"  HANDOFF REQUIRED: {len(abandoned)} abandoned unit(s) — terminal and unsuccessful, not completion:")
     for r in abandoned:
-        _unattributable = evidence_block_for(r["unit"]).strip(JS_TRIM) == ""
-        _why = f" — no **Unit {r['unit']}** evidence block; reason not attributable" if _unattributable else ""
+        # See the oracle's comment: a header-only block is NON-EMPTY (the header line is part of
+        # the block it opens), so emptiness alone was defeated by typing `**Unit 1 —**` and
+        # nothing else. `[ \t]` rather than `\s` keeps this identical to the JS side, whose `\s`
+        # includes U+FEFF while Python's does not.
+        _reason = re.sub(
+            r"^\*\*unit[ \t]+[0-9]+[ \t]*[-—–:]*[ \t]*\*\*", "", evidence_block_for(r["unit"]), 1, re.I
+        ).strip(JS_TRIM)
+        _why = f" — no reason found in a **Unit {r['unit']}** evidence block" if _reason == "" else ""
         print(f"    - #{r['unit']} {r['name']}{_why}")
 if malformed:
     print("  malformed rows:")

@@ -74,6 +74,10 @@ const cases = [
     ],
     reject: [
       "other:",                        // (1) swept into the unknown bucket
+      // Unit 2 here HAS a reason, so the no-reason marker must not appear. This is what kills
+      // an implementation that marks every abandoned row — that one passes the unreasoned
+      // fixture's `expect` list outright, and only a reasoned row anywhere can catch it.
+      "no reason found",
       // The TRAILING BRACKET is the whole assertion. A bare `- #2 finance` is VACUOUS: it appears
       // in the BROKEN output too, because the unverified-rows form `- #2 finance [abandoned]` is
       // a superstring of it. Measured against a mutant whose status read `abandonedX` — the plain
@@ -134,15 +138,18 @@ const cases = [
     file: "tests/fixtures/abandoned-unreasoned.md",
     want: 1,
     expect: [
-      "- #1 alpha — no **Unit 1** evidence block; reason not attributable",
-      "- #3 gamma — no **Unit 3** evidence block; reason not attributable",
+      // #1 has no header at all; #2 has a header with NOTHING under it. The second is the
+      // one that matters — a header-only block is non-empty, so an emptiness test passed it.
+      "- #1 alpha — no reason found in a **Unit 1** evidence block",
+      "- #2 beta — no reason found in a **Unit 2** evidence block",
       "HANDOFF REQUIRED: 3 abandoned unit(s)",
     ],
     reject: [
       // The reasoned row must come through UNTOUCHED. Anchored on the em dash that only the
-      // marker introduces: a bare `- #2 beta` would be vacuous, since it is a substring of the
+      // marker introduces: a bare `- #3 gamma` would be vacuous, since it is a substring of the
       // marked form too — the same trap the `- #2 finance [` assertion above documents.
-      "- #2 beta —",
+      // It is also what kills a parity-keyed implementation: `unit % 2 === 1` marks 1 and 3.
+      "- #3 gamma —",
     ],
   },
   // rerun: true — see the SKIP_RERUN note below. These exercise the half of the
