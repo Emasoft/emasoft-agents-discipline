@@ -298,21 +298,26 @@ else:
             except subprocess.TimeoutExpired:
                 pass
     if kill_infra_error is not None:
+        # ONE report, and it is a FAILURE. An earlier version reported the infra failure AND
+        # THEN set both sides to the same sentinel ("<infra>"), so the comparison row below
+        # emitted a PASS reading "port matches oracle" when NOTHING had been measured -- a false
+        # green sitting directly beneath a red, which is worse than either alone. The rows that
+        # compare are simply not emitted when there is nothing to compare.
         report(False, "check_supervisor: mid-stream KILL row could not run (INFRASTRUCTURE)",
                kill_infra_error)
-        kill_path = ["<infra>", "<infra>"]
-    js_killed, py_killed = kill_path
-    # NAMED FOR WHAT IT OBSERVES. `_pump` runs for BOTH streams; this spawns with stderr=DEVNULL
-    # and watches stdout only, so a stderr-only pump regression is NOT covered. The first name
-    # said "output ... is pumped", which promises both.
-    report(js_killed == py_killed,
-           "check_supervisor: STDOUT printed before a mid-stream KILL is pumped — port matches oracle",
-           f"js={js_killed!r} py={py_killed!r}")
-    # Vacuity control: the row above passes trivially if BOTH strand the output (both ""), which
-    # is exactly the pre-fix state. The oracle is the specification, so assert it really pumped.
-    report(js_killed == "hi",
-           "check_supervisor: the ORACLE really pumped before the kill (vacuity control)",
-           f"js={js_killed!r}")
+    else:
+        js_killed, py_killed = kill_path
+        # NAMED FOR WHAT IT OBSERVES. `_pump` runs for BOTH streams; this spawns with
+        # stderr=DEVNULL and watches stdout only, so a stderr-only pump regression is NOT
+        # covered. The first name said "output ... is pumped", which promises both.
+        report(js_killed == py_killed,
+               "check_supervisor: STDOUT printed before a mid-stream KILL is pumped — port matches oracle",
+               f"js={js_killed!r} py={py_killed!r}")
+        # Vacuity control: the row above passes trivially if BOTH strand the output (both ""),
+        # which is exactly the pre-fix state. The oracle is the spec, so assert it really pumped.
+        report(js_killed == "hi",
+               "check_supervisor: the ORACLE really pumped before the kill (vacuity control)",
+               f"js={js_killed!r}")
 completed.append("check_supervisor")
 
 # --- windows_taskkill_path: pure string logic, so it is testable on POSIX ------------------
