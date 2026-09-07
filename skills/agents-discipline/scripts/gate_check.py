@@ -485,10 +485,18 @@ def main(argv):
         try:
             text = read_ledger_file(file)
         except OSError as exc:
-            # gate-check.mjs:241, the twin of the site above and of gate_lint's. Fixed in the
-            # same edit DELIBERATELY: every previous instance of this defect was found alone and
-            # its identical sibling left in place, four times running, because each fix was
-            # scoped to the line that had been measured. The pattern is the finding.
+            # gate-check.mjs:241. Fixed in the same edit as the site above on a STRUCTURAL
+            # identity, not on the analogy an earlier version of this comment gave ("its twin --
+            # every previous instance was found alone and its sibling left in place"). That
+            # sentence is a lesson about process, and it would have justified this edit just as
+            # readily if the two sites had wrapped DIFFERENT calls, which is how the same reuse
+            # of an argument went wrong at dispatch.py's read_state. The real warrant: both catch
+            # around the SAME call, read_ledger_file(file), so same helper, same first syscall,
+            # same errno surface -- and the oracle's :241 is a bare readLedgerFile catch,
+            # identical in shape to :234, which is the one measured.
+            # UNGUARDED, and said out loud: no row reaches this line. The pre-flight loop above
+            # rejects an unreadable file first, so arriving here needs the file to become
+            # unreadable BETWEEN that loop and this read -- a race no static fixture produces.
             fail_usage("cannot read " + file + ": "
                        + (node_fs_message(exc, "open") if exc.errno is not None else str(exc)))
         doc = parse_gates(text)
@@ -1332,7 +1340,22 @@ def main(argv):
         try:
             with_file_lock(root, result["file"], rewrite)
         except Exception as exc:  # noqa: BLE001 -- the oracle's catch is equally wide
-            error("gate-check: cannot update " + result["file"] + ": " + str(exc))
+            # gate-check.mjs:855, and THE FIRST WRITE SITE IN THIS SWEEP -- every one before it
+            # was a read. It was picked next precisely because the syscall constant looked most
+            # likely to break here, and MEASURED it does not: node still says `open`, because
+            # writeAtomic's failing call is the open of its TEMP file.
+            #     oracle  ... : EACCES: permission denied, open '<file>.<pid>.<hex>.tmp'
+            #     port    ... : [Errno 13] Permission denied: '<file>.<pid>.<hex>.tmp'
+            # THE PATH IS THE TEMP FILE, NOT `result["file"]`, and that is the durable finding: a
+            # differential row here can never compare raw, because the temp name embeds the pid
+            # and 8 random bytes, so the two runtimes cannot produce equal text. Any row must
+            # scrub `\.[0-9]+\.[0-9a-f]{16}\.tmp` first. Noted rather than left for whoever writes
+            # that row to discover as a mystery failure.
+            # `Exception`, not OSError, so getattr rather than a bare attribute read: the oracle's
+            # catch is equally wide and a non-OSError arriving here has no errno.
+            error("gate-check: cannot update " + result["file"] + ": "
+                  + (node_fs_message(exc, "open")
+                     if getattr(exc, "errno", None) is not None else str(exc)))
             any_lock_write_failed = True
     if any_lock_write_failed:
         sys.exit(2)
