@@ -971,25 +971,34 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   | `encoding` | `--- 7 non-ASCII surface(s) identical ---` |
   | `stale` | `--- 3 differential(s) identical; 4 premise/control assertion(s) held ---` |
 
-  **AND CAPTURING ALL TWELVE EXPOSED THE HOLE IN THIS WHOLE IDEA: only SIX suites print a count
-  at all.** The other six cannot be compared this way, and two of them print the exact shape that
-  hides a shrink:
+  **I FIRST WROTE "only SIX suites print a count at all". THAT IS FALSE — it is TEN — and the way
+  I got it wrong is the same defect the lesson below is about: I judged twelve suites from their
+  `tail -1` and called the other six "prose".** `gate-args` prints `69 pass  0 fail  0 crash` ONE
+  LINE above its last. `approval` prints `5 pass  0 fail  0 crash`. `discovery` and `lease` emit
+  per-row `OK` lines that are trivially countable. A truncated VIEW produced a confident claim
+  about the WHOLE — `tail -1` here, `head -6` a moment later (it showed 6 `OK` rows for
+  `discovery`; there are **9**).
 
-  | suite | final line | comparable? |
+  | suite | countable signal | baseline |
   |---|---|---|
-  | `discovery` | `--- all identical ---` | **NO — no number** |
-  | `lease` | `--- all identical ---` | **NO — no number** |
-  | `approval` | prose (`…same tokens, same bodies, same idempotence…`) | no |
-  | `gate-args` | prose (`…rejects identically, and accepts the same vectors.`) | no |
-  | `path-api` | `--- known port gaps only (), set unchanged ---` | partial (a SET, not a count) |
-  | `regex-worker` | `exit 0 means NOTHING NEW, not 'the port is correct'. Do not tally this as a plain PASS.` | **explicitly refuses to be tallied** |
+  | `errno-message` | final line | `14 errno message(s) identical` |
+  | `tonumber` | final line | `36 cases, 16 distinct results` |
+  | `digest` | final line | `23 cases` |
+  | `argv` | final line | `5 argv decode(s)` |
+  | `encoding` | final line | `7 non-ASCII surface(s)` |
+  | `stale` | final line, BOTH counts | `3 differential(s); 4 premise/control assertion(s)` |
+  | `gate-args` | tally line | `69 pass  0 fail  0 crash` |
+  | `approval` | tally line | `5 pass  0 fail  0 crash` |
+  | `discovery` | `^OK` rows | `9` |
+  | `lease` | `^OK` rows | `2` |
+  | `path-api` | **none** — reports a SET (`known port gaps only ()`), not a count | — |
+  | `regex-worker` | **none, by design** — ends `exit 0 means NOTHING NEW, not 'the port is correct'. Do not tally this as a plain PASS.` | — |
 
-  So the count-baseline enforcement I called "known-correct" would cover **half** the suites, and
-  `discovery`/`lease` — both filesystem-touching, both among the ten whose row structure was
-  never inspected — are precisely where a platform-dependent shrink would land AND where "all
-  identical" would report it as success. **Anyone building this must first make those six emit a
-  count; the assertion is the easy half.** That is a stronger reason to defer than the one I
-  first gave, and it was found by capturing twelve outputs instead of the six I already had.
+  So the enforcement is far more buildable than I claimed: **10 of 12 already emit something
+  comparable**, and only `path-api` (set-valued) and `regex-worker` (which explicitly refuses to
+  be tallied) would need work. **The deferral now rests ONLY on "no cross-platform observation
+  exists yet"** — the "half the suites can't be compared" reason was my own measurement error and
+  must not be cited.
   **n=4, and the invariant is NOT "check your flags"** — that is too generic to change anything.
   `| head` truncating, `-h` stripping file attribution, `-i` dropped between two runs of "the
   same" search, and a **NUL byte in `ledger-check.mjs` making plain `grep -c` print NOTHING** —
@@ -1002,11 +1011,19 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   it is "grep declined to read the file"** — here, binary classification from that NUL. `-a`
   flipped it to `0`/`3`/`0`/`5`. Distinguishing *empty* from *zero* is a cheap habit that would
   have caught it; treating them alike is what made the other three invisible.
-  **And the ASYMMETRY RUNS BOTH WAYS, which the sentence above does not cover.** Absence of a
-  name the PLAN ITSELF PRESCRIBES (`escapeRegExp`, `abandoned`) is decent evidence the work is
-  undone. Presence of a GENERIC name (`readStableRegularFile` ×3, `unbacked` ×5) is evidence of
-  nothing — the identifier can be there for an unrelated read while the defect's own line is
-  untouched. Prescribed-name absence informs; generic-name presence does not.
+  **And the ASYMMETRY RUNS BOTH WAYS — but my first version of THAT was wrong too, within the
+  hour.** I wrote: absence of a name the PLAN PRESCRIBES (`escapeRegExp`, `abandoned`) is decent
+  evidence the work is undone; presence of a GENERIC name (`readStableRegularFile` ×3, `unbacked`
+  ×5) is evidence of nothing. The second half holds. **The first half failed on its own example.**
+  `escapeRegExp` is absent because **C2 was fixed by REMOVAL, not by escaping**: C0a replaced the
+  per-unit `new RegExp(unit)` with line-anchored SLICING, so `grep -an "new RegExp"
+  ledger-check.mjs` returns NOTHING and the injection/ReDoS surface does not exist to escape. The
+  prescribed name is absent precisely BECAUSE the defect is fixed.
+  **So a prescribed name proves nothing either. A fix that takes a better form than the plan
+  imagined is indistinguishable, by grep, from no fix at all** — and it is the *more* likely
+  outcome whenever the plan proposed a patch and the implementer found a removal. The only sound
+  check is reading the code path the defect lives on. Everything else is a hint about where to
+  read.
   Second, sharper: **all three were catchable, because a second command had already contradicted
   the first.** The `-i` case is literally two greps whose counts disagreed on screen — and I
   published anyway. **When two of your own outputs disagree, THAT is the finding; resolve it
