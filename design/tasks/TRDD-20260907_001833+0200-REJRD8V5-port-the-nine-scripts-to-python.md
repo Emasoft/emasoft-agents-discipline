@@ -109,6 +109,22 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > So the order is: try to isolate the row first; reach for the docstring clause only when you
 > have failed and the docstring names the case. Otherwise the clause becomes a blanket excuse
 > and the corpus grows without a stopping condition.
+>
+> **THE CLAUSE IS NOW MECHANICAL FOR `js_to_number` (aef1856), and that is the shape to copy.**
+> A THIRD ground had appeared: 7993c1e kept ~17 numeric rows by calling them "documentation of
+> the grammar" — a label, not an argument, and a corpus that admits unbounded rows under a label
+> has exactly the missing stopping condition this passage warns about. The fix was not to delete
+> them but to make the clause TRUE of them: `js_to_number`'s docstring now ENUMERATES the 23
+> shapes its grammar accepts, and `python-lib-checks.py` parses that enumeration out of the
+> docstring and asserts every shape has a corpus row. Control: adding `"9q"` to the enumeration
+> exits 1 reporting `['9q']`; a `len >= 20` guard is the vacuity control, since renaming the
+> marker would make the regex match nothing and `all()` over an empty list passes by not looking.
+> Running it found a real gap in the direction nobody checks — `" +0x10"` sat in the corpus with
+> no docstring line naming it.
+>
+> The prose bound ("a FINITE SET THAT CLOSES") was always the right rule; until aef1856 nothing
+> enforced it, so a row added with no docstring line reopened the clause silently. **A ground
+> that only a reader can check is a ground that drifts.**
 
 > **⚠ THE SUITE IS NOT ALL-GREEN, WHATEVER THE TALLY SAYS.** `regex-worker-diff.sh` exits 0
 > while **7 port divergences remain UNRESOLVED — ALL SEVEN, not "five of them", are ways the
