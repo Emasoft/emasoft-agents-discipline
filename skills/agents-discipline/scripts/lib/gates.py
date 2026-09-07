@@ -160,8 +160,14 @@ def _same_snapshot(left, right):
 _NODE_MESSAGE_TYPES = {}
 
 
-def _node_message_error(error, syscall):
+def _node_message_error(error, syscall) -> OSError:
     """Same OSError SUBCLASS and errno as `error`, but str() gives node's message.
+
+    Annotated `-> OSError` at the ROOT rather than at each consumer: the subclass is built by a
+    dynamic `type(...)` call, so the checker sees an opaque `_` and reads every `raise` of it --
+    here, in _node_call, _node_lstat and _mkdirs -- as raising a non-exception. One annotation
+    plus one suppression at the return below settles all of them; annotating the consumers
+    instead just moves the same complaint outward, one copy per hop.
 
     Three things have to hold at once and no plain construction gives all three:
       * `except FileNotFoundError` must still match  -> keep the subclass
@@ -182,13 +188,21 @@ def _node_message_error(error, syscall):
         # assigned AFTER construction, so copy.copy(e) -- which calls subclass(*e.args) --
         # would build an instance whose __str__ raises AttributeError. An exception whose
         # str() raises is the worst possible failure in a logging path.
+        # `base.__str__` resolves through base.__mro__, NOT the metaclass, so this is the
+        # UNBOUND OSError.__str__ and passing self is correct. The checker models it as already
+        # bound to the class and so reads the argument as one too many; suppressed rather than
+        # rewritten, because every rewrite that satisfies it (super(), object.__str__) changes
+        # which __str__ actually runs.
         subclass = type(base.__name__, (base,), {
-            "__str__": lambda self: getattr(self, "_node_message", None) or base.__str__(self)})
+            "__str__": lambda self: getattr(self, "_node_message", None)
+            or base.__str__(self)})  # pyright: ignore[reportCallIssue]
         _NODE_MESSAGE_TYPES[base] = subclass
     rebuilt = subclass(error.errno, error.strerror)
     rebuilt.filename = error.filename
     rebuilt._node_message = node_fs_message(error, syscall)
-    return rebuilt
+    # `base` IS type(error) and error is an OSError, so every subclass built here derives from
+    # OSError -- a fact the dynamic type() call hides from the checker but not from the runtime.
+    return rebuilt  # pyright: ignore[reportReturnType]
 
 
 def _node_call(syscall, call, *args, **kwargs):
@@ -211,6 +225,29 @@ def _node_call(syscall, call, *args, **kwargs):
         return call(*args, **kwargs)
     except OSError as error:
         raise _node_message_error(error, syscall) from error
+
+
+def _node_mkdir_error(error, path) -> OSError:
+    """A failed directory creation, wearing node's shape -- which names a DIFFERENT path.
+
+    The `-> OSError` is load-bearing for the checker, not decoration: _node_message_error builds
+    its class with a dynamic `type(...)` call, so through one more hop the inferred return
+    degrades to an opaque `_` and every `raise` of it reads as "not an exception". Annotating
+    the boundary restores what the code always did.
+
+    Node's recursive `mkdirSync` reports the directory it was ASKED for; `os.makedirs` reports
+    the first ancestor it could not create. MEASURED at depth 3, which discriminates "the
+    original argument" from "the deepest one attempted" (depth 1 cannot tell them apart):
+
+        mkdir <W>/a/b/c, <W> unwritable
+        node   -> EACCES: permission denied, mkdir '<W>/a/b/c'
+        python ->                            filename '<W>/a'
+
+    So the syscall token alone is not enough here: the path has to be overridden too, or the
+    message names a directory the caller never asked about.
+    """
+    error.filename = os.path.abspath(path)
+    return _node_message_error(error, "mkdir")
 
 
 def _node_lstat(target):
@@ -1532,7 +1569,10 @@ def _mkdirs(path, mode=None):
     oracle's, in the one place the mode argument exists to provide it.
     """
     if mode is None:
-        os.makedirs(path, exist_ok=True)
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError as error:
+            raise _node_mkdir_error(error, path) from error
         return
     missing = []
     current = os.path.abspath(path)
@@ -1545,15 +1585,19 @@ def _mkdirs(path, mode=None):
     for directory in reversed(missing):
         try:
             os.mkdir(directory, mode)
-        except FileExistsError:
+        except FileExistsError as exists_error:
             # Concurrent creation by a peer is fine; a FILE at this name is not, and os.mkdir
             # raises the same FileExistsError for both. Swallowing it unconditionally made the
             # function return silently where the oracle's mkdirSync raises EEXIST, and left
             # failing-closed to whatever each caller happened to do next -- true of all three
-            # call sites today, and a trap for a fourth. Re-raising the ORIGINAL error keeps the
-            # oracle's error class as well as its outcome.
+            # call sites today, and a trap for a fourth. Rebuilding the ORIGINAL error keeps the
+            # oracle's error class as well as its outcome; _node_mkdir_error preserves the class
+            # (a FileExistsError subclass) and adds only the message shape, so a caller's
+            # `except FileExistsError` still fires.
             if not os.path.isdir(directory):
-                raise
+                raise _node_mkdir_error(exists_error, path) from exists_error
+        except OSError as error:
+            raise _node_mkdir_error(error, path) from error
 
 
 def _assert_real_directory(path, message):
@@ -1821,7 +1865,7 @@ def append_status(root, scope, line):
     fd = None
     try:
         try:
-            before = os.lstat(path)
+            before = _node_call("lstat", os.lstat, path)
             if (not statmod.S_ISREG(before.st_mode) or statmod.S_ISLNK(before.st_mode)
                     or before.st_nlink != 1):
                 raise OSError("refusing non-file or linked status log " + path)
@@ -1839,10 +1883,10 @@ def append_status(root, scope, line):
         # comparison below IS the check the secondary descriptor exists to approximate. The
         # POSIX branch the oracle actually runs does exactly this, too.
         no_follow = 0 if sys.platform == "win32" else getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT
-                     | getattr(os, "O_NONBLOCK", 0) | no_follow, 0o600)
-        opened = os.fstat(fd)
-        named = os.lstat(path)
+        fd = _node_call("open", os.open, path, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                        | getattr(os, "O_NONBLOCK", 0) | no_follow, 0o600)
+        opened = _node_call("fstat", os.fstat, fd)
+        named = _node_call("lstat", os.lstat, path)
         # The NAMED entry's own type/link failure carries assertRegularSingleLink's message, not
         # "refusing non-file or replaced". In the oracle that check lives inside
         # statCurrentNamedFile and throws before line 179 is reached, so the two conditions
@@ -1855,8 +1899,9 @@ def append_status(root, scope, line):
         if (not statmod.S_ISREG(opened.st_mode) or opened.st_nlink != 1
                 or (opened.st_ino, opened.st_dev) != (named.st_ino, named.st_dev)):
             raise OSError("refusing non-file or replaced status log " + path)
-        _write_all(fd, (re.sub(r"[\r\n]+", " ", str(line)) + "\n").encode("utf-8"))
-        os.fsync(fd)
+        _node_call("write", _write_all, fd,
+                   (re.sub(r"[\r\n]+", " ", str(line)) + "\n").encode("utf-8"))
+        _node_call("fsync", os.fsync, fd)
         return path
     finally:
         if fd is not None:

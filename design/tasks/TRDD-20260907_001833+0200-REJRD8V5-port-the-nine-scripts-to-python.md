@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T10:23:06+0200
+updated: 2026-09-07T10:34:12+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -144,6 +144,50 @@ Discriminating probe, with its control: via `_node_call` a caller passing `"open
 **Unreachable by any static fixture** — every one needs a race or an EIO, which is exactly why
 no differential row catches it and why it survived. Same category as the `scandir` guard, and
 the last six commits are the record of what "unreachable, so it does not matter" costs.
+
+**`dispatch.py` IS SWEPT (2026-09-07).** Step 1 found ONE binder (`error`), so the alternation
+was `\berror\b` — 21 lines, all read. Classification: 5 prose/comment, 3 a validation-result
+STRING (not an exception), 1 errno TEST, 1 already-guarded interpolation, 3 `str()` on an
+AUTHORED `DispatchError` (correct — no errno, and its text already carries node's shape from
+`:292`), 2 wide catches, and the `except`/`from` lines themselves.
+
+Both wide catches turned out correct, but for DIFFERENT reasons, and only one was obvious:
+`:326` wraps `read_state`, which raises only the already-node-shaped `DispatchError`. `:498`
+wraps `append_status`, which does raw file I/O — and the oracle interpolates `error.message`
+there (`dispatch.mjs:289-290`) where the port interpolated `str(error)`. **That was a real,
+static-fixture-reachable divergence, and it was NOT in the syscall the site would have guessed:**
+
+    append_status(<unwritable root>, "api", "line")
+    node   -> EACCES: permission denied, mkdir '<W>/.agents-discipline/api'
+    python -> [Errno 13] Permission denied: '<W>/.agents-discipline'      # BEFORE
+
+Two divergences at once: the message shape, and **the PATH** — node's recursive `mkdirSync`
+names the directory it was ASKED for, `os.makedirs` names the first ancestor it could not
+create. Discriminated at DEPTH 3, because depth 1 cannot tell "the original argument" from "the
+deepest one attempted": for `mkdir <W>/a/b/c` node says `'<W>/a/b/c'` and Python's filename is
+`'<W>/a'`. Fixed at `_mkdirs` — the single funnel all three mkdir sites route through — via
+`_node_mkdir_error`, which overrides the path as well as the token. `append_status`'s own six
+syscalls now go through `_node_call` too, so a caller that CANNOT guess a syscall (a wide catch
+using `str(error)`) gets the right shape for free. Both shapes verified byte-identical after.
+
+**ONE MEASURED DIVERGENCE ACCEPTED, NOT CLOSED — JSON parser prose at `dispatch.py:305`:**
+
+    state file "{not json"
+    node   -> invalid dispatch state: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+    python -> invalid dispatch state: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)
+
+Seven malformed shapes measured, seven DIFFERENT divergences: different prose, different
+position arithmetic, different token classification (`{"a":01}` — node blames the number at
+position 6, Python blames a missing comma at column 7), and node quotes a snippet of the input.
+Closing it means reimplementing V8's JSON error model, not writing a translation table.
+**Accepted because the ORACLE ITSELF does not specify the tail:** `dispatch-tests.mjs:241`
+writes exactly this fixture and `:244` asserts only `assertHas(result.out, "invalid dispatch
+state")` — the prefix, which is also the only part any code reads (`read_state`'s
+`startswith`). The tail is human-facing prose the oracle leaves unspecified. It diverges only
+under the stricter byte-for-byte standard the `*-diff.sh` runners apply, so it is recorded here
+rather than papered over with a scrub. **This is a CLASS, not one site:** anywhere the port
+interpolates a RUNTIME-generated message (JSON, regex, `TypeError` text) the two runtimes will
+disagree, and only errno messages have a reproduction rule.
 
 Its helper call sites are done — `:1397` (`scandir`) and the eight inside
 `read_stable_regular_file`. **`gates.py:190` is still an unguarded `node_fs_message` call**
