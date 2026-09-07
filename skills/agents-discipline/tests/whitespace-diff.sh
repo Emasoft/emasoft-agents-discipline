@@ -133,6 +133,32 @@ _write_ledger_hdr() {
   } > "$dest"
 }
 
+# THIRD SURFACE: the `**Unit N —**` evidence header. Neither writer above can reach it -- both
+# emit that line as fixed text -- and it is parsed by a DIFFERENT expression from the table, so a
+# divergence here is invisible to all twelve cases above.
+#
+# The pad goes AFTER a literal space, not instead of one: with $ws empty this must emit exactly
+# `**Unit 1 —**` so the control is a real header. Replacing the space would make the control
+# `**Unit1 —**`, which matches no detector in either runtime, and every case below would then
+# agree on a ledger where the block never opened -- twelve vacuous OKs.
+#
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case
+_write_ledger_ev() {
+  local dest="$1" ws="$2" pad
+  pad="$(printf '%b' "$ws")"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n\n'
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '| 2 | finance | app/finance.py | worker-2 | tests pass | abandoned |\n'
+    printf '\n## Evidence\n\n'
+    printf '**Unit 1 —** ran the suite by hand; 12 passed.\n\n'
+    printf '**Unit %s2 —** the upstream API was withdrawn; the work cannot finish.\n' "$pad"
+  } > "$dest"
+}
+
 # Runs one runtime against its OWN COPY. Separate copies are load-bearing, not hygiene: the
 # checker APPENDS a receipt to the ledger it reads, so a shared file would hand the second
 # runtime a document the first had already modified, and the comparison would be of two
@@ -243,9 +269,24 @@ for i in "${!CASE_NAME[@]}"; do
   _case "header ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_hdr
 done
 
+_control _write_ledger_ev "control: evidence-header writer"
+
+# The same six code points inside the `**Unit N —**` evidence header. This surface is parsed by
+# UNIT_HEADER, not by the table parser, so the twelve cases above cannot reach it -- and it is the
+# one that was actually broken: the port transliterated the oracle's `\s+` literally, and `\s`
+# denotes different sets in the two languages. Measured on the expression itself before the fix:
+#   U+FEFF        js \s+ matches, python \s+ does NOT
+#   U+001C/U+0085 python \s+ matches, js \s+ does NOT
+# so the block opened in one runtime and not the other, and the abandoned-row reason marker went
+# SILENT in the oracle while FIRING in the port on identical bytes. Fixed by building the class
+# from _JS_TRIM_CODEPOINTS; these six rows are what stops it being transliterated back.
+for i in "${!CASE_NAME[@]}"; do
+  _case "evidence-header ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_ev
+done
+
 echo
 if [ "$fail" = 0 ]; then
-  echo "--- $pass trim vector(s) identical (cell + header surfaces) ---"
+  echo "--- $pass trim vector(s) identical (cell + header + evidence-header surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"
