@@ -93,12 +93,33 @@ fixes it. **And never drop the `errno is not None` guard even where the old code
 fallback**: measured on the port's real authored shape, the helper doubles the message and
 appends a bare `, stat` with no path, where `str()` round-trips the text the oracle throws.
 
-**`gate_check.py` is DONE** — 10 sites guarded, 10 rows, every row proven per-site, the
-enumeration closed by reading. Order for what remains: **`dispatch.py`** (7 uses, `read_state`
-done) is the right next module — same helper, rows slot into `errno-message-diff.sh` unchanged.
-Expect **`gates.py`** to be the hard one and leave it for last: it does its own
-`stat`/`lstat`/`realpath`, so it likely carries non-`open` syscalls, and it is the module where
-a wrong constant is least likely to be caught by a row.
+**`gate_check.py`: 10 sites guarded, 6 VERIFIED, 4 carrying an INHERITED syscall constant**
+(`:478`, `:547`, `:907`, `:940` — unreachable by any static fixture, so the guard is present and
+the one-word constant has never been observed at that line). "DONE" was the earlier word and it
+flattened exactly the distinction the per-site comments preserve — and a one-word constant is
+this sweep's own stated risk, so the summary must not round it away.
+
+The enumeration behind that, at `6872006`, bucketed so it can be spot-checked and so its decay is
+visible — five integers hide a mis-sort, line numbers do not:
+
+- **guarded** 351 479 513 532 572 596 941 971 1037 1456
+- **errno TEST, not an interpolation** 326 501 815 844 851 929
+- **worker/spawn, unmeasured divergence** 1080 1110 1167
+- **not an exception** (dict keys, literal logging, `str()` on a return code) — the rest
+
+**BINDER NAMES ARE PER-MODULE.** Step 2's alternation must be built from step 1's output, never
+copied: measured, `gate_check.py`'s `(exc|error|err)` misses 5 lines in `gates.py`, because
+`\berror\b` does not match `probe_error` or `stat_error` (`_` is a word character). All five were
+errno tests, so nothing was missed in substance — but the recipe as published would have skipped
+them, which is the spelling grep's failure one level up.
+
+**Order for what remains, and `gates.py` came FIRST, not last.** It was scheduled last for being
+hardest; it is also where `node_fs_message` and `read_stable_regular_file` live, so a defect
+there is inherited by every site already fixed and the "every OSError escapes from the first
+syscall" argument load-bearing at seven sites is a claim about its internals. Deferring the
+module that defines the contract puts the dependent fixes on unverified ground. Its helper call
+site is done (`:1383`, the last unguarded call in the port); its own remaining call sites and
+`dispatch.py` (7 uses, `read_state` done) are what is left.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
 

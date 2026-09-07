@@ -361,6 +361,26 @@ chmod 700 "$WORK/root-o" "$WORK/root-p"
 # "fixture reached nothing" rather than comparing the wrong branch.
 _row "gate-check unreadable root (stat)" "$WORK/root-o" "$WORK/root-p" "cannot inspect --root"
 
+# --- ROW 11: `scandir`, the THIRD syscall, and gates.py's only helper call site ---------------
+# gates.py:1383 is the one place OUTSIDE the CLIs that calls node_fs_message, and it is in the
+# module that DEFINES the helper -- so a defect there is inherited by every site the sweep has
+# already fixed. That is why gates.py was pulled forward instead of left for last: deferring the
+# module that defines the contract puts the nine dependent fixes on unverified ground.
+# An unreadable gates DIRECTORY, so the scan fails rather than any file read. Node names the
+# syscall `scandir` for a failed readdir -- a third constant after `open` and `stat`, and this
+# row is its only control.
+for rt in o p; do
+  R="$WORK/scan-$rt"; mkdir -p "$R/.agents-discipline/s/gates"
+  chmod 000 "$R/.agents-discipline/s/gates"
+done
+"$NODE_ABS" "$HERE/../scripts/gate-check.mjs" --root "$WORK/scan-o" --scope s --status \
+  > /dev/null 2> "$WORK/.o"
+"$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/scan-p" --scope s --status \
+  > /dev/null 2> "$WORK/.p"
+chmod 700 "$WORK/scan-o/.agents-discipline/s/gates" "$WORK/scan-p/.agents-discipline/s/gates"
+_row "gates.py unreadable gate dir (scandir)" "$WORK/scan-o" "$WORK/scan-p" \
+  "cannot inspect gate directory"
+
 echo
 if [ "$fail" = 0 ]; then
   echo "--- $pass errno message(s) identical ---"

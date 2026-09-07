@@ -1376,12 +1376,25 @@ def _markdown_discovery(root, directory):
                         if entry.name.endswith(".md")), key=js_sort_key)
         return {"files": files, "errors": []}
     except OSError as error:
-        # OSError, not Exception -- see list_scopes. A non-OSError here also degrades
-        # node_fs_message twice over (no errno => code falls back to str(error), and prose
-        # then repeats it), emitting the message doubled around a colon.
+        # OSError, not Exception -- see list_scopes.
+        # THE COMMENT HERE DESCRIBED THE DOUBLING AND DID NOT GUARD AGAINST IT: it noted that a
+        # no-errno error "degrades node_fs_message twice over ... emitting the message doubled
+        # around a colon", and then called the helper unguarded. MEASURED on an authored
+        # OSError:
+        #     unguarded  gate directory refused: gate directory refused, scandir
+        #     guarded    gate directory refused
+        # An `except OSError` catches the port's OWN authored errors, which carry no errno, so
+        # the shape the comment warned about is the shape this clause admits. Unreachable today
+        # -- os.scandir always sets an errno and nothing authored is raised inside the try --
+        # but this was the LAST unguarded call to the helper in the port, in the module that
+        # DEFINES it, and it is the sixth site where a comment reasoned correctly about a case
+        # the code then did not handle.
+        # `scandir` is the THIRD syscall constant in this sweep, after `open` and `stat`, and it
+        # is measured: node names a failed readdir `scandir`, identical in both runtimes.
+        # Covered by errno-message-diff.sh row 11.
         return {"files": [], "errors": [
-            "cannot inspect gate directory " + directory + ": " + node_fs_message(error,
-                                                                                   "scandir")]}
+            "cannot inspect gate directory " + directory + ": "
+            + (node_fs_message(error, "scandir") if error.errno is not None else str(error))]}
 
 
 def _scope_discovery(root, scope):
