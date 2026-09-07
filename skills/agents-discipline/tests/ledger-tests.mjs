@@ -177,6 +177,33 @@ const cases = [
     ],
   },
   {
+    // Guards `d88f586`: Python's bare `re.I` folds U+0131 onto `i`, while JS `/i` without the
+    // `u` flag refuses every non-ASCII->ASCII fold -- so a `**Un<U+0131>t 1` line is a unit
+    // header to the port and NOT to the oracle. This finder decides evidence ATTRIBUTION, so
+    // the port backs a row the oracle leaves unbacked. No fixture carried a fold vector before
+    // this one, which is why the suite passed identically with the flag deleted.
+    //
+    // U+0131 rather than U+0130, though both fold onto `i`: U+0130 decomposes under NFD to
+    // `I` + U+0307, which makes the BUGGY checker reject the header too -- this case would
+    // then pass with the bug present. U+0131 is stable under all four normalization forms,
+    // and its plausible corruption (an editor "fixing" it to ASCII `i`) makes the header
+    // match in BOTH states, failing this case loudly instead of disarming it. A guard below
+    // asserts the code point is still in the file, because a disarmed fixture still passes.
+    //
+    // MEASURED in three states -- oracle / port / port with `re.A` removed -- exit 1 / 1 / 0.
+    // `- #1 stats` is deliberately NOT asserted: it appears in all three, filed under
+    // `unreproducible` in the broken one. The COUNT discriminates and doubles as the control.
+    // 1 means row 2 was attributed to its own header; 2 means the fold pooled both rows under
+    // row 1; 0 would mean attribution never ran at all.
+    name: "a unit header holding U+0131 backs nothing, the ASCII header beside it backs its own row",
+    file: "tests/fixtures/unit-header-fold.md",
+    want: 1,
+    rerun: true,
+    artifacts: ["reports/unit-1-output.txt", "reports/unit-2-output.txt"],
+    expect: ["UNBACKED verified rows", "unreproducible: 1 verified row"],
+    reject: ["ledger complete"],
+  },
+  {
     // Every one of these exits 0 UNCONDITIONALLY, which is the actual bar. #4 is the one
     // that matters most: `pytest -q || true` is the canonical always-pass idiom, it has a
     // real left half, and no whole-command regex can see it because the cheat lives in the
@@ -653,6 +680,20 @@ report(
   stripped.includes("DELEGATION.md") && stripped.includes("partial ledger"),
   "frontmatter: method summary intact",
   "ledger + verify + no-done"
+);
+
+// ARMING CHECK for the fold case above. Its whole discriminating power sits in ONE non-ASCII
+// code point, which an editor, a lossy encoding pass or a well-meaning "typo fix" can quietly
+// turn into ASCII `i` -- leaving a fixture that still parses, still runs, and still PASSES
+// while testing nothing. A presence assertion is the only thing that reddens on that; the case
+// itself cannot, because a disarmed vector produces the same verdict as a correct one.
+// SPELLED AS AN ESCAPE, never as the character: written literally, this assertion is
+// vulnerable to the very pass it guards against -- normalize this file too and it would
+// compare against ASCII `i`, which a disarmed fixture also contains, and pass.
+const foldFixture = readFileSync(resolve(root, "tests/fixtures/unit-header-fold.md"), "utf8");
+report(
+  foldFixture.includes(String.fromCharCode(0x131)),
+  "fold fixture: U+0131 vector intact (not normalized to ASCII)"
 );
 
 console.log(failed ? `${failed} failing` : "all pass");
