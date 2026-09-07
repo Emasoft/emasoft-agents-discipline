@@ -777,8 +777,15 @@ complete = (
 # (JS defines regex `\s` and `trimEnd()` over the SAME set -- WhiteSpace + LineTerminator -- so the
 # `\s`-derived JS_TRIM is the exact argument, not an approximation.)
 #
-# This was the last bare strip in the file, and it was the one that mattered most, because
-# `body_for_hash` is NOT only hashed -- line 813 writes it BACK to the user's ledger. So the bare
+# This was the last bare strip in the file -- verified by parsing out every `.strip(`/`.rstrip(`/
+# `.lstrip(` call in this module (comments excluded) and checking each one's argument: ZERO are
+# bare. No count is given on purpose. The first version of this line said "all 17", counted by
+# grep -- which counts LINES, not calls, and included three comment lines; the real figure is 16.
+# The claim that carries weight is "no bare call remains", and it needs no numerator.
+# It was also the one that mattered most, because
+# `body_for_hash` is NOT only hashed -- `fh.write(body_for_hash + stamp)` below writes it BACK to
+# the user's ledger (cited by NAME, not line number: the first version of this comment said
+# "line 813", which this very comment block then pushed to 831). So the bare
 # form did not merely compute a different digest: the two runtimes REWROTE the document
 # differently, python deleting a trailing U+001C that node preserves and preserving a trailing
 # U+FEFF that node deletes. A step the user runs to VERIFY a file was quietly editing it, and
@@ -786,7 +793,11 @@ complete = (
 #
 # The visible symptom was the receipt: sign under one runtime, re-check under the other, and the
 # next run printed `receipt: STALE -- ledger content changed since it was last checked` on a file
-# nobody had touched. Measured in both directions, with an unpadded control that stayed clean.
+# NO HUMAN had touched. The precise wording matters: the file HAD changed, by this very checker,
+# so "a file nobody changed" is false and "tampering" would be an accusation the stamp explicitly
+# declines to make. The message is factually accurate and misattributes by OMISSION -- it names no
+# agent, and the only agent the reader knows about is themselves.
+# Measured in both directions, with an unpadded control that stayed clean.
 # That line is only a `print` and never reaches the exit code, so the stale stamp was the mild
 # half; the divergent rewrite was the real defect.
 body_for_hash = RECEIPT_RE.sub("\n", text).rstrip(JS_TRIM) + "\n"

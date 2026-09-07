@@ -2,14 +2,17 @@
 # Differential for the RECEIPT: the content binding ledger-check writes back into the ledger.
 #
 # WHY THIS FILE EXISTS, and why no other suite could catch what it catches. `ledger-check.mjs:691`
-# computes `text.replace(RECEIPT_RE,"\n").trimEnd() + "\n"` and `ledger_check.py:774` mirrors it.
+# computes `text.replace(RECEIPT_RE,"\n").trimEnd() + "\n"` and the port's `body_for_hash =`
+# assignment mirrors it. (Cited by NAME. The first version of this header said `ledger_check.py:774`
+# and the fix's own comment block then pushed that line to 792 -- a citation invalidated by the
+# commit that wrote it. Grep the symbol, not the line: `grep -n body_for_hash`.)
 # The port shipped a BARE `.rstrip()` there -- the last bare strip in the file -- and JS
 # `trimEnd()` and Python's argument-less `rstrip()` disagree on exactly six code points:
 #
 #   trimEnd() strips, bare rstrip() does NOT:   U+FEFF
 #   bare rstrip() strips, trimEnd() does NOT:   U+001C U+001D U+001E U+001F U+0085
 #
-# THE DAMAGE IS NOT THE HASH. `body_for_hash` is also what line 813 WRITES BACK to the user's
+# THE DAMAGE IS NOT THE HASH. `body_for_hash` is also what the port WRITES BACK to the user's
 # ledger (`fh.write(body_for_hash + stamp + "\n")`, mirroring the oracle's `:738`). So the two
 # runtimes did not merely disagree about a digest -- they REWROTE the document differently: python
 # deleted a trailing U+001C that node preserved, and preserved a trailing U+FEFF that node deleted.
@@ -17,15 +20,38 @@
 #
 # The visible symptom was milder and is what led to the discovery: sign under one runtime, re-check
 # under the other, and the next run prints `receipt: STALE -- ledger content changed since it was
-# last checked` on a file nobody touched. That line is a bare `console.log`/`print` and never
+# last checked` on a file NO HUMAN touched. Not "nobody" -- the checker itself changed it, so the
+# message is factually accurate and misattributes only by OMISSION: it names no agent, and the only
+# agent the reader knows about is themselves. That line is a bare `console.log`/`print` and never
 # reaches the exit code (`process.exit(complete ? 0 : 1)` / `sys.exit(0 if complete else 1)`), so
 # it cannot fail a run. The rewrite is the defect; the stamp is the tell.
 #
-# WHY THE OTHER SUITES ARE BLIND. `whitespace-diff.sh` covers these same six code points but sets
-# `AGENTS_DISCIPLINE_SKIP_RERUN=1` suite-wide, and the oracle refuses to sign a skipped run
-# ("a run that SKIPPED the re-run did not verify anything, so it must not sign anything") -- so the
-# receipt path is unreachable from the one suite that tests these bytes. `digest-diff.sh` is a
-# different digest entirely: gate-check's APPROVAL key, not the ledger receipt.
+# WHY THIS SUITE IS THE ONE THAT CATCHES IT -- MEASURED BY MUTATION, not argued from coverage.
+# Revert the fix (`.rstrip(JS_TRIM)` -> bare `.rstrip()`) and run everything:
+#
+#   only receipt-diff.sh reds.  The other 13 `*-diff.sh` stay green; `ledger-tests.mjs` passes
+#   under BOTH `node` and `AD_RUNTIME=python`; `npm test` exits 0.
+#
+# That is the claim this file needs, and it is the one worth re-running if anyone doubts the suite
+# earns its place. TWO EARLIER VERSIONS OF THIS COMMENT ARGUED IT THE WRONG WAY and both were
+# wrong. The first reasoned from two named suites to a universal over all fourteen. The second
+# replaced that with an enumeration built on `grep -l ledger.check tests/*-diff.sh` -- which
+# measures NAME MENTION, not reachability: it misses a constructed name (`"$base-check.mjs"`), a
+# glob over `scripts/*.mjs`, and any transitive call (notably `ledger-tests.mjs`, whose own name
+# does not even match that pattern and which drives 11 cases with `rerun: true`). It also matched
+# two suites on COMMENT lines. And its dismissal of `encoding-diff.sh` -- "its row is `pending`,
+# and the re-run loop only executes `verified` rows" -- is a NON-SEQUITUR that measuring refuted:
+# the signing gate is `rerunSkipped`, not the row status, and a `pending`-row ledger DOES get
+# signed by both runtimes. A `pending` row means the loop had nothing to run; it never meant the
+# run was skipped.
+#
+# The mutation result subsumes all of it: a suite nobody enumerated either reds or it does not,
+# and the run says which. Reachability was never the property in question -- DETECTION was.
+# `digest-diff.sh` is a different digest entirely: gate-check's APPROVAL key, not the ledger receipt.
+#
+# NOTE for anyone re-checking the oracle side of this: `ledger-check.mjs` carries a literal NUL at
+# line 58, so `file` calls it binary and a BARE grep on it returns SILENT ZERO. Use `grep -a`.
+# Every grep in this suite already does; a source-reading grep must too.
 #
 # Usage: bash tests/receipt-diff.sh   (run from skills/agents-discipline)
 set -uo pipefail
@@ -188,7 +214,11 @@ _case "no pad at all (control)"        ''             tail
 
 echo
 if [ "$fail" = 0 ]; then
-  echo "--- $pass receipt case(s): both runtimes left the ledger byte-identical ---"
+  # "apart from the stamp line" is not hedging -- `_unstamped` drops EVERY line matching
+  # `agents-discipline-check:`, so the stamp's wording, prefix, placement and COUNT are all
+  # unasserted; the only compared part of the receipt is its 16 hex digits. A reader of a suite
+  # named receipt-diff.sh would otherwise assume the receipt line itself was compared.
+  echo "--- $pass receipt case(s): ledgers byte-identical apart from the timestamped stamp line ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"

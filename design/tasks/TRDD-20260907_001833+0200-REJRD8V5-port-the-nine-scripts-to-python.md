@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T19:37:04+0200
+updated: 2026-09-07T20:14:31+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -696,6 +696,129 @@ and `dispatch.py` (7 uses, `read_state` done) are what is left.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
 
+### ⚠ READ FIRST — THE ORACLE IS BINARY TO `grep`. A BARE GREP ON IT RETURNS SILENT ZERO.
+
+**Measured 2026-09-07.** `scripts/ledger-check.mjs` contains a **literal NUL byte at offset 2671
+(line 58)** — the source writes a raw NUL, not a `\x00` escape, in
+`lines[headerIdx].trim().replace(/\\\|/g, "<NUL>").split("|")`. One byte makes all 742 lines
+invisible: `file` calls it "binary data", `grep -c ''` prints nothing, and
+`grep -n 'receipt' scripts/ledger-check.mjs` returns **no output on a file with 8 matching lines**.
+`grep -a` sees it. It is the ONLY such file in `scripts/` (checked every `.mjs` and `.py`).
+
+**Why this is load-bearing and not trivia: the sweep's entire method is grepping the ORACLE.**
+A bare grep that finds nothing is indistinguishable from a feature that is absent, and this task
+has already recorded absence conclusions drawn that way. **Every `grep`/`rg` against
+`ledger-check.mjs` MUST carry `-a`.** Re-verify, with `-a`, any prior claim of the form "the oracle
+does not contain X" — including the plan file's `terminateProcessTree|detached` = 0 in the oracle,
+whose flags are not recorded. (`grep -ac abandoned` was correctly `-a`; that one stands.) The
+`*-diff.sh` suites already use `-a` throughout, so their results are unaffected — the defect is in
+the source-READING workflow, not the harness.
+
+### NEXT WORK — `:144` FIRST, alone. Then the rest.
+
+**The sweep below has now been displaced TWICE by side-findings**, each individually justified and
+each ending in a real committed fix. Two stretches have produced zero progress on the actual port
+task. Naming it here so the next session does not read the commit log as sweep progress: `d50c70f`
+and `67fafd3` are both TEST/RECEIPT work, not `\s` sites.
+
+**Order, settled by two independent reviews that agreed:** this STATE block → **`:144` alone, as
+one complete change** → then `JS_WS_CHARS` factoring + the compromised control + the `\s`-membership
+decision → then the remaining eight. `:144` first because it is the most severe, it is mechanical
+(`UNIT_HEADER` at `:103` is the pattern to copy), its divergence is already measured so its control
+is already designed, and finishing one site measures the per-site cost instead of estimating it.
+
+**STANDING RULE ADOPTED (2026-09-07), because two is a coincidence and three would be a policy
+nobody chose:** the next side-finding gets **measure → record here → continue**. Fix it in-stretch
+only if it BLOCKS the sweep. Both displacements ended in correct fixes, which is exactly what makes
+the pattern durable — it never feels like avoidance in the moment.
+
+**CORRECTION — I ranked the receipt defect above `:144`, and that was wrong.** The commit report
+called the receipt rewrite "the more serious find". It is the more INSIDIOUS one (it mutates the
+user's document and leaves no lasting signal), but `:144` is the more SEVERE: exit 2 vs exit 0,
+fail-open in the port's direction (python certifies `ledger complete: every unit verified` on bytes
+node rejects as not-a-ledger), permanent and reproducible rather than self-healing after one run.
+The ranking weighed the two properties discovered while measuring the receipt and never weighed the
+competitor's strongest one — depth of my own recent investigation is not a severity axis.
+
+**COUNT HONESTLY — the nine sites are not nine defects.** Five measured divergent (`:66` `:69`
+`:72` `:144` `:275`), three UNDETERMINED (`:110` `:243` `:433` — currently printing "same", which
+is not "sound"; a fixture that never reaches its site prints "same"), and two need a DESIGN
+decision before any edit (`:72`'s negated class, `:464`'s cheat detector). "Nine sites, five with
+measured divergences" gets quoted as nine defects.
+
+**Known-open, decided nowhere:**
+- the `\s`-membership control an earlier review proposed for `whitespace-diff.sh` (assert JS `\s`
+  membership separately from the effect table, so a future red is ATTRIBUTABLE to spec-vs-parse
+  rather than blaming the fixture). `d50c70f` shipped without it; no decision recorded either way.
+- the fail-open stripper at `ledger-check.mjs:656`, which uses `[ \t]` where the header uses `\s`.
+  A fork supplied an alternative; still unverified first-hand. **Re-locate it with `grep -a`** —
+  see the NUL finding above; a bare grep for it proves nothing.
+- the compromised positive control in `tests/fixtures/abandoned-unreasoned.md` (`**Unit 3 —**` is
+  the last header, so ~25 trailing prose lines land in its block). This is a MEASURING INSTRUMENT
+  defect in the corpus that will judge all nine sweep changes — the same defect class the last two
+  commits fixed. Repair it before taking nine more readings with it.
+- **A COVERAGE CLAIM IS A MUTATION RESULT, NOT A GREP.** Recorded because I got it wrong twice in
+  one turn on the same sentence. "No suite reaches the receipt path" was first argued from two
+  named suites, then re-argued from `grep -l ledger.check tests/*-diff.sh` and labelled
+  "ENUMERATED, not sampled" — which measures NAME MENTION, not reachability (it misses a
+  constructed name, a `scripts/*.mjs` glob, and any transitive call — including `ledger-tests.mjs`,
+  whose name does not even match that pattern and which drives 11 `rerun: true` cases). Its
+  `encoding-diff.sh` dismissal was a non-sequitur, and MEASURING REFUTED IT: the signing gate is
+  `rerunSkipped`, not the row status, and a `pending`-row ledger **is signed by both runtimes**
+  (verified — both wrote a receipt).
+  **The replacement is one command and it is definitive:** revert the fix and run everything —
+  **only `receipt-diff.sh` reds**; the other 13 diff suites, `ledger-tests.mjs` under BOTH
+  runtimes, and `npm test` all stay green. DETECTION was always the property in question;
+  reachability was a proxy for it, and the proxy was wrong in both of its versions.
+- **`tests/receipt-diff.sh` gaps** (review of `67fafd3`, none fixed): `_unstamped` uses `grep -av`,
+  which erases the stamp COUNT — so a port that fails to remove a prior receipt and appends a
+  second one reduces to the same body on both sides and passes green, which is precisely what
+  `RECEIPT_RE` exists to prevent. One line closes it (`grep -ac` equality). RECEIPT_RE is exercised
+  only in its `sub` direction; sign-with-node-then-run-python (idempotence + cross-read) is ~6 lines
+  and untested. `_assert_inert` runs on `$n` only — complete today ONLY because `cmp -s` follows it,
+  an accident of statement order, not a stated dependency. The banner "byte-identical" should read
+  "byte-identical apart from the timestamped stamp line": stamp wording, prefix, ordering, count
+  and placement are all unasserted; only 16 hex characters are compared.
+
+### RESOLVED 2026-09-07 — the `whitespace-diff.sh` anchor exploit (`d50c70f`)
+
+The anchor recorded below as OPEN **was real and is now fixed**. Confirmed by running it: moving
+the pad from `**Unit %s2 —**` to `**Unit 2%s —**` left the suite at exit 0, 21/21, with all six
+evidence-header vectors comparing broken-to-broken.
+
+Fixed by ADDING a per-vector assertion on the ORACLE's own verdict (`CASE_ORACLE_EFFECT`): U+FEFF
+must NOT move it, the other five MUST. Measured 18/18, identical on all three surfaces. **The
+anchor was KEPT** — my first proposal deleted it, and a review showed the two catch DISJOINT
+bypasses, which I then measured: a within-line move reds only the effect check, a cross-line move
+(pad the `abandoned` status cell instead) reds only the anchor.
+
+### FOUND AND FIXED 2026-09-07 — bare `.rstrip()` rewrote the ledger differently (`67fafd3`)
+
+The port's `body_for_hash =` assignment was a BARE `.rstrip()` against the oracle's `.trimEnd()`.
+**"The last bare strip in the port" is now VERIFIED, not asserted** — every `.strip(`/`.rstrip(`/
+`.lstrip(` call in `ledger_check.py` carries `JS_TRIM` (17 of them); the only bare spellings left
+are in comment prose. The commit made that whole-file claim from a one-line diff.
+**`body_for_hash` is also WRITTEN BACK to the user's ledger** (`fh.write(body_for_hash + stamp)`,
+oracle `:738`), so the two runtimes rewrote the document differently: python deleting a trailing
+U+001C node preserves, node deleting a trailing U+FEFF python preserves.
+
+**CITE THESE BY SYMBOL, NEVER BY LINE.** This section originally said port `:774` and `:813`; the
+fix's own comment block pushed them to `:792` and `:831`, so the commit that wrote the citations
+invalidated them in the same diff. Both are now corrected in the code and the suite header too.
+
+**Self-concealing** (traced, not executed past the first transition — the single-transition STALE
+WAS measured in both directions): converges after one cross-runtime run by deleting the divergent
+characters, so `receipt: STALE` prints once and never again, on an already-modified file. STALE is
+a bare print and never reaches the exit code, so the stamp is the tell, not the defect — the
+content binding simply does not bind.
+
+Fixed to `.rstrip(JS_TRIM)` + `tests/receipt-diff.sh` (12 cases, the 14th suite). **No suite
+reached the receipt path at all** before this: `whitespace-diff.sh` covers the same six bytes but
+sets `SKIP_RERUN=1`, and the oracle refuses to sign a skipped run. Asserts stamp-stripped BYTE
+EQUALITY of two independently-signed files, deliberately not a grep for `STALE` (a downstream
+proxy, and a negative grep that would also pass on empty output). Red-then-green and
+discriminating: 8 trailing-run cases fail on the unfixed port, all 4 controls stay green.
+
 ### REGEX-WHITESPACE CLASS — OPEN. The port transliterated the oracle's `\s`, and the two
 ### languages do not agree on what `\s` means.
 
@@ -723,9 +846,27 @@ six code points.** `d750a3d` fixed ONE (`UNIT_HEADER`). NINE remain in `ledger_c
 
 **FIVE have a MEASURED, user-visible divergence** (fixtures built and run, both runtimes):
 
-- `:144` **the worst** — U+001C after the leading pipe of the table header: node **exit 2**
-  "not a DELEGATION.md ledger" vs python **exit 0** "ledger complete: every unit verified". Same
-  bytes; the port declares the work done on a file the oracle refuses outright.
+- `:144` **the worst — and it is worse than this entry said.** RE-MEASURED first-hand 2026-09-07
+  with all six code points and three controls. It is not one code point, it is **all six, and the
+  split runs BOTH WAYS**:
+
+  | pad after the header's leading `|` | node | python | direction |
+  |---|---|---|---|
+  | U+001C U+001D U+001E U+001F U+0085 | exit 2 `not a DELEGATION.md ledger` | **exit 0 `ledger complete: every unit verified`** | port fails **OPEN** |
+  | U+FEFF | exit 0 `ledger complete` | exit 2 `not a DELEGATION.md ledger` | port fails **CLOSED** |
+  | U+0020, U+0009, no pad (CONTROLS) | 0 | 0 | same — harness reaches the site |
+
+  Sites: port `header_idx = next(... re.match(r"^\|\s*#\s*\|", l) ...)`, oracle `:47`
+  `lines.findIndex((l) => /^\|\s*#\s*\|/.test(l))`. The fix is `JS_WS_CLASS` in place of `\s`;
+  the control set above is already built and discriminating (three greens that must stay green).
+
+  **METHOD WARNING, paid in real time on this very measurement.** My first run wrote the pad with
+  `printf '%b' '\x85'` — a RAW 0x85 byte, which is not UTF-8 for U+0085 (that is `\xc2\x85`). The
+  case printed **"same"**, and "same" is exactly what a sound site looks like. I was one step from
+  recording "U+0085 does not diverge at `:144`" as a finding. `receipt-diff.sh` already spells the
+  encodings out (`U+0085 -> c2 85`); the ad-hoc probe did not. **Any `\s` fixture must encode
+  multi-byte code points explicitly, and every probe needs a control that proves it reached the
+  site** — the three greens above are what distinguish "no divergence" from "never got there".
 - `:66`, `:69` — exit-code splits in BOTH directions (`evidence: present` vs `MISSING`).
 - `:72` — U+001C: node `artifacts: 1 cited, PROBLEMS` + `missing artifacts:` (exit 1) vs python
   `none cited` (exit 0). The negated class inverts which runtime is strict.
