@@ -766,6 +766,11 @@ commit message, search first — that sentence is the one this task keeps gettin
    harness exists and is the one this task built. What the remaining sites need is a WRITER THAT
    REACHES EACH ONE plus its control, which is exactly the per-site cost `47bc2be` already
    measured and this block already records — not a new harness.
+   **DO NOT READ THIS AS "TEST SURFACE: DONE" — that inference is one step away and it would skip
+   the expensive half of every remaining site.** The HARNESS exists; most of the per-site WRITERS
+   do not. `:144` needed a FOURTH writer precisely because the three existing ones provably could
+   not reach it. The original claim was wrong about the harness and roughly right about the
+   vectors; flattening that to "FALSE" trades one misleading record for a more dangerous one.
    **The surviving half of that paragraph is still true and still worth keeping:** the fold
    fixture gives the `\s` conversion no DISCRIMINATING coverage. It executes `JS_WS_CLASS` (the
    class sits in the pattern under test) but the whitespace there is a plain ASCII space, the one
@@ -837,7 +842,22 @@ fork found a real gap (`d88f586` shipped with no fixture able to red it), the fi
 work was measured, and the sweep advanced by zero sites. Recorded here rather than argued away,
 because the rule's own premise is that each displacement feels justified in the moment.
 
-**THE CAUSE IS NOT WEAK DISCIPLINE. IT IS THAT THIS BLOCK WENT UNREAD.** After the compaction the
+**⚠ AND THAT DIAGNOSIS IS ITSELF WRONG — corrected in the same edit that made it, because the
+refutation is four paragraphs above it in this block.** I first wrote "the cause is not weak
+discipline, it is that this block went unread." But **displacements ONE and TWO happened while
+this block was being MAINTAINED**, by a session that had read it. Reading it did not prevent them.
+So "unread" explains displacements 3 and 4 and CANNOT explain the pattern.
+
+**The competing diagnosis, which explains all four: side-findings are more ATTRACTIVE than the
+sweep.** Each is bounded, has a clean red-then-green, ends in a satisfying commit. The sweep is
+eight repetitive commits whose measure step may come back UNDETERMINED. Four displacements in one
+task is a gradient, not four accidents.
+
+**THE TWO PREDICT DIFFERENTLY, so the next stretch is a real test.** "Unread block" predicts the
+read-first rule ends it. "Side-findings are more attractive" predicts displacement five regardless.
+Record which happens.
+
+The unread half is still true of 3 and 4, and is worth stating exactly: after the compaction the
 session worked from the lossy summary alone: the SessionStart hook said in as many words that the
 summary "may carry WRONG technical conclusions" and named
 `.janitor/state/precompact-handoff.md` as the authoritative re-grounding. Neither that file nor
@@ -859,11 +879,17 @@ sites, so it is a genuine blocker rather than a side-finding — then `JS_WS_CLA
 and the `\s`-membership decision, then the remaining eight ONE SITE PER COMMIT.
 
 **SITE NUMBERS IN THIS BLOCK ARE STALE — map by CONTENT, never by number.** It calls `UNIT_HEADER`
-`:103`; `d88f586` and `9ee169e` pushed it to `:148`. Re-enumerated against the current file, the
-eight remaining bare-`\s` lines are `133` (EXIT_CODE), `136` (CITATION, twice, inside the negated
-class), `178` (CREATED, also the `re.M` site), `311` and `501` (inline `re.search(r"\s", inner)`,
-invisible to any `re.compile`-shaped search), `343` and `344` (the `##` heading finder, twice on
-`344`), and `532` (the no-op detector, twice).
+`:103`; `d88f586` and `9ee169e` pushed it to `:148`. So the eight remaining bare-`\s` sites are
+recorded BY ANCHOR, not by line — a number rots within hours here, and a session under context
+pressure reads the number and skips the caveat, which is this stretch's own failure mode:
+
+- `EXIT_CODE`, `CITATION` (twice, INSIDE a negated class — needs `JS_WS_CLASS_BODY`), `CREATED`
+  (also the `re.M` site), the `##` heading finder (two `re.match` calls, twice on the second),
+  and the no-op detector (twice, inside the `\Z`-anchored alternation).
+- **Two are inline `re.search(r"\s", inner)` calls** — one in the strong-evidence path, one in the
+  acceptance-command path. **These are invisible to any `re.compile`-shaped search** and were
+  missed by the first enumeration. That note is the only part of this list a grep cannot
+  regenerate; everything else above is `grep -an '\\s' scripts/ledger_check.py` away.
 
 **CORRECTION — I ranked the receipt defect above `:144`, and that was wrong.** The commit report
 called the receipt rewrite "the more serious find". It is the more INSIDIOUS one (it mutates the
