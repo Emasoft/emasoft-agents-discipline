@@ -124,6 +124,14 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   // LEGAL (trailing dot then exponent), a sign before a radix prefix is NOT ("+0x10" is NaN
   // though " 0x10 " is 16), "0X"/"0b"/"0o" with no digits are NaN, and a lone sign or dot is
   // NaN. All verified identical before being added, not added hoping they would be.
+  //
+  // "VERIFIED IDENTICAL" IS NOT A GROUND FOR KEEPING A ROW -- the two grounds are
+  // mutation-isolated, or named by the helper's docstring. Checked afterwards rather than
+  // asserted: mutating the regex's trailing-dot form (`\d+(?:\.\d*)?` -> `\d+(?:\.\d+)?`)
+  // reddens "5." "0." "1.e3", and dropping the exponent sign (`[eE][+-]?\d+` -> `[eE]\d+`)
+  // reddens "1e-3" "1e+3". So those earn their place outright. The REST of this block is
+  // documentation of the grammar rather than isolated coverage -- kept deliberately, on the
+  // weaker ground, and labelled so nobody mistakes it for the stronger one.
   "0.", "1.e3", " +0x10", "0X", "1e+3", "1e999", "+", "-", ".", "1.2.3", "0.0e0", "+.5",
   "-.5", "00", "010", ".e3", "0b", "0o", "0xg", " 0x10 ", "+0x10", "1 2"];
 for (const s of NUM_STRINGS) {
