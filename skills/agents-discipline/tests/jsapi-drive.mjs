@@ -203,12 +203,21 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   // such row); this class has none.
   //
   // It is the FIFTH resting place -- documentation, class isolation, cost, expressible
-  // mechanism, cheap redundancy. What genuinely changed is that the label is now HONEST: these
-  // rows are marked redundant instead of dressed as grounded, so a reader can discount them
-  // correctly. That is worth having and it is not the same as the recursion terminating.
-  // The one-line bound that would terminate it -- AT MOST ONE REDUNDANT SIBLING PER HAZARD
-  // CLASS -- is not adopted here, and the honest reason is that it would bite immediately: two
-  // siblings exist. Recorded as an open hole rather than closed by fiat or hidden by silence.
+  // mechanism, cheap redundancy -- and the label being HONEST (marked redundant rather than
+  // dressed as grounded) is a real gain that is NOT the same as the recursion terminating.
+  //
+  // SO IT TERMINATES HERE, and the bound is grandfathering:
+  //   AT MOST ONE REDUNDANT SIBLING PER HAZARD CLASS. The two that exist are GRANDFATHERED;
+  //   NO NEW redundant sibling is admitted to this corpus. Adding one means finding a
+  //   separating mechanism that passes the reachability test, or not adding it.
+  // A draft declined the bound outright, on the grounds that "it would bite immediately: two
+  // siblings exist." That is a statement about cost to the author, not about the rule -- the
+  // premise the rule exists to settle, used as grounds for not settling it. It is the same
+  // "cost" position retracted two commits earlier, merely stated aloud instead of hidden.
+  // Openness makes motivated stopping AUDITABLE, which is worth something; it does not make it
+  // a reason. Grandfathering keeps both rows, costs nothing, and the corpus cannot grow --
+  // which is what a stopping condition has to do. It is the ["a//","b"] treatment applied to
+  // the class instead of the row.
   //
   // That is exactly how `["a//","b"]` is already treated in path-api-drive.mjs. Applying a
   // stricter rule here than there, over a spelling technicality (that clause needs a docstring

@@ -26,13 +26,17 @@ tmpdir=$(mktemp -d)
 target=$tmpdir/subject.py
 printf 'MARKER = "original"\n' > "$target"
 runner=$tmpdir/fast.sh
-# The `DIVERGE` branch never fires -- $FORCE_DIVERGE is unset -- but it must be PRESENT, because
-# guard -1 refuses any runner whose script cannot emit the token, and a fixture that cannot is
-# not a stand-in for a real runner. Adding it is not gaming the guard: the predicate is "this
-# script CAN report divergence", and with the branch the fixture genuinely can. Without it, cases
-# 3 and 4 died at guard -1 before ever reaching the signal path they exist to test -- measured
-# when the guard moved to the top of the probe.
-printf '#!/bin/bash\n[ -n "${FORCE_DIVERGE:-}" ] && echo "DIVERGE  forced"\necho "--- all identical ---"\n' \
+# The DIVERGE line is printed UNCONDITIONALLY, on every call. A first version guarded it behind
+# an `$FORCE_DIVERGE` that nothing ever sets, and defended that as "the predicate is 'this script
+# CAN report divergence'". That defense is only valid if the predicate IS the property, and it
+# is not: the predicate is a source grep, an approximation, and satisfying the approximation
+# while leaving the property untouched is the exact "assertion satisfied by something other than
+# the property it names" this project keeps catching. It was dead code added to pass a check,
+# with a five-line justification standing three cases away from $noisy doing it correctly.
+#
+# Printing it every call costs nothing: the line appears in BOTH the baseline and the
+# post-mutation run, so the set difference is empty and the verdict is unchanged.
+printf '#!/bin/bash\necho "DIVERGE  fixture-constant"\necho "--- all identical ---"\n' \
   > "$runner"; chmod +x "$runner"
 # FAST on the first call, SLOW on the second. mutate-probe.sh runs the runner TWICE -- the
 # baseline, then the post-mutation run -- so a uniformly-slow runner puts any timed kill inside
@@ -41,7 +45,7 @@ printf '#!/bin/bash\n[ -n "${FORCE_DIVERGE:-}" ] && echo "DIVERGE  forced"\necho
 # unmodified file over an unmodified file, which no broken restore can fail. Measured: with a
 # uniformly-slow runner, breaking the restore entirely reddened NOTHING.
 slow=$tmpdir/slow-second.sh
-printf '#!/bin/bash\nn=$(cat %s/n 2>/dev/null || echo 0); echo $((n+1)) > %s/n\n[ "$n" = 0 ] || sleep 5\n[ -n "${FORCE_DIVERGE:-}" ] && echo "DIVERGE  forced"\necho "--- all identical ---"\n' \
+printf '#!/bin/bash\nn=$(cat %s/n 2>/dev/null || echo 0); echo $((n+1)) > %s/n\n[ "$n" = 0 ] || sleep 5\necho "DIVERGE  fixture-constant"\necho "--- all identical ---"\n' \
   "$tmpdir" "$tmpdir" > "$slow"; chmod +x "$slow"
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
@@ -101,5 +105,20 @@ printf '#!/bin/bash\necho "DIVERGE  pre-existing case"\necho "--- 1 KNOWN ---"\n
   > "$noisy"; chmod +x "$noisy"
 out=$(bash "$PROBE" t "$target" 'original' 'mutated' "$noisy" 2>&1 | tail -1)
 check "a baseline divergence is not awarded to the mutation" "t -> NOTHING REDDENED" "$out"
+
+# 7. THE HEADLINE CHANGE, WHICH HAD NO CASE UNTIL NOW. Case 6 pins count -> delta: it passes
+#    against BOTH the delta version (1-1=0) and the set difference. It cannot tell them apart.
+#    This one can: the runner HEALS one known divergence and INTRODUCES a different one, so the
+#    COUNT is unchanged (1 before, 1 after) and a delta reports NOTHING REDDENED while a row
+#    genuinely reddened. Only comparing the LABELS catches it. That failure mode is not exotic
+#    -- against regex-worker-diff.sh, whose seven divergences live in one function's flag and
+#    anchor handling, a mutation shifting WHICH rows match is the likely shape.
+printf 'MARKER = "original"\n' > "$target"
+swap=$tmpdir/heals-and-breaks.sh
+printf '#!/bin/bash\nn=$(cat %s/m 2>/dev/null || echo 0); echo $((n+1)) > %s/m\nif [ "$n" = 0 ]; then echo "DIVERGE  case-A"; else echo "DIVERGE  case-B"; fi\necho "--- 1 KNOWN ---"\nexit 0\n' \
+  "$tmpdir" "$tmpdir" > "$swap"; chmod +x "$swap"
+out=$(bash "$PROBE" t "$target" 'original' 'mutated' "$swap" 2>&1 | tail -1)
+check "a compensating change is not netted to zero" \
+  "t -> REDDENS (1 NEWLY diverging variant(s), 1 healed)" "$out"
 echo "--- $( [ $fail = 0 ] && echo 'all identical' || echo 'SELF-TEST FAILURES ABOVE' ) ---"
 exit $fail

@@ -64,7 +64,15 @@ restore() {
   [ "$restored" = 1 ] && return 0
   # STDOUT: see interrupted(). A caller's `2>/dev/null` must never be able to hide the one
   # message saying the working tree may still hold a mutant.
-  if cp "$backup" "$target"; then restored=1; rm -f "$backup"; return 0
+  # The scratch siblings go with the backup. They were FIXED /tmp paths until 2026-09-07
+  # (/tmp/mutate-{baseline.out,import.err,before,after}.diverged) -- so two probes running at
+  # once read each other's baselines and each other's DIVERGE sets, and the verdict of both
+  # became a function of the interleaving. Nothing had ever run two at once, which is why it
+  # went unnoticed; deriving them from $backup (already unique per process via mktemp) makes
+  # the collision impossible rather than merely unobserved.
+  if cp "$backup" "$target"; then
+    restored=1; rm -f "$backup" "$backup.baseline" "$backup.imperr" "$backup.before" \
+      "$backup.after"; return 0
   else echo "RESTORE FAILED -- $target may still be MUTATED; original at $backup"; return 1; fi
 }
 interrupted() {   # interrupted <signal-number>
@@ -95,7 +103,18 @@ trap 'interrupted 15' TERM
 # DIVERGE lines, so a runner that reports divergence any other way can only ever score NOTHING
 # REDDENED -- a false negative wearing the costume of a measurement. Full rationale, and the two
 # drafts of this guard that were wrong, at the verdict below.
-if ! grep -sqE '^[^#]*DIVERGE' "$@"; then
+# ONLY THE ARGV ELEMENTS THAT ARE REGULAR FILES. Handing grep the whole "$@" greps the
+# INTERPRETER too ("bash", "python3") and any FLAG -- and a flag is worse than a miss: grep
+# parses `--verbose` as an option, so an unrecognised one aborts grep (exit 2 -> this guard
+# fires -> PROBE FAILED on a good runner) and a recognised one like `-i` silently changes the
+# guard's own semantics. It also passes when ANY named file matches, so a runner given a
+# fixture path could have its vocabulary check satisfied by the FIXTURE.
+# The seven-runner sweep could not see this: every invocation was `bash tests/NAME-diff.sh`,
+# exactly one file-shaped argument. A predicate validated against one invocation SHAPE is not
+# validated against the population, which is the same mistake draft 2 made one size up.
+scripts=()
+for a in "$@"; do [ -f "$a" ] && scripts+=("$a"); done
+if [ ${#scripts[@]} -eq 0 ] || ! grep -sqE '^[^#]*DIVERGE' "${scripts[@]}"; then
   echo "$label -> PROBE FAILED (no runner script emits DIVERGE outside a comment; its"
   echo "    NOTHING REDDENED would be a false negative. Use a *-diff.sh runner.)"
   exit 1
@@ -103,12 +122,12 @@ fi
 
 # Guard 0. A pre-existing divergence makes every subsequent probe a false positive, so the
 # harness must establish its own baseline rather than assume one.
-if ! "$@" >/tmp/mutate-baseline.out 2>&1; then
+if ! "$@" >"$backup.baseline" 2>&1; then
   echo "$label -> PROBE FAILED (runner was ALREADY failing before the mutation)"
-  tail -3 /tmp/mutate-baseline.out
+  tail -3 "$backup.baseline"
   exit 1
 fi
-baseline_out=$(cat /tmp/mutate-baseline.out)
+baseline_out=$(cat "$backup.baseline")
 # GUARD 0 TRUSTED THE EXIT STATUS, AND THAT IS NOT THE SAME AS "not already diverging".
 # regex-worker-diff.sh prints SEVEN DIVERGE lines and deliberately exits 0, because its port
 # divergences are known and unresolved -- so guard 0 passed, and EVERY probe run against it
@@ -150,8 +169,8 @@ case "$target" in
   *.py)
     if ! PYTHONDONTWRITEBYTECODE=1 python3 -c "
 import sys; sys.path.insert(0, '$(dirname "$target")')
-import $(basename "$target" .py)" 2>/tmp/mutate-import.err; then
-      echo "$label -> PROBE FAILED (mutant does not import): $(tail -1 /tmp/mutate-import.err)"
+import $(basename "$target" .py)" 2>"$backup.imperr"; then
+      echo "$label -> PROBE FAILED (mutant does not import): $(tail -1 "$backup.imperr")"
       exit 1
     fi ;;
 esac
@@ -202,13 +221,17 @@ output=$("$@" 2>&1)
 # the identifiers can be compared directly and no arithmetic can cancel.
 #
 # `comm -13` needs sorted input; the names are stable strings, so sorting is safe.
-printf '%s\n' "$output" | grep -E '^DIVERGE' | sort > /tmp/mutate-after.diverged
-printf '%s\n' "$baseline_out" | grep -E '^DIVERGE' | sort > /tmp/mutate-before.diverged
-new_diverged=$(comm -13 /tmp/mutate-before.diverged /tmp/mutate-after.diverged)
+# `sort -u`, not `sort`: comm compares lines WITH MULTIPLICITY, not sets. A label emitted twice
+# in the baseline and once after yields a phantom "healed"; once then twice yields a phantom
+# "newly diverging" for a label that was already red. One character, and it makes the operator
+# actually be the set difference the comment above claims it is.
+printf '%s\n' "$output" | grep -E '^DIVERGE' | sort -u > "$backup.after"
+printf '%s\n' "$baseline_out" | grep -E '^DIVERGE' | sort -u > "$backup.before"
+new_diverged=$(comm -13 "$backup.before" "$backup.after")
 diverged=$(printf '%s\n' "$new_diverged" | grep -cE '^DIVERGE')
 # A divergence the mutation REMOVED is not a catch, but it is not nothing either: it means the
 # mutant is closer to the oracle than the shipped code on that case, which is worth seeing.
-healed=$(comm -23 /tmp/mutate-before.diverged /tmp/mutate-after.diverged | grep -cE '^DIVERGE')
+healed=$(comm -23 "$backup.before" "$backup.after" | grep -cE '^DIVERGE')
 crashed=$(printf '%s\n' "$output" | grep -cE '^(CRASH|BUILD-FAILED|VACUOUS)')
 # NO exit-code protocol for the verdicts. A 0/1/2/3 scheme was added here and then REMOVED:
 # nothing in this repo invokes this script, so the codes had no reader -- and the DIFFERS
