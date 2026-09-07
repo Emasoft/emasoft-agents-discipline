@@ -186,15 +186,21 @@ _case() {
 # `_write_ledger_hdr` was offered as the motivating defect; run it and the oracle still exits 0
 # with `verified: 1`. The parser SKIPS the separator row (`cells.every(c => c === "" ||
 # /^:?-+:?$/.test(c))`), so its absence changes no verdict and no control can detect it. The two
-# writers also emit BYTE-IDENTICAL files at `ws=''` -- that is the healthy state, not an
-# invariant, so a defect in the writer's static text still diverges them and still fires here.
+# writers do emit BYTE-IDENTICAL files at `ws=''` -- measured with `cmp`, not inferred. But that
+# buys nothing here, and the first version of this sentence claimed it did ("a defect in the
+# writer's static text still diverges them"). It cannot. A static-text defect lives in the SHARED
+# writer, so both runtimes read the same bytes and agree BY CONSTRUCTION -- the node-vs-python half
+# can never fire on one. Only the `verified: 1` half can, and only when the defect moves the count
+# off 1. A changed unit name, a reordered column whose header still parses, a different worker
+# string: each leaves one verified row and passes here in silence.
 #
-# The honest scope: this catches a `_write_ledger_hdr` defect that changes the PARSE (a lost
-# header row, a wrong column count, a mangled status cell). It CANNOT catch a defect in where the
-# writer PLACES `$pad` -- the one line that makes it a different writer from `_write_ledger` --
-# because the control is by construction the only case that never supplies a pad. A pad written
-# onto the separator row instead of the header would pass here and send all six header cases at
-# the wrong surface, silently.
+# The honest scope: this catches a `_write_ledger_hdr` defect that changes the COUNT the parse
+# yields. It CANNOT catch a defect in where the writer PLACES `$pad` -- the one line that makes it
+# a different writer from `_write_ledger` -- because the control is by construction the only case
+# that never supplies a pad. A pad written onto the separator row instead of the header would pass
+# HERE. Whether the six header cases would then pass too is NOT established, and this session's own
+# U+FEFF measurement argues they might not: the two runtimes diverge in OPPOSITE directions on the
+# header surface, so a misplaced pad is at least as likely to be loud as silent.
 _control() {
   local writer="$1" label="$2" led o p
   led="$WORK/control-$writer.md"
