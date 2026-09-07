@@ -1055,7 +1055,18 @@ def main(argv):
             # not after the process exits -- a runaway CHECK is cut off mid-stream.
             while True:
                 try:
-                    chunk = handle.read(65536)
+                    # read1(), NOT read(). BufferedReader.read(n) blocks until it has n bytes
+                    # or EOF, so a CHECK that prints a little and then hangs leaves that output
+                    # sitting in the buffer -- and when the timeout SIGKILLs the group and the
+                    # handle closes, the blocked read raises and those bytes are DISCARDED,
+                    # never having been appended. MEASURED against the oracle on
+                    # `echo starting; sleep 30` under --timeout 3:
+                    #     oracle  timed out after 3s; ... output=starting
+                    #     port    timed out after 3s; ... output=(no output)
+                    # read1() returns whatever one underlying read yields, which is the
+                    # semantics of node's stream 'data' events that gate-check.mjs:662-671
+                    # relies on: deliver what arrived, do not wait for a full buffer.
+                    chunk = handle.read1(65536)
                 except (OSError, ValueError):
                     break
                 if not chunk:

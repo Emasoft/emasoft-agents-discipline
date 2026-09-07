@@ -14,7 +14,16 @@ def _pump(src, dst):
     # Pipe instead of inheriting descriptors directly. Reading until EOF blocks on any
     # descendant that inherited CHECK's stdout/stderr, keeping this detached supervisor
     # alive as the original process-group identity until every writer has closed.
-    for chunk in iter(lambda: src.read(65536), b""):
+    # read1(), NOT read(). BufferedReader.read(n) blocks until it has n bytes or EOF, so a
+    # CHECK that prints a little and then hangs leaves that output stranded HERE, in the
+    # supervisor, never forwarded -- and when the per-check timeout SIGKILLs the process group
+    # the supervisor dies with those bytes still buffered. The oracle's supervisor is built on
+    # node stream 'data' events, which deliver whatever arrived, so it forwards immediately.
+    # MEASURED, `echo starting; sleep 30` under --timeout 3:
+    #     oracle  timed out after 3s; ... output=starting
+    #     port    timed out after 3s; ... output=(no output)
+    # read1() returns what one underlying read yields, matching the oracle's semantics.
+    for chunk in iter(lambda: src.read1(65536), b""):
         dst.write(chunk)
         dst.flush()
     src.close()
