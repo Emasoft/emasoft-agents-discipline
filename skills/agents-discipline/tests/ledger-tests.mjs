@@ -109,6 +109,42 @@ const cases = [
       "ledger TERMINAL",                    // the over-claim this case exists to catch
     ],
   },
+  {
+    // The third clause of `abandoned`'s definition, which the first two cases do not touch: the
+    // template says the reason is written in the row's Evidence block, and until now nothing
+    // checked, so an unexplained abandonment printed identically to an explained one.
+    //
+    // EXIT CODE CANNOT DISCRIMINATE HERE, exactly as with `abandoned` itself: `complete` requires
+    // every row `verified`, so any abandoned ledger already exits 1 whether or not a reason is
+    // attributable. `want: 1` is therefore a consistency check, not the assertion — the two
+    // `expect` strings and the one `reject` carry the whole case.
+    //
+    // The `reject` IS the control, and it is the half that can be false. If the marker were
+    // printed unconditionally, both `expect` lines would still pass and the case would look
+    // green while proving nothing; only the reasoned middle row can catch that. It is the middle
+    // row on purpose — see the fixture, which explains why two-rows-one-reasoned is passable by
+    // accident and this shape is not.
+    //
+    // No `rerun: true`. `evidenceBlocks` is populated at `ledger-check.mjs:263-272`, well before
+    // `rerunSkipped` exists at `:488`, so the lookup works on the default skip path — and this
+    // case passing with the skip ON is the proof of that, rather than my having read where the
+    // block starts. Setting `rerun: true` would populate the map for a different reason and hide
+    // a regression that broke the skip path.
+    name: "an abandoned row with no attributable evidence block is marked as such",
+    file: "tests/fixtures/abandoned-unreasoned.md",
+    want: 1,
+    expect: [
+      "- #1 alpha — no **Unit 1** evidence block; reason not attributable",
+      "- #3 gamma — no **Unit 3** evidence block; reason not attributable",
+      "HANDOFF REQUIRED: 3 abandoned unit(s)",
+    ],
+    reject: [
+      // The reasoned row must come through UNTOUCHED. Anchored on the em dash that only the
+      // marker introduces: a bare `- #2 beta` would be vacuous, since it is a substring of the
+      // marked form too — the same trap the `- #2 finance [` assertion above documents.
+      "- #2 beta —",
+    ],
+  },
   // rerun: true — see the SKIP_RERUN note below. These exercise the half of the
   // checker the skip disables: the no-op scan, acceptanceCommand, evidenceBlockFor,
   // existingArtifactsIn, and the `unbacked` verdict. Until this flag existed NONE of

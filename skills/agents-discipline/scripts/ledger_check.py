@@ -709,11 +709,20 @@ if unverified:
         print(f"    - #{r['unit']} {r['name']} [{r['status']}]")
 if abandoned:
     # The reason lives in the row's Evidence block, deliberately NOT copied here: it is free-form
-    # text of unbounded length, and the gate half makes the same choice. This checker does NOT yet
-    # require an abandoned row to carry a reason -- that hole is a separate item.
+    # text of unbounded length, and the gate half makes the same choice.
+    #
+    # The row IS now checked for having one, and the wording is the careful part. The predicate is
+    # an EMPTY attributed block, which means "no line-initial `**Unit N —**` block was attributed
+    # to this row" -- NOT "no reason was written". Those come apart in shapes a careful author
+    # actually uses: one pooled paragraph covering three units blocked on the same cause, a
+    # `#1`-style header, an indented header inside a list. In every one of those the reason exists
+    # and this check cannot see it, so the line says what was MEASURED. Claiming "NO REASON GIVEN"
+    # would put an unsupportable accusation about a correct author into the ledger's own output.
     print(f"  HANDOFF REQUIRED: {len(abandoned)} abandoned unit(s) — terminal and unsuccessful, not completion:")
     for r in abandoned:
-        print(f"    - #{r['unit']} {r['name']}")
+        _unattributable = evidence_block_for(r["unit"]).strip(JS_TRIM) == ""
+        _why = f" — no **Unit {r['unit']}** evidence block; reason not attributable" if _unattributable else ""
+        print(f"    - #{r['unit']} {r['name']}{_why}")
 if malformed:
     print("  malformed rows:")
     for m in malformed:
