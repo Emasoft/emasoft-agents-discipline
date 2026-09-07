@@ -18,8 +18,8 @@ import re
 import typing
 
 from gates import (  # type: ignore[import-not-found]
-    append_status, read_stable_regular_file, scope_root, validate_scope_id, with_file_lock,
-    write_atomic,
+    _node_fs_message, append_status, read_stable_regular_file, scope_root, validate_scope_id,
+    with_file_lock, write_atomic,
 )
 from jsapi import (  # type: ignore[import-not-found]
     js_entries, js_json_object, js_length, js_slice, js_trim, parse_date,
@@ -256,15 +256,28 @@ def read_state(root, path):
         # this branch would have returned an empty wave set on a race the oracle refuses.
         if error.errno == errno.ENOENT:
             return _empty_state()
-        # str(error), NOT _err_code(error), and the choice is deliberate at the one site the
-        # convention would otherwise cover. For an AUTHORED OSError (the size cap, the
-        # containment refusal) errno is None and str() is the bare message -- an exact match. For
-        # a genuine syscall error neither spelling matches: Python says "[Errno 13] Permission
-        # denied: '/x'", Node says "EACCES: permission denied, open '/x'", and _err_code would
-        # say "EACCES" -- three different strings, none reproducing the oracle. This is the
-        # declared OS-error normalization the drivers already apply by comparing errno NAMES, so
-        # the exact prose is out of scope here rather than silently assumed equal.
-        raise DispatchError("invalid dispatch state: " + str(error)) from error
+        # NOT _err_code(error), and not a bare str() either. The two error classes arriving here
+        # need OPPOSITE treatment, which is why one expression cannot be picked by class:
+        #   AUTHORED OSError (the size cap, the containment refusal) -- errno is None, and str()
+        #     is the bare message the oracle throws verbatim. Exact match.
+        #   GENUINE SYSCALL ERROR -- the oracle interpolates node's `error.message`, which
+        #     str() does not reproduce and _err_code does not either. MEASURED on an unreadable
+        #     dispatch.json:
+        #         oracle  invalid dispatch state: EACCES: permission denied, open '<path>'
+        #         port    invalid dispatch state: [Errno 13] Permission denied: '<path>'
+        # THIS COMMENT USED TO CALL THAT DIVERGENCE OUT OF SCOPE -- "three different strings,
+        # none reproducing the oracle", deferring to the drivers' errno-NAME comparison. Honest
+        # when written, and wrong now: _node_fs_message reproduces node's shape exactly for this
+        # class, and 9071a84 (gate-lint), ledger_check.py:96 and this line are three instances of
+        # one defect that were each found separately because the first fix was not swept. A
+        # deferral whose premise was "nothing can reproduce it" has to be revisited the day
+        # something can, and nothing re-reads a deferral on its own.
+        # `open` is the syscall for the structural reason gate_lint's site records: every OSError
+        # escaping read_stable_regular_file comes from its FIRST syscall.
+        raise DispatchError(
+            "invalid dispatch state: "
+            + (_node_fs_message(error, "open") if error.errno is not None else str(error))
+        ) from error
     except DispatchError as error:
         # The oracle re-raises ONLY when the message ALREADY carries the prefix, and wraps
         # everything else -- including a fresh validate_state failure, whose message never does.
@@ -435,13 +448,25 @@ def update_dispatch(root, spec):
         # or not it is why the second crash site went unlooked-for (no test drove `--handle` with
         # bad bytes either, and that is the duller and likelier explanation).
         #
-        # AND THE FIX IS NOT TO ADD A SURROGATE GATE to _valid_handle or _valid_reason. By the
-        # time node's validators run it is holding U+FFFD, an ordinary printable character it
-        # accepts; a port-only surrogate rejection would be a FRESH divergence dressed as
-        # hardening. What actually makes this line safe now is upstream and
+        # AND THE FIX IS NOT TO ADD A SURROGATE GATE to _valid_handle or _valid_reason. MEASURED
+        # rather than inferred from node's decode, because "which validator runs" is exactly what
+        # this comment got wrong twice: the ORACLE accepts a literal U+FFFD handle -- exit 0,
+        # `"handle": "h<U+FFFD>nd"` written -- so a port-only surrogate rejection would be a FRESH
+        # divergence dressed as hardening. What actually makes this line safe now is upstream and
         # unconditional: jsapi.normalize_argv() runs before any parsing in all four CLIs, so an
         # argv value carrying invalid UTF-8 arrives as U+FFFD (node's own spelling) and no lone
         # surrogate can reach `state` from a command line at all. Covered by tests/argv-diff.sh.
+        #
+        # THE READ-BACK PATH IS NOT A SECOND HOLE, and it is the first place to look because
+        # `state` is loaded from this same file, mutated and rewritten: a bad byte sitting in
+        # dispatch.json flows through this line on the NEXT transaction. It is closed by the
+        # reader, on both sides -- read_stable_regular_file decodes `errors="replace"` (gates.py
+        # :395) and node's Buffer.toString("utf8") substitutes identically, so a raw byte in the
+        # file is U+FFFD by the time it is parsed, never a surrogate. Verified by injecting one
+        # and reading it back.
+        # SO THE RESIDUAL IS NARROW AND WORTH STATING AS SUCH: a free-text value reaching `state`
+        # from a source that is NEITHER argv NOR that reader -- an env var, os.listdir, anything
+        # CPython decodes with surrogateescape. There is no such field today.
         # The ONLY reason not to route this through _js_json_text is the one that survives:
         # JSON.stringify ESCAPES a lone surrogate to six ASCII characters while the oracle here
         # writes the CHARACTER -- measured, so the helper would trade a crash for a silent byte
