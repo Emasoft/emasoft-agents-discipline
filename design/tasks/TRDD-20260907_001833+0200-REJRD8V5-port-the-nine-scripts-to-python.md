@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T05:36:00+0200
+updated: 2026-09-07T05:58:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -24,15 +24,40 @@ this project — the recurring defect all session has been an assertion satisfie
 other than the property it names. Mutate the implementation, confirm the intended row reddens,
 revert. If no mutation isolates a row, that row does not earn its place.
 
-> **A CONTROL PROVES REACHABILITY. THE CORPUS DECIDES CORRECTNESS. They are different questions
-> and conflating them cost a real defect.** The digest serializer computed the right JS float
-> spelling with `_js_number` and then threw it away — `json.loads(...)` back to a Python float,
-> re-rendered by `json.dumps`. Wrong for exactly the cases `_js_number` exists to fix: JS `1e-7`
-> became `1e-07`, JS `0.000001` became `1e-06`. The mutation control on that very line **did
-> redden 2 cases**, and that was read as the line being RIGHT. It only ever proved the line did
-> *something*. The corpus held one float, `1500.0`, which is integral — so the round-trip
-> survived by accident and the defect was invisible. Ask BOTH: *can this check fail?* and
-> *does the corpus contain an input that distinguishes right from wrong here?*
+> **A CONTROL PROVES REACHABILITY. THE CORPUS DECIDES CORRECTNESS.** The digest serializer
+> computed the right JS float spelling with `_js_number` and then threw it away —
+> `json.loads(...)` back to a Python float, re-rendered by `json.dumps`. Wrong for exactly the
+> cases `_js_number` exists to fix: JS `1e-7` became `1e-07`, JS `0.000001` became `1e-06`.
+>
+> **The corpus had FOUR float cases and was blind anyway** — an earlier version of this note
+> said "one float", which makes it read as an oversight anyone would avoid. Measured:
+>
+> | case | reaches the defective line? | why it could not distinguish |
+> |---|---|---|
+> | `Infinity`, `NaN` | **no** — short-circuit to `null` on the branch above | never executed it |
+> | `-0.0` | yes | `_js_number` → `"0"` → round-trip → `"0"`. Identical |
+> | `1500.0` | yes | integral → `"1500"` both ways. Identical |
+>
+> **And the killer detail: the mutation control on that line reddened `1500.0` and `-0.0` —
+> precisely the two rows blind to the real bug.** The control was killed by rows that could not
+> see the thing being tested, and that was read as the line being RIGHT. It only proved the line
+> did *something*. **Case count is not coverage.**
+>
+> **THE ACTIONABLE FORM, because "does an input distinguish right from wrong" needs you to
+> already know what wrong looks like:** when a helper's docstring NAMES the cases it exists to
+> handle, the corpus exercising it must contain EVERY one of them. `_js_number`'s docstring
+> names `float("inf")`, `1e-7`, `0.000001` and `-0.0`. The corpus had the first and the last.
+> That rule is mechanical, needs no judgment about correctness, and would have caught this
+> before it was written.
+>
+> **ORDERING AGAINST THE RULE ABOVE, which otherwise contradicts this one.** "If no mutation
+> isolates a row, that row does not earn its place" governs **branches in the implementation**;
+> this rule governs **rows in the corpus**. They are different objects, and applying the first
+> to the second deletes the fix: a `1e-7` row added *before* the bug was found is isolated by no
+> mutation (the obvious mutant is already killed by `1500.0`), so a mechanical reading would
+> delete it and the defect ships. **A row justified by a helper's documented contract earns its
+> place even when no mutation isolates it.** Note the first rule has already been used twice
+> this session to delete things correctly — which is what makes the ratchet dangerous.
 
 > **⚠ THE SUITE IS NOT ALL-GREEN, WHATEVER THE TALLY SAYS.** `regex-worker-diff.sh` exits 0
 > while **7 port divergences remain UNRESOLVED — ALL SEVEN, not "five of them", are ways the
@@ -53,7 +78,13 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > set was pinned*, never *the port is correct*. Earlier commit messages in this TRDD's history
 > report "11 suites PASS"; **that number is wrong in the way that matters** — it converted the
 > document's own headline finding into green. The script's passing message now says so itself.
-> Read it as **10 PASS + 1 green-with-known-defects**.
+>
+> **NO COUNT HERE, deliberately.** This block said "10 PASS + 1" and was stale within two
+> commits (`digest-diff.sh` was added after it), while a commit message said "11" — the two
+> disagreeing by one in opposite directions, inside the block whose whole purpose is correcting
+> a miscount. A tally drifts every time a suite is added. Name the EXCEPTION instead:
+> **`regex-worker-diff.sh` is the one suite that is green with known unresolved defects.**
+> Everything else passing means what it says.
 
 **WHEN TO STOP REVIEWING AND WRITE CODE.** Rounds 13-22 produced almost no port code; five of
 nine rounds corrected the previous round, three of those correcting the round immediately

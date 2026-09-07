@@ -23,8 +23,13 @@ export const CASES = {
   dirname: ["/a/b", "/a/", "a", "/", "", "//", "//a", "//a/b", "/a//b//", "/a/b/.", "a/b", "./a"],
   basename: ["/a/b", "/a/", "a", "/", "", "//", "/a//b//", "a/b/", ".", ".."],
   isAbsolute: ["/a", "a", "", "./a", "//a", "../a", "/"],
+  // `["a//","b"]` and `["a/.","b"]` are the two cases `_js_join`'s OWN DOCSTRING names as the
+  // reasons it exists ("node's join("a//","b") is "a/b" and Python's is "a//b"") -- and neither
+  // was in this corpus, so nothing asserted them. Found by applying the rule the STATE block
+  // now carries: when a helper's docstring names the cases it exists to handle, the corpus
+  // exercising it must contain every one. Both PASS; the gap was in the assertions, not the code.
   join: [["/a", "b"], ["/a", "/b"], ["a", ""], ["", "b"], ["/a", ".."], ["/a", "b/"],
-         ["a", "..", "..", "b"], [""], ["/"], ["a/", "/b"]],
+         ["a", "..", "..", "b"], [""], ["/"], ["a/", "/b"], ["a//", "b"], ["a/.", "b"]],
   relative: [["/a/b", "/a/b/c"], ["/a/b", "/a"], ["/a/b", "/a/b"], ["/a/b", "/x"],
              ["/a/b", "/a/b/../c"], ["/a//b", "/a/b/c"], ["/a/b/", "/a/b/c/"],
              ["/a/b", "/a/bc"], ["/a", "/a/../a/x"], ["/", "/a"],

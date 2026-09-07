@@ -31,8 +31,10 @@ CASES = {
                 "./a"],
     "basename": ["/a/b", "/a/", "a", "/", "", "//", "/a//b//", "a/b/", ".", ".."],
     "isAbsolute": ["/a", "a", "", "./a", "//a", "../a", "/"],
+    # See path-api-drive.mjs: the last two are _js_join's own docstring cases, which this
+    # corpus did not contain until the docstring-cases rule was applied.
     "join": [["/a", "b"], ["/a", "/b"], ["a", ""], ["", "b"], ["/a", ".."], ["/a", "b/"],
-             ["a", "..", "..", "b"], [""], ["/"], ["a/", "/b"]],
+             ["a", "..", "..", "b"], [""], ["/"], ["a/", "/b"], ["a//", "b"], ["a/.", "b"]],
     "relative": [["/a/b", "/a/b/c"], ["/a/b", "/a"], ["/a/b", "/a/b"], ["/a/b", "/x"],
                  ["/a/b", "/a/b/../c"], ["/a//b", "/a/b/c"], ["/a/b/", "/a/b/c/"],
                  ["/a/b", "/a/bc"], ["/a", "/a/../a/x"], ["/", "/a"],
