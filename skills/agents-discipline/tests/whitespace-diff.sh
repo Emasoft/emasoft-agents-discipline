@@ -227,8 +227,18 @@ _case() {
 # HERE. Whether the six header cases would then pass too is NOT established, and this session's own
 # U+FEFF measurement argues they might not: the two runtimes diverge in OPPOSITE directions on the
 # header surface, so a misplaced pad is at least as likely to be loud as silent.
+
+# The pad every control uses to prove `%s` landed. `\x58` is the letter `X` -- whitespace in
+# NEITHER language, in every version of both -- so it must survive into the ledger as an ordinary
+# character and shift that writer's verdict. Deliberately not U+180E, the other obvious "matches
+# neither" candidate: it left JS's `\s` in ES2016 and Python's on a Unicode table update, so it
+# encodes a version bet where `X` encodes none. Written as a BYTE ESCAPE rather than a literal `X`
+# on purpose -- that is what routes it through `%b`, so a control also fails when `%b` expansion
+# is what broke.
+NON_WS_PAD='\x58'
+
 _control() {
-  local writer="$1" label="$2" led o p
+  local writer="$1" label="$2" led o p padded po
   led="$WORK/control-$writer.md"
   "$writer" "$led" ''
   o="$(_verdict node "$led")"
@@ -251,48 +261,36 @@ _control() {
     printf '    oracle: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
     exit 1
   fi
-  printf '  OK      %-38s both runtimes count it verified\n' "$label"
-  pass=$((pass + 1))
-}
-
-# NEGATIVE CONTROL FOR THE PAD ITSELF, and it closes the exact gap the paragraph above admits:
-# `_control` is by construction the only case that never supplies a pad, so until now NOTHING
-# asserted the pad LANDS in the header. A dropped `%s`, a stray `%` that swallowed it, or a `%b`
-# that failed to expand would leave every padded case reading the UNPADDED header -- both runtimes
-# read the same bytes, agree by construction, and six OKs report coverage that does not exist.
-# That is the first vacuity of this file wearing different clothes, and agreement-only vectors
-# cannot see it: they hold just as well when the pad was never written.
-#
-# MEASURED, both halves, not argued:
-#   pad `\x58`   -> both runtimes emit `- #2 finance — no reason found in a **Unit 2** …`
-#   pad dropped  -> both runtimes emit `- #2 finance` and NOTHING else, and STILL AGREE
-# So asserting the marker is PRESENT is the one assertion that separates them.
-#
-# `\x58` is the letter `X` -- whitespace in NEITHER language, in every version of both, so
-# `**Unit X2 —**` matches no detector, unit 2's block never opens, and the reason marker must
-# fire. Deliberately not U+180E, the other obvious "matches neither" candidate: it left JS's `\s`
-# in ES2016 and Python's on a Unicode table update, so it encodes a version bet where `X` encodes
-# none. It is written as a BYTE ESCAPE rather than a literal `X` on purpose -- that is what routes
-# it through `%b` and lets this case fail when `%b` expansion is what broke.
-_pad_landed() {
-  local led o p
-  led="$WORK/pad-landed.md"
-  _write_ledger_ev "$led" '\x58'
-  o="$(_verdict node "$led")"
-  p="$(_verdict py "$led")"
-  if [ "$o" != "$p" ]; then
-    printf 'DIVERGE  %-38s harness is broken; the cases below cannot be trusted\n' "pad-landed control"
-    printf '    oracle: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
-    printf '    port  : %s\n' "$(printf '%s' "$p" | tr '\n' '|')"
+  # AND the pad must LAND on this writer's surface. Everything above runs with an EMPTY pad, so
+  # without this the control is blind to the one line that makes each writer different from the
+  # others -- where it puts `%s`. A dropped `%s`, a stray `%` swallowing it, or a `%b` that failed
+  # to expand leaves every case reading the UNPADDED ledger; both runtimes then read identical
+  # bytes and agree BY CONSTRUCTION, so the cases all print OK and report coverage that does not
+  # exist. Six vacuous OKs is the exact defect this file has now shipped twice.
+  #
+  # The assertion is INEQUALITY AGAINST THE EMPTY-PAD VERDICT, deliberately not "some expected
+  # string appeared". The first version of this check grepped for the abandoned-row reason marker,
+  # and that was a PROXY: it asserted something about the checker's prose and inferred something
+  # about the writer's format string, with the whole evidence pipeline in between. Anything else
+  # that stopped unit 2's block attributing would have satisfied it with the pad deleted -- and
+  # the stripper feeding that marker has a known-open fail-open defect, so the proxy was scheduled
+  # to come apart. Worse, it would then have failed with a message blaming the writer, sending the
+  # maintainer to the wrong file. Comparing verdicts asserts the property itself: the pad changed
+  # what the checker saw. It needs no knowledge of WHICH string changed, so it survives a reword.
+  #
+  # Same runtime both sides (node vs node), never node vs python: this asks whether the pad had an
+  # effect, which is a question about the FIXTURE. Whether the two runtimes agree about it is the
+  # cases' job, and conflating the two would let a genuine port divergence read as a pad failure.
+  padded="$WORK/padded-$writer.md"
+  "$writer" "$padded" "$NON_WS_PAD"
+  po="$(_verdict node "$padded")"
+  if [ "$po" = "$o" ]; then
+    printf 'DIVERGE  %-38s pad never reached this writer surface; its cases are vacuous\n' "$label"
+    printf '    unpadded: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
+    printf '    padded  : %s\n' "$(printf '%s' "$po" | tr '\n' '|')"
     exit 1
   fi
-  # -F, not -E: the needle carries `**` and `.`, which a regex would read as metacharacters.
-  if ! printf '%s' "$o" | grep -qaF 'no reason found in a **Unit 2** evidence block'; then
-    printf 'DIVERGE  %-38s pad never reached the evidence header; padded cases are vacuous\n' "pad-landed control"
-    printf '    agreed: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
-    exit 1
-  fi
-  printf '  OK      %-38s pad lands in the header (block stays shut)\n' "pad-landed control"
+  printf '  OK      %-38s counts it verified, and the pad moves the verdict\n' "$label"
   pass=$((pass + 1))
 }
 
@@ -311,7 +309,6 @@ for i in "${!CASE_NAME[@]}"; do
 done
 
 _control _write_ledger_ev "control: evidence-header writer"
-_pad_landed
 
 # The same six code points inside the `**Unit N —**` evidence header. This surface is parsed by
 # UNIT_HEADER, not by the table parser, so the twelve cases above cannot reach it -- and it is the
@@ -329,9 +326,9 @@ done
 echo
 if [ "$fail" = 0 ]; then
   # "check(s) passed", not "trim vector(s) identical": `$pass` has always also counted the
-  # controls, which assert PRESENCE rather than identity, and `_pad_landed` makes that split
-  # load-bearing -- it passes by finding a marker, not by two runtimes agreeing. A summary line
-  # that calls every check an identity is the kind of over-claim this suite exists to catch.
+  # controls, and a control does not assert identity -- it asserts a count, and now also that the
+  # padded verdict DIFFERS from the unpadded one. A summary line that calls every check an
+  # identity is the kind of over-claim this suite exists to catch.
   echo "--- $pass check(s) passed (cell + header + evidence-header surfaces) ---"
   exit 0
 fi
