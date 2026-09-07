@@ -89,6 +89,21 @@ if cat "$_probe" >/dev/null 2>&1; then
   chmod 644 "$_probe"; exit 2
 fi
 chmod 644 "$_probe"
+# THE FILE PROBE ABOVE DOES NOT COVER WHAT ROWS 12-14 DEPEND ON. It asserts a FILE's read bit;
+# those rows turn on DIRECTORY bits -- row 12 needs `chmod 500` to deny CREATION, rows 13/14 need
+# `chmod 300` to deny the SCAN while still allowing writes. On POSIX the file probe already
+# catches uid 0 and exits before any row runs, so they were safe -- but safe by inference from a
+# neighbouring assertion, which is how a row ends up relying on luck. Asserted directly instead,
+# and it is the row-12/14 pair of bits specifically, not a generic root test: a 300 directory must
+# refuse a scan and still accept a write.
+_dprobe="$WORK/.denial-probe-dir"
+mkdir -p "$_dprobe"; chmod 300 "$_dprobe"
+if ls "$_dprobe" >/dev/null 2>&1; then
+  echo "errno-message-diff: chmod 300 does not deny directory scans here, so rows 12-14 would" >&2
+  echo "  compare two success paths instead of two errors. Re-run as an unprivileged user." >&2
+  chmod 700 "$_dprobe"; exit 2
+fi
+chmod 700 "$_dprobe"
 _unreadable() {  # path -> creates it, unreadable
   printf '%s' "${2:-x}" > "$1"
   chmod 000 "$1"

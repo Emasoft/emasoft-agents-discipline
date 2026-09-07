@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T11:24:04+0200
+updated: 2026-09-07T11:29:45+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -214,10 +214,11 @@ trusting it; do not inherit it.
 
 > ⚠ **DO NOT READ "COMPLETE" HERE AS "THE PORT IS DONE ON THIS AXIS" — see Round 4.** This
 > section's claim is about INTERPOLATION sites and it still holds. Round 4 established that the
-> defect class is decided at the RAISE site instead, and **43 unwrapped fs-call sites remain**
-> (`gates.py` 27, `gate_check.py` 14, `ledger_check.py` 2). One of them was a live divergence
-> (`os.listdir`). The two sentences are not contradictory, but the distinction between them IS
-> the thing Round 3 got wrong, so a reader who stops here stops in the wrong place.
+> defect class is decided at the RAISE site instead, and **42 unwrapped fs-call sites remain at
+> `eb8c42b`** (`gates.py` 26, `gate_check.py` 14, `ledger_check.py` 2 — a self-decrementing
+> count, see Round 4). One of them was a live divergence (`os.listdir`). The two sentences are
+> not contradictory, but the distinction between them IS the thing Round 3 got wrong, so a
+> reader who stops here stops in the wrong place.
 
 **AND IT WAS ALREADY INCOMPLETE — BUT NOT FOR THE REASON FIRST WRITTEN HERE.** The first version
 said the sweep is "structurally blind to a site that never binds an error", which describes the
@@ -410,9 +411,28 @@ running it. Run now:
 **THAT LIST WAS ITSELF INCOMPLETE, and the omission was a live bug.** It named `os.scandir` but
 NOT **`os.listdir`** — the direct counterpart of the oracle's `readdirSync` — and omitted the
 `open()` builtin entirely. Adding both (plus `os.fdopen`, `pathlib`, `shutil`, `io.open`,
-`tempfile`) takes the count from 38 to **43**: `gates.py` 27, `gate_check.py` 14,
-`ledger_check.py` 2. **A count from a list of spellings is a FLOOR, never a total** — still
-missing are `mmap`, `from os import unlink` then a bare call, and `open` under an alias.
+`tempfile`) took the count from 38 to 43 — and it is **42 at `eb8c42b`**: `gates.py` 26,
+`gate_check.py` 14, `ledger_check.py` 2.
+
+**THE NUMBER DECREMENTED ITSELF, so the bare count was the wrong metric.** The grep EXCLUDES
+`_node_call(` lines, so every fix removed its own site: 43 was true before the `os.listdir` wrap
+in the same commit and false immediately after. A number that shrinks both when a site is FIXED
+and when a site is MISSED cannot tell those apart. **Track the DENOMINATOR instead** — total fs
+call sites, wrapped plus unwrapped — so progress is a fraction that only ever moves one way.
+
+**AND THE ENUMERATION IS NOW FROZEN, which is what actually stops this.** The previous framing
+("a spelling list is a FLOOR, never a total") was true and was also a licence: it made every
+count unfalsifiable and pre-excused the next omission — and each round DID widen the list and
+find one more real defect, which felt like progress but is a search that can always be widened
+again (`mmap`, `ctypes`, `from os import unlink`, an aliased `open`). That is not convergence,
+it is a machine for manufacturing one more finding.
+
+> **FROZEN LIST.** `os.` + `open stat lstat fstat mkdir makedirs rename replace unlink remove
+> rmdir scandir listdir read write fsync readlink chmod symlink link utime truncate fdopen`,
+> plus the `open()` builtin, `pathlib`, `shutil`, `io.open`, `tempfile`.
+>
+> Audit against THIS list to exhaustion. Widening it is a NEW class with its own justification,
+> decided deliberately and once — never discovered round by round.
 
 **AND THE FIRST SITE THE WIDENED LIST EXPOSED WAS A REAL, CLI-REACHABLE DIVERGENCE**
 (`gates.py:2101`, `os.listdir` OUTSIDE any try, propagating to a catch that hardcodes `open`):
@@ -428,10 +448,25 @@ can still be created and only the scan is denied — two fixtures, one directory
 rows 12 and 13 can never have.
 
 That single find settles whether the audit is worth finishing: it is. Each remaining site must be
-shown WRAPPED or provably the only syscall its catch can see; **that audit is NOT done**, and this
-is the honest state of the sweep. `gate_check.py`'s 14 are the highest-risk set — that file has
-ten catches with HARDCODED syscall constants, so any call under one of them whose syscall differs
-is a verbatim `:756` repeat, and the cross-check (call site × enclosing catch) is mechanical. **Correcting the review that
+shown WRAPPED or provably the only syscall its catch can see.
+
+**IT IS NOT "MECHANICAL", and calling it so has already cost a round.** Each site needs three
+steps, and only the first two are lookup: find the enclosing try (it may be several frames up —
+`os.listdir` had NONE, which was the whole finding), read the catch's hardcoded constant, then
+decide whether any OTHER call under that catch could raise. **The third is judgment about
+reachability, and it is where both `:756` and `os.listdir` hid.** Calling the pass mechanical
+invites doing it fast, which is exactly how a one-word constant survives.
+
+Honest estimate rather than a reassuring adjective: `gate_check.py`'s 14 are the only genuinely
+risky set — that file has ten catches with HARDCODED constants, so any call under one whose
+syscall differs is a verbatim `:756` repeat, and the call×catch cross-check is a real table.
+`ledger_check.py`'s 2 are trivial. `gates.py`'s remainder sit mostly inside functions already
+audited this session. **One focused pass, not five rounds — given the frozen list above.**
+
+**Stating this gap is not progress on it.** The sentence "the audit is NOT done" has now appeared
+across three commits while the item stayed open, and a previous round was correctly called
+displacement. Recording an open item is worth exactly one line; the next thing that touches this
+class should be the pass itself. **Correcting the review that
 prompted this:** `process_tree.py`, `check_supervisor.py`, `regex_worker.py` and `jsapi.py` were
 predicted to be unswept liabilities — measured, they contain ZERO matching fs calls, so their
 absence from the sweep costs nothing on this axis.
@@ -512,11 +547,17 @@ overwhelmingly in the FINDING (measuring, forcing errnos, six review rounds), no
 which were a few lines each. "Cheap and mechanical" is also elastic in the worst direction: every
 fix here looked cheap once found, so applied prospectively it forbids nothing.
 
-**THE MISSING HALF, which is falsifiable:** *stop auditing a class when a round produces only
-reasoning and documentation defects and no CODE defects.* By that test the class had NOT
-converged at Round 4 (close-polarity was a real behaviour bug) and had NOT converged at Round 5
-either (`os.listdir` was a live divergence) — so continuing was correct both times, which is
-exactly what a stopping rule should be able to say in advance rather than in hindsight.
+**THE MISSING HALF, which is falsifiable:** *stop auditing a class when a round run AGAINST THE
+SAME FROZEN ENUMERATION produces only reasoning and documentation defects and no CODE defects.*
+
+**The four capitalized words are the whole rule.** Without them it cannot terminate: every round
+here produced a code defect by WIDENING the search, and a search can always be widened — so the
+rule would license continuing forever while feeling justified each time, because a real bug does
+turn up. Measured on this class: Round 4's code defect (close polarity) came from the same
+enumeration and was genuine convergence-relevant evidence; Round 5's (`os.listdir`) came from
+widening the list, which under the corrected rule does not count as "the class has not converged"
+— it means a NEW class was opened. Freezing the list (above) is therefore not bookkeeping, it is
+the precondition that makes any stopping rule decidable at all.
 
 **A SECOND, BLUNTER SIGNAL worth watching:** changed CODE lines versus changed PROSE lines. Some
 recent rounds ran ~5 code lines against ~60 of comment and TRDD. When that ratio inverts this
@@ -544,6 +585,39 @@ set) and covered by the driver rows, but it is not zero. `gates.py`'s own remain
 and `dispatch.py` (7 uses, `read_state` done) are what is left.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
+
+### ERRNO-MESSAGE CLASS — CURRENT STATE, in final form. Do NOT reconstruct it from the rounds.
+
+The Round 1-6 sections below are **append-only history, ordered by when things were LEARNED, and
+several of them correct earlier corrections.** They are not a status report, and a reader who
+reconstructs the current state by applying them in sequence will get it wrong — the invariant
+alone appears there in three different states. Everything currently true about this class is in
+this block; the rounds explain only how it was arrived at.
+
+- **THE INVARIANT** (load-bearing for seven hardcoded `open` constants; corrected three times,
+  and the `OSError` scoping is not optional): *every **OSError** escaping
+  `read_stable_regular_file` either carries an attached message, came from the open, or is
+  authored with no errno.* The boundary guards raise `TypeError`/`ValueError`, which is why the
+  qualifier exists. **Derive it by walking the raise sites, never from memory.**
+- **THE ENUMERATION IS FROZEN** — the list is in Round 4. Audit against it to exhaustion;
+  widening it is a NEW class, decided deliberately and once.
+- **OPEN ITEM, and the only one in this class:** the call×catch audit of the remaining fs-call
+  sites. `gate_check.py`'s 14 are the risky set (ten catches with hardcoded constants);
+  `ledger_check.py`'s 2 are trivial; `gates.py`'s remainder are mostly in functions already
+  audited. **Not mechanical** — step 3 (could any other call under this catch raise?) is
+  judgment, and it is where every defect in this class has hidden. One focused pass.
+- **STOPPING RULE:** close a divergence when something CONSUMES it, or when it is cheap and
+  mechanical; RECORD it when nothing consumes it and closing means reimplementing a runtime's
+  algorithm. Stop auditing when a round **against the same frozen enumeration** produces no CODE
+  defects — only that phrasing terminates.
+- **ACCEPTED, NOT CLOSED** (nothing reads these tails): JSON parser prose at `dispatch.py:305`,
+  regex parser prose at `gates.py:513`, and the dangling-symlink realpath case. The
+  justification is that no code consumes them — NOT that the oracle's tests assert only a prefix.
+- **COVERAGE:** 14 differential rows; only 4 of the 7 suites honour `AD_RUNTIME`
+  (`contract-tests`, `hardening-tests`, `stress-tests` are node-only and cannot exercise the
+  port). Rows 12-14 depend on DIRECTORY permission bits and are gated by their own probe.
+
+---
 
 **gate-check.mjs IS FULLY PORTED (`d12f67f`, 2026-09-07). `PORT_INCOMPLETE_EXIT` IS GONE.**
 `gate_check.py` is 1402 lines covering `gate-check.mjs:27-950`. What backs the word "fully",

@@ -2102,6 +2102,9 @@ def _read_leases_unlocked(root):
     # `open` a caller would otherwise guess: this call sits outside any try, so it propagates to
     # gate_check's "cannot claim leases" catch, which hardcodes open. MEASURED before the fix on
     # a chmod-300 locks directory: node `..., scandir '<locks>'` against the port's `..., open`.
+    # ONE CONSTANT IS SOUND HERE, unlike realpath, and that was checked rather than assumed --
+    # the realpath bug WAS one errno generalized to a whole call. readdirSync reports `scandir`
+    # for EACCES, ENOTDIR and ENOENT alike, and CPython names the same path in all three.
     for name in sorted(_node_call("scandir", os.listdir, directory), key=js_sort_key):
         if not name.endswith(".lease"):
             continue
