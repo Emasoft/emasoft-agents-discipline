@@ -819,6 +819,15 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
 - **ACCEPTED, NOT CLOSED** (nothing reads these tails): JSON parser prose at `dispatch.py:305`,
   regex parser prose at `gates.py:513`, and the dangling-symlink realpath case. The
   justification is that no code consumes them — NOT that the oracle's tests assert only a prefix.
+- **WHAT "GREEN" MEANS HERE, stated once because every commit claims it.** `npm test` is a
+  single `&&` chain of NINE commands (`run-tests, dispatch-tests, hardening-tests,
+  stress-tests, lint-tests, contract-tests, self-check, ledger-tests` in node, then
+  `python-lib-checks.py`). So a captured `npm exit=0` is the whole signal: every command ran and
+  every one exited 0, and a failure short-circuits the rest. **Take the exit code, from a
+  redirect — never `$?` after a pipeline** (that reports the LAST stage; an `exit=0` I quoted on
+  2026-09-07 was `grep`'s status, not npm's). A `grep -c '^FAIL'` alongside it adds nothing: the
+  anchor happens to be right — all four node reporters emit line-initial `FAIL `, verified — but
+  it is a second, weaker check on a question the exit code already answers.
 - **COVERAGE:** 14 differential rows; only 4 of the 7 suites honour `AD_RUNTIME`
   (`contract-tests`, `hardening-tests`, `stress-tests` are node-only and cannot exercise the
   port). Rows 12-14 depend on DIRECTORY permission bits and are gated by their own probe.
