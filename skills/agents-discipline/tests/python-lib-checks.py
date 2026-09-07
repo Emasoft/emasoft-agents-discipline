@@ -445,17 +445,30 @@ report(_by.get("localeCompare pairs") != sorted(_by.get("localeCompare pairs", [
        "jsapi: localeCompare really differs from code-point order (vacuity control)",
        str(_by.get("localeCompare pairs")))
 
-# THE CORPUS BOUND, MADE MECHANICAL. Most of the numeric-grammar rows are kept on ground two --
-# js_to_number's docstring NAMES them -- and that ground is only a bound if something checks the
-# naming still holds. Left as prose, a row added with no docstring line reopens the "documentation"
-# ground silently, which is the exact drift the enumeration was written to close.
+# A DRIFT GUARD, AND ONLY THAT -- read the next paragraph before citing it for anything more.
+# It enforces ONE direction: every shape the docstring enumerates has a corpus row. It CANNOT
+# detect the opposite, a corpus row named nowhere, which is the direction an unbounded corpus
+# grows in. Measured at this commit: 65 corpus rows, 31 of them quoted nowhere in js_to_number's
+# docstring. So this check does NOT close the corpus, and the commit that introduced it
+# (aef1856) said it did. What it does buy is real but small: an enumerated shape cannot silently
+# lose its row.
 _gram = re.search(r"THE GRAMMAR THIS ACCEPTS.*?\n(.*?)\n\s*Adding a shape",
                   pathlib.Path(LIB, "jsapi.py").read_text(encoding="utf-8"), re.S)
-_shapes = re.findall(r'"([^"]*)"', _gram.group(1)) if _gram else []
-# The count guard is the vacuity control: a marker rename makes the regex match nothing, and
-# `all()` over an empty list is True -- the check would pass by not looking.
-report(len(_shapes) >= 20, "jsapi: the grammar enumeration was actually found", str(len(_shapes)))
-_unbacked = [s for s in _shapes if "Number(string) " + json.dumps(s) not in _by]
+# Shape lines ONLY -- indented, starting at a quote. The captured region also holds two PROSE
+# lines, and taking every quoted span in it meant one added quotation mark injected a phantom
+# shape that no corpus row could ever back. Restricting to the shape-line shape removes that.
+_shapes = [s for line in (_gram.group(1).splitlines() if _gram else [])
+           if re.match(r'\s+"', line) for s in re.findall(r'"([^"]*)"', line)]
+# The guard catches PARTIAL extraction, which the truthiness test below cannot: a format change
+# that drops most lines leaves a short list that still passes `_shapes and ...`. A marker rename
+# yields the empty list and is caught by the truthiness alone.
+report(len(_shapes) >= 20, "jsapi: the grammar enumeration extracted whole", str(len(_shapes)))
+# ensure_ascii=False, matching jsapi_drive.py:129 EXACTLY. The default escapes non-ASCII where
+# JSON.stringify does not, so the reconstructed label missed every non-ASCII row -- and this
+# check's own docstring block has a "trimmed first" line, so enumerating U+FEFF would have
+# produced a spurious FAIL naming a row whose corpus entry exists. Third occurrence of this trap.
+_unbacked = [s for s in _shapes
+             if "Number(string) " + json.dumps(s, ensure_ascii=False) not in _by]
 report(_shapes and not _unbacked,
        "jsapi: every docstring-enumerated grammar shape has a corpus row", str(_unbacked)[:200])
 completed.append("jsapi")
