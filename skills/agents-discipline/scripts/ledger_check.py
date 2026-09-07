@@ -71,6 +71,27 @@ EXIT_CODE = re.compile(r"exit\s+[0-9]+", re.I)
 # path, and demanding that string exist as a file is nonsense. Only a bare path is a citation.
 CITATION = re.compile(r"`([^`\s]*/[^`\s]*\.[A-Za-z0-9]{1,6})`")
 UNIT_HEADER = re.compile(r"^\*\*unit\s+([0-9]+)" + NOT_WORD_AFTER, re.I)
+# JS `String.prototype.trim()` strips WhiteSpace + LineTerminator, which is NOT Python's
+# `str.strip()` set. Measured across 0..0x10FFFF (surrogates skipped) on 2026-09-07:
+#   JS strips, Python does NOT:  U+FEFF
+#   Python strips, JS does NOT:  U+001C U+001D U+001E U+001F U+0085
+# The divergence runs BOTH WAYS, so "strip more" is not the fix -- the port must strip exactly
+# this set and no other. A ledger saved as UTF-8-with-BOM by a Windows editor put U+FEFF on a
+# Status cell and exited 0 under node, 1 under python3: same bytes, same command, opposite
+# verdicts, and no differential could see it (tests/whitespace-diff.sh now does).
+# SPELLED AS CODE POINTS, never as the characters themselves. Written literally, this constant
+# is a run of invisible glyphs: unreadable in review, and silently destroyed by an editor that
+# trims whitespace or a paste through anything that normalizes. Numbers survive all of that, and
+# they are the only form in which a reader can check the set against the measurement above.
+# Re-derive it by finding, in each runtime, the code points cp where (cp + "x" + cp) trims to "x".
+_JS_TRIM_CODEPOINTS = (
+    0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0, 0x1680,
+    0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
+    0x2008, 0x2009, 0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000,
+    0xFEFF,
+)
+JS_TRIM = "".join(map(chr, _JS_TRIM_CODEPOINTS))
+
 TRAILING_PIPE = re.compile(r"(^|[^\\])\|$")
 SEPARATOR_CELL = re.compile(r"^:?-+:?$")
 RECEIPT_RE = re.compile(r"\n?<!-- agents-discipline-check: [^>]*-->\n?")
@@ -139,7 +160,7 @@ for i in range(header_idx + 1, len(lines)):
     # the ESCAPED one silently dropped a last cell ending in `\|` -- and since the header used
     # the same wrong test, the two agreed and no malformed error fired. The column vanished.
     parts = line.replace("\\|", "\0").split("|")
-    cells = [c.strip().replace("\0", "|") for c in parts[1:(-1 if TRAILING_PIPE.search(line) else None)]]
+    cells = [c.strip(JS_TRIM).replace("\0", "|") for c in parts[1:(-1 if TRAILING_PIPE.search(line) else None)]]
     # Separator row: every cell is dashes and/or colons (`---`, `:--`, `:--:`, `--:`).
     if all(c == "" or SEPARATOR_CELL.match(c) for c in cells):
         continue
