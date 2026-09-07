@@ -102,6 +102,42 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > sequel. The rule this yields: **a mutation result you did not personally observe is a
 > quotation, and must be attributed as one, never restated as a measurement.**
 >
+> **⚠ THE REVIEW LOOP WENT SELF-SUSTAINING, AND THE COUNT IS THE ARGUMENT (2026-09-07).**
+> Of the ten commits `b525af2`..`33a3b3a`, exactly **ONE** advanced a ported script's behaviour
+> — `7bcace8` (Number() accepting Unicode digits and PEP-515 underscores). One was a
+> recoverability checkpoint. **The other eight were the test harness, its comments, and the
+> rules governing corpus rows** — each commit's prose generating the next commit's findings.
+> Meanwhile `gate_check.py` sits at **333 of the oracle's 950 lines**, unmoved since the
+> argument front end landed.
+>
+> Every one of those eight fixed something real, which is exactly why this is worth writing
+> down: **a review loop that keeps finding true defects is not thereby earning its cost.** The
+> defects it found were in prose I had written to explain the previous defect. The signal to
+> watch is not "are the findings valid" but "is the artifact under repair the deliverable" —
+> and for eight commits it was not.
+>
+> **The rule: after a review round, the next action is the TASK unless the finding blocks it.**
+> A harness defect blocks the task (a control that lies invalidates every verdict built on it —
+> `5685e33` genuinely blocked). A comment that overstates its own bound does not. Delegate the
+> port forward and let the review round land against work that moved it.
+>
+> **THE GENERATIVE MECHANISM, named so it can be recognised early: PROSE ASSERTING A PROPERTY IS
+> THE LOOP'S FUEL.** Each commit wrote a sentence claiming something; the next review found the
+> sentence outran its evidence; the correction wrote new sentences. So: **assert only what a
+> check enforces.** Put reasoning in this TRDD once, not in every file it touches. And batch
+> reviews — one per unit of PORT progress, not one per turn, or the gate reviews a body of work
+> that exists only because the gate reviewed the last one.
+>
+> Two claims from that chain, corrected rather than left standing:
+> - `33a3b3a` said a trailing flag "previously would have aborted grep" — inference at the
+>   time, **now measured**: `grep -sqE … file --verbose` exits **2** on this box (the grep here
+>   is `ugrep`), so guard −1 would indeed have reported PROBE FAILED on a good runner.
+> - `33a3b3a` said the third ground "now terminates". **Overstated** — termination is a property
+>   of an ENFORCED rule, and the grandfathering bound is a comment nothing checks, resting on
+>   the same author discipline as the "cost" position it replaced. Its gain is LEGIBILITY (a
+>   stated stopping condition a future reader can point at), not enforcement. The unnamed-row
+>   ratchet is what an enforced version looks like; this has no equivalent.
+>
 > **⚠ `mutate-probe.sh` ITSELF HAD A FALSE NEGATIVE AND A FALSE POSITIVE (2026-09-07). SCOPE,
 > MEASURED — my first statement of the blast radius was wrong in BOTH directions.**
 > - **FALSE NEGATIVE** — the verdict greps stdout for `^DIVERGE`, and the runner is arbitrary
