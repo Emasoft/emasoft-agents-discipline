@@ -70,7 +70,6 @@ EXIT_CODE = re.compile(r"exit\s+[0-9]+", re.I)
 # NO WHITESPACE in the span: `node test/run-tests.mjs` is a COMMAND that happens to name a
 # path, and demanding that string exist as a file is nonsense. Only a bare path is a citation.
 CITATION = re.compile(r"`([^`\s]*/[^`\s]*\.[A-Za-z0-9]{1,6})`")
-UNIT_HEADER = re.compile(r"^\*\*unit\s+([0-9]+)" + NOT_WORD_AFTER, re.I)
 # JS `String.prototype.trim()` strips WhiteSpace + LineTerminator, which is NOT Python's
 # `str.strip()` set. Measured across 0..0x10FFFF (surrogates skipped) on 2026-09-07:
 #   JS strips, Python does NOT:  U+FEFF
@@ -91,6 +90,17 @@ _JS_TRIM_CODEPOINTS = (
     0xFEFF,
 )
 JS_TRIM = "".join(map(chr, _JS_TRIM_CODEPOINTS))
+
+# The SAME set spelled as a character class, because ECMAScript defines `\s` as exactly the
+# WhiteSpace + LineTerminator that `trim()` strips -- so one constant serves both, and the two
+# cannot drift apart. Python's `\s` is NOT that set (see the divergence table above), so any
+# ported pattern whose JS original wrote `\s` must write THIS instead.
+# Measured 2026-09-07, and this is the defect that motivated it: with `\s+` here, the evidence
+# line `**Unit<U+FEFF>1 --** the endpoint was retired.` opened a block under node and opened
+# NOTHING under python3, so the abandoned-row marker stayed silent in the oracle and FIRED in
+# the port. Same bytes, opposite output, no test covering it.
+JS_WS_CLASS = "[" + "".join(map(re.escape, JS_TRIM)) + "]"
+UNIT_HEADER = re.compile(r"^\*\*unit" + JS_WS_CLASS + r"+([0-9]+)" + NOT_WORD_AFTER, re.I)
 
 TRAILING_PIPE = re.compile(r"(^|[^\\])\|$")
 SEPARATOR_CELL = re.compile(r"^:?-+:?$")
