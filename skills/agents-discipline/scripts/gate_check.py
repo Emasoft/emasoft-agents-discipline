@@ -851,12 +851,23 @@ def main(argv):
                 continue
             try:
                 record_approval(task["file"], task["gate"])
-                # FAITHFUL TO AN ORACLE QUIRK, DELIBERATELY NOT "FIXED". gate-check.mjs:762 is
+                # THE RE-CALL IS A SECURITY RE-VALIDATION, WHICH IS WHY IT MUST STAY.
+                # gate-check.mjs:762 is
                 #     approvalPath(task.file, task.gate, validatedApprovalDir().path)
-                # -- `create` defaults to false, so if the approval directory vanished between
-                # record_approval creating it and this line, the oracle dereferences null and
-                # throws, and the catch below turns that into an approvalInfrastructureFailures
-                # bump. cast() keeps the deref so the port does the same.
+                # and validatedApprovalDir re-runs lstat + assertPrivateApprovalEntry +
+                # realpath + the pathIsInside repo-root check. assertPrivateApprovalEntry THROWS
+                # on a symlink, on wrong ownership, and on any group/other permission bit. So a
+                # directory that became world-writable between record_approval's write and this
+                # line is caught HERE. Passing record_approval's already-validated `store` would
+                # be tidier, would silence the type checker without a cast, and would SKIP that
+                # re-check -- a real security divergence, not a stylistic one.
+                #
+                # The null-deref below is a side effect of keeping that re-call, not the reason
+                # for it: `create` defaults to false, so if the directory vanished entirely the
+                # oracle dereferences null and the catch turns it into an
+                # approvalInfrastructureFailures bump. cast() keeps that shape. An earlier
+                # version of this comment led with the deref, which reads like rationalising a
+                # bug; the re-validation is the actual argument and it makes the choice obvious.
                 #
                 # WHAT IS FAITHFUL, PRECISELY -- an earlier version of this comment said the two
                 # "crash identically", and MEASURED that is too strong:
