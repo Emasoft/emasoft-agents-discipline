@@ -4,12 +4,18 @@
 Port of gate-check.mjs. The JavaScript suite is the ORACLE: it is held FIXED and only this
 implementation varies, so any divergence is a porting defect and never a re-specified test.
 
-PARTIAL PORT -- THE ARGUMENT FRONT END ONLY, gate-check.mjs:27-179.
+PARTIAL PORT -- THE ARGUMENT FRONT END, TARGET DISCOVERY, LEDGER-EXISTENCE CHECKS, AND THE
+--list-scopes/--log/--claim/--release ACTIONS, gate-check.mjs:27-295.
 
-The boundary is not arbitrary. It ends exactly where `asDirectory(defaultCwd, "--cwd")` ends
-(:179) and target discovery begins (:181), because that is the last point reachable without a
-ledger, a shell, or approval storage -- so every behaviour below can be driven black-box by
-running the program and reading its exit code and stderr, with no fixture at all.
+The boundary now ends exactly where the `--claim`/`--release` action block's closing brace
+ends (:295) and `let ledgers = target.files.map(loadLedger)` begins the un-ported default run
+mode (:297), because :295 is the last point every REACHABLE branch of this file resolves to a
+real exit on its own -- the default run mode (loading every ledger, resolving a shell,
+executing CHECKs) is the only remaining branch, and it needs a resolved command shell and PATH
+inspection this port does not yet have. Every behaviour up to :295 can still be driven
+black-box by running the program and reading its exit code, stdout, and stderr, given only a
+filesystem fixture (an `.agents-discipline/` tree, a lock directory, and/or ledger files) and
+no shell or approval storage at all.
 
 Anything past that boundary exits PORT_INCOMPLETE_EXIT (90) with a message naming the stop.
 That is deliberate and load-bearing: a partial port that fell through to a silent success
@@ -58,9 +64,14 @@ import os
 import re
 import stat as _stat
 import sys
+import typing
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from gates import js_resolve  # noqa: E402  # type: ignore[import-not-found]
+from gates import (  # noqa: E402  # type: ignore[import-not-found]
+    AGENTS_DISCIPLINE_DIR, claim_leases, js_resolve, list_scopes, parse_gates,
+    read_stable_regular_file, release_leases, resolve_target, append_status,
+    validate_scope_id,
+)
 from jsapi import js_to_number  # noqa: E402  # type: ignore[import-not-found]
 
 # Only the first line differs from the oracle's HELP; a program names itself in its own usage
@@ -104,6 +115,10 @@ VALUE_OPTIONS = {
     "--log", "--shell",
 }
 DEFAULT_TIMEOUT_SECONDS = 120
+# gate-check.mjs:67, a local constant the oracle never exports from lib/gates.mjs -- kept
+# local here too rather than promoted into gates.py, so this file's constants mirror exactly
+# what the oracle declares at its own top level.
+MAX_GATE_LEDGER_BYTES = 8 * 1024 * 1024
 
 # Exit code for "this vector reached un-ported territory". NOT an oracle exit code (0/1/2/3),
 # so it can never be mistaken for agreement -- see the module docstring.
@@ -209,8 +224,16 @@ def parse_args(argv):
     return {"options": options, "files": files}
 
 
-def fail_usage(message):
-    """gate-check.mjs:115-119."""
+def fail_usage(message) -> typing.NoReturn:
+    """gate-check.mjs:115-119.
+
+    NoReturn, same reason as dispatch.py's `_fail`: several callers below (load_ledger's
+    OSError arm, the --claim `selected` lookup) assign the return value of a function that
+    calls fail_usage on one branch and returns a real value on the other. Without this
+    annotation a checker sees every such call as possibly yielding None and flags the
+    downstream `.get`/subscript as an optional-access error, even though fail_usage never
+    falls through at runtime.
+    """
     error("gate-check: " + message)
     error("run gate-check.mjs --help for usage")
     sys.exit(2)
@@ -321,11 +344,146 @@ def main(argv):
     if not action and not opt.get("status"):
         as_directory(default_cwd, "--cwd")
 
-    # THE PORT STOPS HERE -- gate-check.mjs:181 begins target discovery. Loud on purpose: see
-    # the module docstring on why a silent fall-through would let a differential agree on a
-    # vector nothing implemented.
-    error("gate_check.py: PORT INCOMPLETE -- argument handling ends at gate-check.mjs:179; "
-          "target discovery and everything after it is not ported yet")
+    if action == "--list-scopes":
+        scopes = list_scopes(root)
+        if scopes:
+            for scope_name in scopes:
+                log(scope_name)
+        else:
+            log("(no pipelines under " + AGENTS_DISCIPLINE_DIR + "/)")
+        sys.exit(0)
+
+    if opt.get("scope"):
+        scope_error = validate_scope_id(opt["scope"])
+        if scope_error:
+            fail_usage(scope_error)
+
+    target = resolve_target({"root": root, "scope": opt.get("scope"), "files": file_args})
+    # A deleted/crashed pipeline can leave coordination leases behind after its ledger
+    # directory is gone. An explicit, validated release target must remain usable for that
+    # recovery path; claims still require a live exact ledger.
+    if target.get("error") and action == "--release" and opt.get("scope"):
+        target = {"mode": "scope", "scope": opt["scope"], "files": []}
+    elif target.get("error"):
+        fail_usage(target["error"])
+    scope = target.get("scope")
+
+    if action == "--log":
+        if not scope:
+            fail_usage("--log needs --scope ID or exactly one discoverable pipeline")
+        if not str(opt.get("log")).strip():
+            fail_usage("--log needs non-blank text")
+        try:
+            path = append_status(root, scope, opt["log"])
+            log("appended to " + path)
+            sys.exit(0)
+        except OSError as exc:
+            error("gate-check: cannot append status: " + str(exc))
+            sys.exit(2)
+
+    if target.get("discoveryErrors") and action != "--release":
+        fail_usage("; ".join(target["discoveryErrors"]))
+
+    if not target["files"] and action != "--release":
+        fail_usage("no gate files found (looked for " + AGENTS_DISCIPLINE_DIR
+                   + "/<scope>/, then GATES.md and gates/*.md under " + root + ")")
+
+    def read_ledger_file(file):
+        # `...(mode === "explicit" ? {} : { root })`: root is passed ONLY when the ledger came
+        # from discovery, never for an explicit file argument -- the oracle lets an explicit
+        # file live anywhere, discovery results are pinned to have come from under root.
+        return read_stable_regular_file(
+            file, max_bytes=MAX_GATE_LEDGER_BYTES, label="gate ledger",
+            root=None if target["mode"] == "explicit" else root)
+
+    for file in target["files"]:
+        try:
+            read_ledger_file(file)
+        except OSError as exc:
+            if exc.errno == _errno.ENOENT:
+                fail_usage("no such gate file: " + file)
+            fail_usage("cannot inspect gate file " + file + ": " + str(exc))
+
+    def load_ledger(file):
+        try:
+            text = read_ledger_file(file)
+        except OSError as exc:
+            fail_usage("cannot read " + file + ": " + str(exc))
+        doc = parse_gates(text)
+        for warning in doc["warnings"]:
+            error("gate-check: " + file + ": warning: " + warning)
+        if doc["errors"]:
+            for doc_error in doc["errors"]:
+                error("gate-check: " + file + ": " + doc_error)
+            sys.exit(2)
+        return {"file": file, "doc": doc}
+
+    if action == "--claim" or action == "--release":
+        if not scope:
+            fail_usage(action + " needs --scope ID or exactly one discoverable pipeline")
+        stems = [re.sub(r"\.md\Z", "", os.path.basename(f), flags=re.IGNORECASE)
+                 for f in target["files"]]
+        if opt.get("leaf"):
+            leaf_error = validate_scope_id(opt["leaf"], "leaf")
+            if leaf_error:
+                fail_usage(leaf_error)
+            if stems and opt["leaf"] not in stems:
+                fail_usage("unknown --leaf " + opt["leaf"] + " (have: " + ", ".join(stems) + ")")
+        if action == "--release":
+            try:
+                count = release_leases(root, {"scope": scope, "leaf": opt.get("leaf") or None})
+                log("released " + str(count) + " lease(s) for " + scope
+                    + (("/" + opt["leaf"]) if opt.get("leaf") else ""))
+                sys.exit(0)
+            except OSError as exc:
+                error("gate-check: cannot release leases: " + str(exc))
+                sys.exit(2)
+
+        leaf = opt.get("leaf") or (stems[0] if len(stems) == 1 else None)
+        if not leaf:
+            fail_usage("--claim needs --leaf NAME when a scope has several gate files")
+        selected_file = next(
+            (f for f in target["files"]
+             if re.sub(r"\.md\Z", "", os.path.basename(f), flags=re.IGNORECASE) == leaf),
+            None)
+        selected = load_ledger(selected_file)
+        if not selected["doc"]["owns"]:
+            fail_usage(os.path.basename(selected["file"]) + " declares no OWNS paths")
+        try:
+            result = claim_leases(
+                root, {"scope": scope, "leaf": leaf, "globs": selected["doc"]["owns"]})
+        except OSError as exc:
+            error("gate-check: cannot claim leases: " + str(exc))
+            sys.exit(2)
+        if not result.get("ok"):
+            if result.get("error"):
+                fail_usage(result["error"])
+            for conflict in result["conflicts"]:
+                if conflict.get("identity"):
+                    log("CONFLICT " + conflict["with"]
+                        + " already holds a live lease; release it before claiming again")
+                else:
+                    log("CONFLICT " + conflict["glob"] + " overlaps " + conflict["theirGlob"]
+                        + " held by " + conflict["with"])
+            log("CLAIM REFUSED (" + str(len(result["conflicts"])) + " conflict(s))")
+            sys.exit(3)
+        log("CLAIMED " + str(len(result["globs"])) + " path(s) for " + scope + "/" + leaf
+            + ": " + ", ".join(result["globs"]))
+        sys.exit(0)
+
+    # THE PORT STOPS HERE -- gate-check.mjs:297 (`ledgers = target.files.map(loadLedger)`,
+    # the entry into the default run-mode) begins the CHECK-execution shell/PATH plumbing
+    # (executableCandidates/resolveShell at :299) and everything after it. The boundary sits
+    # BEFORE that line rather than after it -- even though load_ledger above is fully ported
+    # and used by --claim -- so the sentinel lands exactly at the last action this file's own
+    # branches fully resolve (--list-scopes/--log/--claim/--release all reach a real exit
+    # above), instead of one line into a batch load whose only consumer is the un-ported run
+    # loop. Loud on purpose: see the module docstring on why a silent fall-through would let a
+    # differential agree on a vector nothing implemented.
+    error("gate_check.py: PORT INCOMPLETE -- argument handling, target/ledger resolution, and "
+          "the --list-scopes/--log/--claim/--release actions end at gate-check.mjs:295; the "
+          "default run mode (loading every ledger, resolving a shell, executing CHECKs) is "
+          "not ported yet")
     sys.exit(PORT_INCOMPLETE_EXIT)
 
 

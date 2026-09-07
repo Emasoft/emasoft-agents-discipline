@@ -38,8 +38,71 @@ if (ok !== 4 || conflicted !== 8 || released !== 2) {
   console.error(`VACUOUS: ok=${ok} conflicted=${conflicted} released=${released}`);
   process.exit(1);
 }' || { echo "VACUOUS lease sequence"; exit 1; }
+status=0
 if diff -q /tmp/lease-js.json /tmp/lease-py.json >/dev/null; then
-  echo "OK      lease sequence (22 steps)"; echo "--- all identical ---"; exit 0
+  echo "OK      lease sequence (22 steps)"
+else
+  echo "DIVERGE lease sequence"; diff /tmp/lease-js.json /tmp/lease-py.json | head -20
+  status=1
 fi
-echo "DIVERGE lease sequence"; diff /tmp/lease-js.json /tmp/lease-py.json | head -20
-echo "--- DIVERGENCES ABOVE ---"; exit 1
+
+# --- CLI-level differential for gate_check.py's --claim/--release ACTION WIRING itself
+# (gate-check.mjs:251-295), which the sequence above never exercises: lease_drive.py/mjs call
+# claim_leases/release_leases DIRECTLY, bypassing gate_check.py entirely -- a bug in argv
+# handling, stems-from-filename, OWNS extraction from a real ledger, or the CONFLICT/CLAIMED/
+# "released N lease(s)" message text would be invisible to it. Two FRESH roots (one per
+# runtime), never one shared root: a lock file records a pid, so replaying the identical
+# sequence against ONE root would make the second runtime's claim collide with the first
+# runtime's still-live lease and manufacture a CONFLICT that has nothing to do with either
+# implementation being wrong.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ORACLE="$HERE/../scripts/gate-check.mjs"
+PORT="$HERE/../scripts/gate_check.py"
+LEDGER='# Gates
+
+OWNS: src/**
+
+- [ ] G1: x
+  CHECK: true
+  EXPECT: ok
+'
+cli_root() {
+  # `.agents-discipline/s/leaf.md`, NOT a bare `gates/leaf.md` -- resolveTarget only honors
+  # legacy `gates/*.md` discovery when NO --scope is given. The CLI sequence below always
+  # passes `--scope s`, so a ledger anywhere else makes every claim fail at "no such scope"
+  # BEFORE it ever reaches the ported --claim/--release code this section exists to exercise.
+  # MEASURED: the first draft used `gates/leaf.md` and both claim calls failed identically on
+  # "no such scope", so the section reported OK while testing nothing past resolve_target.
+  # _scope_discovery (gates.py) only looks at `<scope>/GATES.md` and `<scope>/gates/*.md` --
+  # a bare `<scope>/leaf.md` is invisible to it and silently falls through to "no gate files
+  # found", which is what the first two drafts of this fixture did.
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/.agents-discipline/s/gates"
+  printf '%s' "$LEDGER" > "$root/.agents-discipline/s/gates/leaf.md"
+  printf '%s' "$root"
+}
+# Scrubs the root's own path out of the transcript so two DIFFERENT tmp roots compare equal.
+cli_scrub() { sed "s|$1|<R>|g"; }
+
+cli_sequence() {  # interpreter script root
+  local interpreter="$1" script="$2" root="$3"
+  { "$interpreter" "$script" --root "$root" --claim --scope s; echo "exit=$?"
+    "$interpreter" "$script" --root "$root" --claim --scope s; echo "exit=$?"  # CONFLICT
+    "$interpreter" "$script" --root "$root" --release --scope s; echo "exit=$?"
+    "$interpreter" "$script" --root "$root" --release --scope s; echo "exit=$?"
+  } 2>&1 | cli_scrub "$root"
+}
+js_root=$(cli_root); py_root=$(cli_root)
+js_cli="$(cli_sequence node "$ORACLE" "$js_root")"
+py_cli="$(cli_sequence python3 "$PORT" "$py_root")"
+if [ "$js_cli" = "$py_cli" ]; then
+  echo "OK      lease CLI wiring (claim, conflict, release, no-op release)"
+else
+  echo "DIVERGE lease CLI wiring"
+  diff <(printf '%s\n' "$js_cli") <(printf '%s\n' "$py_cli")
+  status=1
+fi
+rm -rf "$js_root" "$py_root"
+
+if [ "$status" = 0 ]; then echo "--- all identical ---"; else echo "--- DIVERGENCES ABOVE ---"; fi
+exit "$status"

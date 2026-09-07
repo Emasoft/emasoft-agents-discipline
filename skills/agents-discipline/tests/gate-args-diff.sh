@@ -26,6 +26,14 @@
 # The accept half is not decoration: without it every vector could be rejected by the port for
 # the wrong reason and the suite would still be green.
 #
+# DIVERGE LINES START AT COLUMN 0, unlike every other verdict word here (MISSED/REJECTED/
+# CRASH/REGRESSED all keep their 2-space indent). tests/mutate-probe.sh's catch verdict is
+# `grep -cE '^DIVERGE'` over this file's own stdout -- anchored, not just containing the word --
+# so an indented "  DIVERGE" is invisible to it. MEASURED: with the indent still in place, a
+# mutation independently confirmed by hand to redden "list-scopes with one pipeline" scored
+# NOTHING REDDENED every time. Do not re-indent DIVERGE to match its neighbours; that visual
+# tidiness is exactly what silently disables every mutation probe run against this file.
+#
 # CRASH GUARD: a Python traceback is reported as CRASH, never as DIVERGE. Every ad-hoc control
 # loop written earlier in this port branched on an exit code alone, under which an import error
 # reads as a genuine catch -- the defect that once scored a syntax error as nine catches.
@@ -44,6 +52,9 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/empty"
 : > "$WORK/afile"
+# A discoverable pipeline (no ledger files needed -- list_scopes/resolveTarget/--log only need
+# the SCOPE directory itself to exist and validate).
+mkdir -p "$WORK/scoped/.agents-discipline/onescope"
 
 pass=0; fail=0; crash=0
 declare -a FAILED=()
@@ -78,7 +89,7 @@ reject_case() {
     pass=$((pass + 1)); return
   fi
   fail=$((fail + 1)); FAILED+=("$label")
-  printf '  DIVERGE  %-42s exit %s/%s\n' "$label" "$o_code" "$p_code"
+  printf 'DIVERGE  %-42s exit %s/%s\n' "$label" "$o_code" "$p_code"
   [ "$o_out" != "$p_out" ] && { printf '    stdout oracle: %q\n' "$o_out"
                                 printf '    stdout port  : %q\n' "$p_out"; }
   [ "$o_err" != "$p_err" ] && { printf '    stderr oracle: %q\n' "$o_err"
@@ -97,9 +108,37 @@ accept_case() {
     fail=$((fail + 1)); FAILED+=("$label"); return
   fi
   if [ "$p_code" = 90 ]; then pass=$((pass + 1)); return; fi
-  printf '  DIVERGE  %-42s port did not clear the argument layer (exit %s)\n' "$label" "$p_code"
+  printf 'DIVERGE  %-42s port did not clear the argument layer (exit %s)\n' "$label" "$p_code"
   printf '    port  : %s\n' "$(printf '%s' "$p_err" | head -1)"
   fail=$((fail + 1)); FAILED+=("$label")
+  return 0
+}
+
+# The target-discovery / ledger-resolution port (gate-check.mjs:181-297) made several former
+# accept_case vectors fully comparable past the argument layer: both programs now run all the
+# way to a deterministic exit, so "the port reached 90" is no longer the right assertion --
+# 90 would be a REGRESSION (it would mean this newly-ported code stopped running). full_case
+# asserts byte-identical (exit, stdout, stderr) like reject_case, but names the failure for
+# what it now means: the port fell BACK to the porting boundary on code that used to run.
+full_case() {
+  local label="$1"; shift
+  local o_out o_err o_code p_out p_err p_code
+  _both "$@"
+  _crashed "$label" && return
+  if [ "$p_code" = 90 ]; then
+    printf '  REGRESSED %-41s port fell back to the porting boundary; it used to run this\n' "$label"
+    printf '    oracle: %s\n' "$(printf '%s' "$o_err" | head -1)"
+    fail=$((fail + 1)); FAILED+=("$label"); return
+  fi
+  if [ "$o_code" = "$p_code" ] && [ "$o_out" = "$p_out" ] && [ "$o_err" = "$p_err" ]; then
+    pass=$((pass + 1)); return
+  fi
+  fail=$((fail + 1)); FAILED+=("$label")
+  printf 'DIVERGE  %-42s exit %s/%s\n' "$label" "$o_code" "$p_code"
+  [ "$o_out" != "$p_out" ] && { printf '    stdout oracle: %q\n' "$o_out"
+                                printf '    stdout port  : %q\n' "$p_out"; }
+  [ "$o_err" != "$p_err" ] && { printf '    stderr oracle: %q\n' "$o_err"
+                                printf '    stderr port  : %q\n' "$p_err"; }
   return 0
 }
 
@@ -119,7 +158,7 @@ help_case() {
      && [ "$(printf '%s' "$p_out" | head -1)" = "usage: gate_check.py [options] [file ...]" ]; then
     pass=$((pass + 1)); return
   fi
-  printf '  DIVERGE  %-42s help body differs (exit %s/%s)\n' "$label" "$o_code" "$p_code"
+  printf 'DIVERGE  %-42s help body differs (exit %s/%s)\n' "$label" "$o_code" "$p_code"
   diff <(printf '%s\n' "$o_rest") <(printf '%s\n' "$p_rest") | head -10
   fail=$((fail + 1)); FAILED+=("$label")
   return 0
@@ -212,22 +251,27 @@ reject_case "root under a file (ENOTDIR)"  --root "$WORK/afile/sub"
 echo "-- ACCEPT: the argument layer must pass these through --"
 
 # Number() accepts shapes float() rejects and vice versa; each of these must be ACCEPTED.
-accept_case "timeout hex"                  --timeout 0x10 --root "$WORK/empty"
-accept_case "timeout float-integral"       --timeout 5.0 --root "$WORK/empty"
-accept_case "timeout exponent"             --timeout 1e3 --root "$WORK/empty"
-accept_case "timeout at range top"         --timeout 86400 --root "$WORK/empty"
-accept_case "timeout at range bottom"      --timeout 1 --root "$WORK/empty"
-accept_case "timeout whitespace-padded"    --timeout "  12  " --root "$WORK/empty"
-accept_case "jobs hex"                     --jobs 0x4 --root "$WORK/empty"
-accept_case "jobs at range top"            --jobs 64 --root "$WORK/empty"
+full_case "timeout hex"                  --timeout 0x10 --root "$WORK/empty"
+full_case "timeout float-integral"       --timeout 5.0 --root "$WORK/empty"
+full_case "timeout exponent"             --timeout 1e3 --root "$WORK/empty"
+full_case "timeout at range top"         --timeout 86400 --root "$WORK/empty"
+full_case "timeout at range bottom"      --timeout 1 --root "$WORK/empty"
+full_case "timeout whitespace-padded"    --timeout "  12  " --root "$WORK/empty"
+full_case "jobs hex"                     --jobs 0x4 --root "$WORK/empty"
+full_case "jobs at range top"            --jobs 64 --root "$WORK/empty"
 # `--` and a value that looks like a flag: both are accepted by parse_args, and the failure
 # comes later. The oracle proves that by naming a FILE or a SCOPE in its message, not an option.
-accept_case "-- makes a dashed file"       -- --status
-accept_case "-- twice"                     -- -- --status
-accept_case "value that looks like a flag" --scope --status
-accept_case "= inside the value"           --log=a=b --scope s
-accept_case "plain file argument"          somefile.md
-accept_case "no arguments at all"          --root "$WORK/empty"
+full_case "-- makes a dashed file"       -- --status
+full_case "-- twice"                     -- -- --status
+full_case "value that looks like a flag" --scope --status
+full_case "= inside the value"           --log=a=b --scope s
+full_case "plain file argument"          somefile.md
+full_case "no arguments at all"          --root "$WORK/empty"
+# The two rows above never reach a REAL scope: every one fails discovery or a ledger lookup
+# before --list-scopes/--log's own success bodies run. These two are what a mutation in
+# list_scopes' log loop or append_status's success message would actually have to survive.
+full_case "list-scopes with one pipeline" --list-scopes --root "$WORK/scoped"
+full_case "log appends to a discovered scope" --log "hello world" --root "$WORK/scoped"
 
 printf '\n  %d pass  %d fail  %d crash\n' "$pass" "$fail" "$crash"
 if [ "$crash" -gt 0 ] || [ "$fail" -gt 0 ]; then

@@ -139,6 +139,18 @@ baseline_out=$(cat "$backup.baseline")
 # The fix is to count the baseline's own DIVERGE lines and report the DELTA. Exit status is a
 # summary the runner is free to define; the lines are the measurement.
 baseline_diverged=$(printf '%s\n' "$baseline_out" | grep -cE '^DIVERGE')
+# AN INDENTED "  DIVERGE" IS INVISIBLE TO THE ANCHORED VERDICT GREP, and guard -1 cannot see it:
+# that guard reads the runner's SOURCE for the token, and `printf '  DIVERGE ...'` contains it
+# perfectly well. gate-args-diff.sh printed exactly that -- so every probe ever run against it
+# reported NOTHING REDDENED no matter what was mutated, and the seven-runner acceptance sweep
+# read that vacuity as "the mutation does not reach this runner". Source emission is not
+# column-0 emission; only the OUTPUT can answer it.
+if printf '%s\n' "$baseline_out" | grep -qE '^[[:space:]]+DIVERGE'; then
+  echo "$label -> PROBE FAILED (runner prints INDENTED DIVERGE lines; the verdict grep is"
+  echo "    anchored at column 0, so they are invisible and every verdict would be a false"
+  echo "    NOTHING REDDENED. Fix the runner to print DIVERGE at column 0.)"
+  exit 1
+fi
 # A success-marker grep ("--- all identical ---") sat here and was REMOVED. Both runners print
 # that banner IFF they exit 0, so it was exactly redundant with the check above; its only
 # effect that was not redundant was rejecting any OTHER differential runner, and the realistic
