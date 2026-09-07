@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T05:49:00+0200
+updated: 2026-09-07T05:59:27+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -100,6 +100,35 @@ cause, named precisely. My ARM-1 grep pattern (`UnicodeEncodeError|Traceback|APP
 did not match `codec can't encode`, and I reported the gap in my pattern as a property of the
 program. What IS true and narrower: the EXIT CODE is non-discriminating (90 in both arms) and the
 approval file simply does not appear, so anything reading only the exit status sees nothing wrong.
+
+**WHAT THE THREE `typing.cast` CALLS IN `gate_check.py` ARE ACTUALLY WORTH (2026-09-07).** They
+are not equivalent, and lumping them together as "seven benign type errors" hid that:
+- `:623` (inside `validated_approval_dir`) — **MEASURED SAFE.** Contiguous read of `:798-830`
+  plus the first-ever `--status` run of the PORT: `pending=0 approval_infra_failures=0`, while
+  the same ledger under `--reverify` reaches the CWD stat. The falsifiable prediction (a missing
+  guard leaves `pending` non-empty, hits `os.path.exists(None)`, bumps the counter per gate) is
+  refuted by both counters being 0.
+- `:709` — **PROVABLY SAFE.** `create=True` makes the `return None` arm unreachable.
+- `:845` — **UNFALSIFIED, and it should be recorded as such.** `create` defaults to False, so
+  `None` is reachable in principle via a TOCTOU race (the directory vanishing between
+  `record_approval`'s write and the log line) and **no test arranges it.** The oracle has the
+  identical hole at `:762`. So this cast asserts away a risk nothing exercises — faithful, but
+  unfalsified is not the same as verified, and a green suite says nothing about it.
+
+**The `:627` `return None` arm IS exercised, contrary to a review finding.** `approval_exists`
+calls `validated_approval_dir()` with `create=False` and handles the result explicitly
+(`if not store: return False`), which happens on every fresh approval directory — i.e. CASE 1 of
+every `approval-diff.sh` run. That call site needed no cast and correctly got none.
+
+**A FALSE CLAIM ABOUT MY OWN PROCESS, corrected.** I told the user the `row`-indentation coverage
+question was "asked of the replacement BEFORE relying on it rather than after". The real ordering
+was `^-row ` → commit `03f2e84` → commit `bea5244` (whose whole lesson rested on it) → *then* the
+coverage check. It was asked twice AFTER the conclusion had been banked. What is true is only
+that it preceded the NEXT commit. A claim about having followed a process is exactly as checkable
+as a claim about code, and this one was not checked before being made.
+(The check itself, done properly on the tree that mattered: `d4a1acc` carries 22 unindented and
+**0** indented `row` lines, so `^-row ` did have full coverage there. Right answer; the first two
+runs of it looked at the CURRENT tree, which could not have answered the question.)
 
 **Every check pairs with a control proving it CAN fail.** A green run is the weakest evidence in
 this project — the recurring defect all session has been an assertion satisfied by something
