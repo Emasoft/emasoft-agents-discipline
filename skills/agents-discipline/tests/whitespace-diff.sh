@@ -48,6 +48,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 pass=0; fail=0
 declare -a FAILED=()
+# The unpadded oracle verdict per writer, recorded by that writer's control and read by its cases.
+# Keyed by writer so the ordering constraint -- every `_control` runs before its own loop -- is
+# checked rather than assumed: `_case` refuses an empty baseline instead of comparing against one.
+declare -A BASE=()
 
 # Every code point is written as EXPLICIT UTF-8 BYTES, never a literal character. A literal would
 # have to survive this file, git, and every editor between here and the runner; encoding-diff.sh
@@ -72,6 +76,37 @@ declare -a CASE_BYTES=(
   '\x1e'
   '\x1f'
   '\xc2\x85'
+)
+
+# What each pad must do to THE ORACLE'S OWN verdict, measured against the same fixture with an
+# empty pad. This is not a second opinion about the port -- it is JS `\s`/`trim()` semantics, the
+# thing every row below exists to protect, asserted directly instead of inferred from agreement.
+#
+# node treats U+FEFF as whitespace, so padding with it is INVISIBLE to the oracle and the verdict
+# must not move. node treats the other five as ORDINARY CHARACTERS, so each must break the parse
+# it lands in and MOVE the verdict. MEASURED, all 18 cells (6 code points x 3 writers), and the
+# split is identical on every surface -- cell, header and evidence-header.
+#
+# WHY THIS EXISTS, and it is a hole the anchor below could not close. The anchor pins the pad to a
+# LINE. Move it WITHIN that line to a position the whitespace class never governs and every check
+# passed: `**Unit 2%s —**` instead of `**Unit %s2 —**` puts the byte after the digit, at a `\b`
+# both runtimes handle identically, and the suite exited 0 with all six evidence-header rows
+# comparing broken-to-broken. Measured, not hypothesized.
+#
+# The discriminating power is the OPPOSITION between row 0 and rows 1-5, and it is why a single
+# expected value would not do. A position where the pad is inert makes all six `same`, so the five
+# fire. A position where every pad breaks the parse makes FEFF `differ`, so row 0 fires. Only a
+# position where FEFF is invisible AND the other five are not can satisfy both -- and that IS the
+# `\s`/`trim()` boundary. A maintainer who reds this suite and "fixes" it by flipping cells to
+# match whatever the oracle now does destroys that opposition and restores the vacuum; the
+# measurement, not the current output, is what these values must be re-derived from.
+declare -a CASE_ORACLE_EFFECT=(
+  same    # U+FEFF -- js trim()/\s strip it; the oracle cannot see the pad at all
+  differ  # U+001C
+  differ  # U+001D
+  differ  # U+001E
+  differ  # U+001F
+  differ  # U+0085
 )
 
 # Writes a one-row ledger whose Status cell is `verified` wrapped in $2 (a printf byte escape,
@@ -178,10 +213,35 @@ _verdict() {
 }
 
 _case() {
-  local name="$1" ws="$2" writer="${3:-_write_ledger}" led o p
+  local name="$1" ws="$2" writer="$3" effect="$4" led o p base
   led="$WORK/$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '-').md"
   "$writer" "$led" "$ws"
   o="$(_verdict node "$led")"
+  # The baseline must EXIST before it is compared against. An unset key here is not a divergence,
+  # it is a missing control -- and comparing against an empty string would pass every `differ`
+  # expectation trivially (any real verdict differs from "") while failing every `same` one, which
+  # is a fresh vacuity of exactly the kind the effect check was added to close.
+  base="${BASE[$writer]-}"
+  if [ -z "$base" ]; then
+    printf 'DIVERGE  %-38s no baseline recorded for %s; its control never ran\n' "$name" "$writer"
+    exit 1
+  fi
+  # `exit 1`, not a counted failure: this asserts the FIXTURE puts the pad somewhere the oracle's
+  # whitespace class governs, which is a statement about this file, not about the port. Letting it
+  # land in the `fail` counter would print it in the same shape as a genuine port divergence and
+  # send the maintainer to the wrong source file.
+  if [ "$effect" = differ ] && [ "$o" = "$base" ]; then
+    printf 'DIVERGE  %-38s pad did not move the oracle; this vector is vacuous\n' "$name"
+    printf '    unpadded: %s\n' "$(printf '%s' "$base" | tr '\n' '|')"
+    printf '    padded  : %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
+    exit 1
+  fi
+  if [ "$effect" = same ] && [ "$o" != "$base" ]; then
+    printf 'DIVERGE  %-38s oracle trims this pad; its verdict must not move\n' "$name"
+    printf '    unpadded: %s\n' "$(printf '%s' "$base" | tr '\n' '|')"
+    printf '    padded  : %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
+    exit 1
+  fi
   p="$(_verdict py "$led")"
   if [ "$o" = "$p" ]; then
     printf '  OK      %-38s identical verdict\n' "$name"
@@ -238,7 +298,7 @@ _case() {
 NON_WS_PAD='\x58'
 
 _control() {
-  local writer="$1" label="$2" anchor="$3" led o p padded po added
+  local writer="$1" label="$2" anchor="$3" led o p padded po added changed nchanged
   led="$WORK/control-$writer.md"
   "$writer" "$led" ''
   o="$(_verdict node "$led")"
@@ -261,6 +321,11 @@ _control() {
     printf '    oracle: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
     exit 1
   fi
+  # The unpadded ORACLE verdict is this writer's baseline, and every one of its cases compares
+  # against it (see CASE_ORACLE_EFFECT). Recorded here rather than recomputed per case because it
+  # is the same six times, and because a case that had to build its own baseline could silently
+  # build a different one.
+  BASE["$writer"]="$o"
   # AND the pad must LAND on this writer's surface. Everything above runs with an EMPTY pad, so
   # without this the control is blind to the one line that makes each writer different from the
   # others -- where it puts `%s`. A dropped `%s`, a stray `%` swallowing it, or a `%b` that failed
@@ -306,11 +371,25 @@ _control() {
   # whenever the files differ -- which is ALWAYS here, that being the point. Piped straight into
   # `grep -q`, the pipeline therefore reports 1 even on a match, and `if !` fires on every writer.
   # Measured: the anchor was correct and the check still failed for all three.
-  added="$(diff "$led" "$padded" || true)"
-  if ! printf '%s' "$added" | grep -qE "^> ${anchor}"; then
+  # `-a`: `diff` goes BINARY-MODE on control characters and then prints "Binary files differ"
+  # instead of any `>` line at all -- and control characters are this suite's entire subject. Today
+  # only the `X` pad reaches here, so binary mode never fires; that is an invariant nobody wrote
+  # down, and it stops holding the moment this check is pointed at a different pad. stderr is
+  # captured with it so a `diff` that fails for some third reason cannot vanish into the void and
+  # leave "no `>` lines" looking like a placement failure.
+  #
+  # EXACTLY ONE changed line, and that is stronger than the regex it accompanies. `\*\*Unit` is
+  # AMBIGUOUS inside `_write_ledger_ev`, which emits two lines starting `**Unit` -- so the regex
+  # alone cannot tell which of them `diff` reported, and a pad that moved from unit 2's header to
+  # unit 1's would satisfy it. Requiring a single changed line removes the ambiguity without
+  # needing a sharper regex per writer.
+  added="$(diff -a "$led" "$padded" 2>&1 || true)"
+  changed="$(printf '%s' "$added" | grep -a '^>' || true)"
+  nchanged="$(printf '%s' "$changed" | grep -ac '^>' || true)"
+  if [ "$nchanged" != 1 ] || ! printf '%s' "$changed" | grep -qE "^> ${anchor}"; then
     printf 'DIVERGE  %-38s pad landed outside this writer surface\n' "$label"
     printf '    anchor  : %s\n' "$anchor"
-    printf '    changed : %s\n' "$(printf '%s' "$added" | grep -a '^>' | tr '\n' '|')"
+    printf '    changed : %s line(s): %s\n' "$nchanged" "$(printf '%s' "$changed" | tr '\n' '|')"
     exit 1
   fi
   printf '  OK      %-38s counts it verified; pad lands on its surface and moves the verdict\n' "$label"
@@ -325,14 +404,14 @@ _control _write_ledger     "control: cell writer"   '\| 1 \|'
 _control _write_ledger_hdr "control: header writer" '\| # \|'
 
 for i in "${!CASE_NAME[@]}"; do
-  _case "cell ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}"
+  _case "cell ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger "${CASE_ORACLE_EFFECT[$i]}"
 done
 
 # The same six code points on the header line. Kept as a separate loop rather than folded into the
 # one above so a failure names which SURFACE diverged -- a header divergence and a cell divergence
 # have different blast radii and would otherwise be indistinguishable in the output.
 for i in "${!CASE_NAME[@]}"; do
-  _case "header ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_hdr
+  _case "header ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_hdr "${CASE_ORACLE_EFFECT[$i]}"
 done
 
 _control _write_ledger_ev "control: evidence-header writer" '\*\*Unit'
@@ -347,7 +426,7 @@ _control _write_ledger_ev "control: evidence-header writer" '\*\*Unit'
 # SILENT in the oracle while FIRING in the port on identical bytes. Fixed by building the class
 # from _JS_TRIM_CODEPOINTS; these six rows are what stops it being transliterated back.
 for i in "${!CASE_NAME[@]}"; do
-  _case "evidence-header ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_ev
+  _case "evidence-header ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_ev "${CASE_ORACLE_EFFECT[$i]}"
 done
 
 echo
