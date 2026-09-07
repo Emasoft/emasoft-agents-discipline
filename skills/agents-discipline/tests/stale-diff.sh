@@ -71,6 +71,12 @@ STALE_MSG="definition or runtime approval oracle changed"
 C3_CHECK='./check.sh'
 C3_CWD_BEFORE='.'
 C3_CWD_AFTER='./'
+# The ROOT NAME is the fourth copy of the same magic string, and hoisting the other three while
+# leaving this one hardcoded in two places would have left the identical desync one level up:
+# _assert_pin said "$WORK/c3" and _case computed "$WORK/$4" from a literal at its call site, so
+# renaming the case's directory would send the premise rows off to certify a path CASE 3 no
+# longer uses -- with all rows still green.
+C3_ROOT='c3'
 
 # The ledger, and the CHECK script it names. The gate is written UNCHECKED so the run has to
 # execute it; --approve records the approval in APPROVALS on the first pass.
@@ -214,27 +220,41 @@ _case() {
 # been measured.
 _assert_pin() {
   local exe="$1" script="$2" dir="$3" want="$4" label="$5" check1="$6" cwd1="$7" check2="$8" cwd2="$9"
-  assertions=$((assertions + 1))
   # THE SAME ROOT CASE 3 USES. The token hashes resolve(file), so a scratch root would measure
   # signature equality for a DIFFERENT file path and attach the conclusion to c3 by inference.
   # _case rebuilds this directory from scratch before its own run, so there is no interference.
-  local root="$WORK/c3" ledger
+  local root="$WORK/$C3_ROOT" ledger
   rm -rf "$root" "$dir"; mkdir -p "$root/.agents-discipline/s/gates" "$dir"; chmod 700 "$dir"
   printf '#!/bin/sh\necho ok\n' > "$root/check.sh"; chmod +x "$root/check.sh"
   ledger="$root/.agents-discipline/s/gates/leaf.md"
   local i
   for i in 1 2; do
-    local c w
+    local c w code
     if [ "$i" = 1 ]; then c="$check1"; w="$cwd1"; else c="$check2"; w="$cwd2"; fi
     printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: %s\n  EXPECT: ok\n  CWD: %s\n' \
       "$c" "$w" > "$ledger"
     AGENTS_DISCIPLINE_APPROVAL_DIR="$dir" \
       "$exe" "$script" --root "$root" --scope s --approve --reverify >/dev/null 2>&1
+    code=$?
+    # THE INVOCATION'S STATUS IS READ, not discarded. Both gates here PASS, so the only correct
+    # exit is 0; a crash on the second call would leave exactly one token behind and the count
+    # would read "1, as required" -- a row reporting success for a run that died. The control
+    # rows would still catch it, but a check whose command's status is never branched on is the
+    # pattern this whole file exists to distrust.
+    if [ "$code" != 0 ]; then
+      printf 'DIVERGE  %-34s approval run %s exited %s, expected 0\n' "$label" "$i" "$code"
+      fail=$((fail + 1)); FAILED+=("$label"); return
+    fi
   done
   local n; n=$(find "$dir" -maxdepth 1 -name '*.json' -type f | wc -l | tr -d ' ')
   if [ "$n" = "$want" ]; then
     printf '  OK      %-34s %s approval token(s), as required\n' "$label" "$n"
-    pass=$((pass + 1)); return
+    # Incremented HERE, beside pass, not on entry. On entry it would count rows that RAN, and
+    # `pass - assertions` would then be correct only because a failure takes the other summary
+    # branch and never reaches the subtraction -- a property of a different branch, not of the
+    # counter. Anyone who later prints one summary line for both outcomes would silently
+    # under-report differentials on exactly the runs being debugged.
+    pass=$((pass + 1)); assertions=$((assertions + 1)); return
   fi
   printf 'DIVERGE  %-34s %s approval token(s), expected %s\n' "$label" "$n" "$want"
   fail=$((fail + 1)); FAILED+=("$label")
@@ -245,6 +265,13 @@ _assert_pin() {
 # would mint 2 tokens where the oracle mints 1, CASE 3 would still pass (both print STALE, for
 # different reasons), and the pin would be certified on the oracle while being false for the
 # port. An oracle-only premise check cannot see that.
+#
+# WHAT THESE ROWS DO NOT SHOW, stated because the wording invites the stronger reading: each row
+# measures respelling-invariance WITHIN one runtime. None compares the two runtimes' token
+# filenames, so a port whose signature diverged from the oracle's outright would still mint
+# exactly 1 token in its own directory and pass here. That property is covered -- by
+# approval-diff.sh, whose whole subject is token agreement across the two -- but it is not
+# covered by these four rows.
 _assert_pin "$NODE_ABS" "$ORACLE" "$WORK/a1" 1 "PREMISE oracle respelling is sig-equal" \
   "$C3_CHECK" "$C3_CWD_BEFORE" "$C3_CHECK" "$C3_CWD_AFTER"
 _assert_pin "$PY_ABS" "$PORT" "$WORK/a2" 1 "PREMISE port respelling is sig-equal" \
