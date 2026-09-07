@@ -22,9 +22,16 @@ That range claim is ENUMERATED, not induced from the codes a few scenarios happe
 -- a bound asserted from observation is exactly the shape this task has had to retract twice.
 Every `process.exit(...)` in gate-check.mjs takes a LITERAL, at :118 :155 :186 :209 :212 :246
 :263 :266 :279 :291 :294 :859 :904 :932 :936 :950, and the set of those literals is {0,1,2,3};
-:856 sets `process.exitCode = 2`, which :859 turns into `exit(2)`. There is no
-`process.exit(<variable>)` site, so nothing computes a code at runtime. Node's own uncaught
--throw exit is 1, already in the set. Re-run that grep if this file's boundary ever moves.
+:856 sets `process.exitCode = 2`, which :859 turns into `exit(2)`. No site in that file computes
+a code at runtime. Node's own uncaught-throw exit is 1, already in the set.
+
+THE SCOPE OF THAT ENUMERATION IS gate-check.mjs ITSELF, and saying so matters, because widening
+the grep to what it imports DOES find both a 127 and a computed code -- `lib/check-supervisor.mjs`
+has `process.exit(127)` and `process.exitCode = code`. Those do not reach the sentinel: the
+supervisor is a SPAWNED CHILD whose status gate-check reads as DATA (:634, :685, :782) and never
+re-raises as its own; all 16 of its own exits take literals. A reader who checks the imports
+would otherwise find the 127 and reasonably conclude this enumeration was careless. Re-run both
+greps -- this file and everything it imports -- if the boundary ever moves.
 
 SELF-NAMING follows the convention gate_lint.py established: the HELP usage line names this
 file, and every other string -- including the "gate-check: " prefix and the "run gate-check.mjs

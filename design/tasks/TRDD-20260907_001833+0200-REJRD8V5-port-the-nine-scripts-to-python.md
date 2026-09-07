@@ -39,6 +39,40 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > **Copy the guard, not just the loop:** check the mutant
 > imports before believing a non-zero exit, and count per-case rather than trusting the status.
 >
+> **⚠ TWO CORRECTIONS TO COMMIT b525af2, WHICH IS IMMUTABLE AND WRONG ON BOTH (2026-09-07).**
+> - It states *"The second writer has been stopped; a65c95ff owns these paths now."* **False.**
+>   That agent's own report says `gate_check.py` "changed under me twice mid-edit" and that
+>   `argv-drive.mjs`/`argv_drive.py` appeared afterwards. The ownership message did not stop
+>   recurrence in the window it was issued for. **Early commit is the part that worked** — it is
+>   what made the second loss recoverable. Ownership-by-message did not.
+> - Its post-mortem blames *"two writers on one untracked path"*. That is the PROXIMATE
+>   mechanism. **The root cause is upstream: I dispatched two agents with REVIEW briefs, saw
+>   both drift into IMPLEMENTATION in their own progress lines, and answered the drift with an
+>   ownership assignment instead of stopping it.** Ownership cannot be assigned ahead of time for
+>   a path nobody was supposed to write — only noticing the drift covers that. A reviewer that
+>   starts writing production code is the signal; the colliding write is already the consequence.
+>
+> **THE SAME TRAP, WALKED INTO AGAIN ON 2026-09-07 WHILE WRITING A MUTATION CLAIM — and this
+> time in the paragraph directly above's own subject matter.** 7bcace8 grounded five new
+> numeric rows on a mutation described as "drop the `_RADIX_DIGITS` guard". Run: it CRASHES the
+> driver with an uncaught `ValueError` on `"0xg"` — the whitelist is the only thing catching
+> that now, because the `try/except` was deleted as dead when the whitelist landed. Every row
+> reddens; it reads as a five-row isolated set. The control that means something is reverting to
+> the code as it ACTUALLY WAS before the fix, which reddens exactly the two radix rows.
+> **Two lessons, and the second is the one that generalises:**
+> 1. `_RADIX_DIGITS` is now load-bearing for TWO independent things — rejecting Unicode digits
+>    and underscores, AND being the only guard against that `ValueError`. It does not degrade to
+>    a wrong answer; it crashes. A future "simplification" back to `try/except` silently reopens
+>    both holes while looking correct. The code says so in place.
+> 2. **The natural mutation for a whitelist is to DELETE it, and deleting a guard that also
+>    prevents a crash is never a control.** Prefer "revert to the previous implementation" over
+>    "remove the new code" whenever the new code replaced something rather than adding to it.
+>
+> **AND I HAD NOT RUN EITHER MUTATION — I re-narrated a background agent's three as two.** That
+> is the laundering shape retracted one commit earlier, repeated while writing the retraction's
+> sequel. The rule this yields: **a mutation result you did not personally observe is a
+> quotation, and must be attributed as one, never restated as a measurement.**
+>
 > **A CONTROL PROVES REACHABILITY. THE CORPUS DECIDES CORRECTNESS.** The digest serializer
 > computed the right JS float spelling with `_js_number` and then threw it away —
 > `json.loads(...)` back to a Python float, re-rendered by `json.dumps`. Wrong for exactly the
