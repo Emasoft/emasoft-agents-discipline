@@ -962,11 +962,25 @@ def _reject_float(value):
             "_js_json_text cannot spell a float the way JSON.stringify does; "
             "route it through jsapi._js_number (got %r)" % (value,))
     if isinstance(value, dict):
-        for item in value.values():
+        # KEYS as well as values. `json.dumps` COERCES a non-str key to a string, and for a
+        # float key that coercion is the same repr this guard exists to reject -- so a
+        # values-only walk would leave the hole open in the one place it is least visible.
+        for key, item in value.items():
+            _reject_float(key)
             _reject_float(item)
     elif isinstance(value, (list, tuple)):
         for item in value:
             _reject_float(item)
+    # No branch for Decimal/Fraction/complex: MEASURED, json.dumps raises TypeError on each
+    # rather than emitting anything, so they are already loud. An int SUBCLASS renders as its
+    # int value, which JS spells the same way. float is the only natively-serializable Python
+    # type whose spelling diverges, which is what makes this guard complete rather than a
+    # sample of the types someone happened to think of.
+    #
+    # DO NOT ADD A `default=` HOOK to _js_json_text without extending this walk. Those three
+    # types are safe because json.dumps REFUSES them; a default= hook is exactly the natural way
+    # to start accepting a Decimal, and it would convert all three from loud refusals into
+    # silent divergences that this guard, as written, would not see.
 
 
 def _js_json_text(value, indent=None):
