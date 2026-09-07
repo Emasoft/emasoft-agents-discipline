@@ -101,9 +101,22 @@ fi
 # two spellings. A literal substitution of only the mktemp form leaves `/private<ROOT>` in the
 # output, which is a difference between the two runtimes only if they resolve differently, and
 # noise otherwise. MEASURED in this file's own dispatch row, whose first draft printed exactly
-# that. Both spellings map to <ROOT>, longest first so the /private form is consumed whole.
+# that.
+#
+# THE FIRST FIX MAPPED BOTH SPELLINGS TO <ROOT> AND THAT HID A REAL DIVERGENCE CLASS. If the
+# oracle printed the bare form where the port printed the resolved one -- the SAME directory,
+# two spellings -- both collapsed to <ROOT> and the rows compared equal. That is not a
+# hypothetical shape for this port: js_resolve is LEXICAL (node's path.resolve) while
+# os.path.realpath RESOLVES SYMLINKS, and /var -> /private/var on macOS is exactly a symlink, so
+# a port reaching for realpath where the oracle resolves lexically produces precisely this
+# difference. A scrub added to remove noise had removed the signal, and after sed the two are
+# indistinguishable.
+#
+# The canonicalization is applied SYMMETRICALLY and BEFORE the root substitution instead: both
+# sides are normalised to the bare /var spelling, so a genuine lexical-vs-resolved divergence
+# still shows up -- as a DIFFERENT PATH rather than as a different spelling of the same one.
 _scrub() {
-  sed -e "s|/private$1|<ROOT>|g" -e "s|$1|<ROOT>|g" -e 's/"pid": [0-9]*/"pid": <PID>/'
+  sed -e 's|/private/var/|/var/|g' -e "s|$1|<ROOT>|g" -e 's/"pid": [0-9]*/"pid": <PID>/'
 }
 
 # --- CASE 1: the lease file's BYTES -------------------------------------------------------

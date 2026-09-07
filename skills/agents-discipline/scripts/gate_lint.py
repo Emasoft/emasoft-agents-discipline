@@ -31,7 +31,8 @@ import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
-from gates import parse_gates, read_stable_regular_file  # noqa: E402  # type: ignore[import-not-found]
+from gates import (  # noqa: E402  # type: ignore[import-not-found]
+    _node_fs_message, parse_gates, read_stable_regular_file)
 from jsapi import force_utf8_streams  # noqa: E402  # type: ignore[import-not-found]
 
 # BEFORE anything can print -- see the function's docstring. On this script the failure is not a
@@ -206,8 +207,19 @@ for file in files:
         text = read_stable_regular_file(file, max_bytes=MAX_GATE_LEDGER_BYTES, label="gate ledger")
     except OSError as error:
         # Our own raised OSErrors carry only a message (no errno set), so str(error)
-        # already IS that message; a real OS-raised error additionally has a strerror.
-        message = error.strerror if (error.errno is not None and error.strerror) else str(error)
+        # already IS that message; a real OS-raised error gets node's `error.message` SHAPE.
+        #
+        # `error.strerror` was the previous spelling and it diverged on the most ordinary input
+        # there is -- a missing file, plain ASCII, default locale. MEASURED:
+        #     oracle  ... : ENOENT: no such file or directory, open '/nonexistent/plain.md'
+        #     port    ... : No such file or directory
+        # The port dropped the errno CODE, node's lowercase prose, and the `, open '<path>'`
+        # suffix. gates.py has carried _node_fs_message for exactly this since the port began
+        # and this call site never used it; gate-lint.mjs:150 interpolates `error.message`,
+        # which is precisely what that helper reproduces. Reusing it also inherits its measured
+        # scope note: EACCES/ENOENT/ENOTDIR are verified against node, anything rarer is not.
+        message = (_node_fs_message(error, "open")
+                   if error.errno is not None else str(error))
         print("gate-lint: cannot read " + terminal_safe(file, 512) + ": " + terminal_safe(message, 1024),
               file=sys.stderr)
         sys.exit(2)
