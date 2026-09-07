@@ -69,6 +69,17 @@ CASES = {
     # abstract string, which is the only thing that matters, because both drivers hand it to
     # the SAME serialization contract and compare DIGESTS, not source bytes.
     "lone surrogate": oracle(check="echo " + chr(0xD800)),
+    # See digest-drive.mjs. The key is DELETED, not set to None: `pathValue` is
+    # `process.env.PATH`, and when the variable is unset node yields `undefined`, which
+    # JSON.stringify DROPS from the object entirely. Python has no undefined -- the port must
+    # reproduce the DROP. `None` gives `"path":null` and `""` gives `"path":""`; all three are
+    # different bytes, so all three are different sha256s, so every approval silently fails to
+    # match. This is the one field of the approval identity whose ABSENCE is representable in
+    # JS and not in Python, and no other row here exercises it: all nineteen pass concrete
+    # strings.
+    "absent path (undefined is DROPPED, not null)": {
+        k: v for k, v in oracle().items() if k != "path"
+    },
     "control chars": oracle(check="a" + chr(1) + "b" + chr(31) + "c"),
     "tab and newline": oracle(check="a" + chr(9) + "b" + chr(10) + "c"),
     "quote and backslash": oracle(check='a"b\\c'),

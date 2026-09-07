@@ -79,6 +79,23 @@ export const CASES = {
   // before the fix -- the driver crashed on it, which is how the SECOND copy of the bug was
   // found. The PRODUCTION function is covered separately, in python-lib-checks, against node.
   "lone surrogate": oracle({ check: "echo " + CH(0xd800) }),
+  // AN ABSENT PATH, which is the sharpest divergence left in the approval identity and is NOT
+  // covered by any other row -- all nineteen pass concrete strings. `pathValue` comes from
+  // `process.env.PATH`, and when a variable is unset node gives `undefined` while Python gives
+  // `None`. MEASURED, same payload shape:
+  //     JS  JSON.stringify({schema:1, path: undefined})  ->  {"schema":1}          KEY DROPPED
+  //     PY  json.dumps({"schema":1, "path": None})       ->  {"schema":1,"path":null}
+  // Different bytes, different sha256, so EVERY APPROVAL SILENTLY FAILS TO MATCH. Reachable:
+  // `env -i`, a scrubbed CI environment, cron. The port must reproduce the DROP, not translate
+  // None to null -- and `os.environ.get("PATH", "")` is not the fix either, since "" is a third
+  // answer (`{"schema":1,"path":""}`).
+  //
+  // Spelled by DELETING the key rather than assigning undefined: `{...over}` would copy an
+  // explicit `path: undefined` and JSON.stringify drops it identically, but the two spellings
+  // are not the same object and a reader should see which one is under test.
+  "absent path (undefined is DROPPED, not null)": (() => {
+    const o = oracle({}); delete o.path; return o;
+  })(),
   // Characters JSON MUST escape, where the two escape tables can differ.
   "control chars": oracle({ check: "a" + CH(1) + "b" + CH(31) + "c" }),
   "tab and newline": oracle({ check: "a" + CH(9) + "b" + CH(10) + "c" }),
