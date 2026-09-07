@@ -124,6 +124,15 @@ def main():
     # SyntaxError messages differ by construction, which regex-worker-diff.sh already treats as
     # a known gap rather than a divergence. Left as-is so the next scan for bare json.dumps has
     # this answer rather than re-deriving it.
+    #
+    # AND THE DEFAULT ensure_ascii=True IS LOAD-BEARING HERE, which the previous version of this
+    # comment did not say. This worker is its own process and never calls force_utf8_streams, so
+    # its stdout follows the locale; its output survives an ASCII stream only because it is pure
+    # ASCII by construction. Switching to ensure_ascii=False "for consistency" with the two sites
+    # in gates.py that were just fixed would crash the worker under encoding-diff.sh's CASE 3
+    # environment, on a re.error message carrying a non-ASCII fragment of the pattern. The two
+    # sites differ in KIND: those write bytes an oracle-written artifact is compared against,
+    # this one writes a private ASCII protocol.
     sys.stdout.write(json.dumps(result) + "\n")
     sys.stdout.flush()
 

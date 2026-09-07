@@ -161,10 +161,17 @@ LINT_PORT="$HERE/../scripts/gate_lint.py"
 c3="$WORK/c3"; mkdir -p "$c3"
 printf '# Gates\n\n- [ ] G1: x\n  CHECK: true\n  EXPECT: /src/%s/out.txt/\n' "$NON_ASCII" \
   > "$c3/leaf.md"
-_hostile() {  # exe script -> stdout+exit, scrubbed
+_hostile() {  # exe script -> stdout + exit + stderr, scrubbed
   PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 LC_ALL=C "$1" "$2" "$c3/leaf.md" > "$WORK/.ho" 2> "$WORK/.he"
+  # $? CAPTURED ON ITS OWN LINE, BEFORE any expansion. The first version interpolated "$?"
+  # inside the printf below, where bash expands arguments LEFT TO RIGHT: the preceding
+  # $(_scrub ...) ran first and overwrote it, so the field carried sed's status -- 0 on both
+  # sides, forever. An exit-code comparison that can only ever compare 0 with 0, in the file
+  # whose subject is checks that cannot fail. The case still reddened, but on the stderr text,
+  # not on the code it claimed to compare.
+  local code=$?
   printf '%s\n--exit--\n%s\n--stderr--\n%s' \
-    "$(_scrub "$c3" < "$WORK/.ho")" "$?" "$(_scrub "$c3" < "$WORK/.he")"
+    "$(_scrub "$c3" < "$WORK/.ho")" "$code" "$(_scrub "$c3" < "$WORK/.he")"
 }
 o_lint="$(_hostile "$NODE_ABS" "$LINT_ORACLE")"
 p_lint="$(_hostile "$PY_ABS" "$LINT_PORT")"

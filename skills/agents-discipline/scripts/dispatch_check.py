@@ -16,8 +16,18 @@ from dispatch import (  # noqa: E402  # type: ignore[import-not-found]
 )
 from jsapi import force_utf8_streams, js_trim  # noqa: E402  # type: ignore[import-not-found]
 
-# BEFORE anything can print -- see the function's docstring. This script's wave reports carry
-# leaf ids and abandon reasons straight from dispatch.json, so a non-ASCII one reaches stdout.
+# BEFORE anything can print -- see the function's docstring.
+#
+# UNLIKE the other three entry points, this one is PROPHYLACTIC and says so. gate_check,
+# gate_lint and ledger_check each have a MEASURED non-ASCII vector that degraded or crashed under
+# an ASCII stdout. For dispatch_check I looked and did not find one: leaf ids are ASCII by
+# validation (`/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/`, and both runtimes reject a non-ASCII leaf
+# with the identical message), and a non-ASCII abandon reason did not reach the `status` report
+# in either runtime. The call is here because every ported CLI should differ from node in the
+# same way -- none -- and because a vector I could not construct today is not a vector that does
+# not exist. Stated as prophylaxis rather than smuggled in under the others' evidence: the first
+# version of this comment asserted a reason-and-leaf-id vector that I had not measured, which is
+# the exact habit the rest of this port's comments exist to correct.
 force_utf8_streams()
 
 COMMANDS = ("open", "start", "seal", "return", "abandon", "status")

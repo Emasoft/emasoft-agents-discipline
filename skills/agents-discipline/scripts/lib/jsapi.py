@@ -595,9 +595,44 @@ def force_utf8_streams():
     check that the runtime quietly fixes for you is not a check.
 
     File writes were never affected -- those pass an explicit `encoding="utf-8"` -- which is why
-    the lease case stayed green while the warning case diverged.
+    the lease case stayed green while the warning case diverged. Nor are the BYTE-level writers:
+    check_supervisor.py pumps through `sys.stdout.buffer`, below the text wrapper this touches,
+    and MEASURED under the same hostile env it still forwards raw UTF-8 (c3 a9) unchanged.
+
+    THE ORACLE SIDE IS MEASURED, not assumed. `LC_ALL=C node -e 'process.stdout.write("café")'`
+    emits the raw c3 a9 bytes, so node genuinely does ignore the locale and this is a fidelity
+    fix rather than a divergence introduced in the other direction. Worth checking rather than
+    reasoning about: had node ALSO degraded, forcing UTF-8 here would have been the defect.
     """
     for stream in (sys.stdout, sys.stderr):
+        # getattr rather than a bare call, and the SKIP IS THE CORRECT ANSWER -- not a swallowed
+        # error. `reconfigure` is an io.TextIOWrapper method (3.7+, and this port's floor is
+        # 3.11), so it is always present on a real console or pipe. It is absent exactly when the
+        # stream has been REPLACED by something that is not a TextIOWrapper -- a StringIO in a
+        # harness, a custom capture object -- and those have no locale-derived encoding to
+        # correct, so there is nothing to do and nothing to report. Raising there would break
+        # output capture for every caller in order to fix a problem that cannot exist on the
+        # object being complained about.
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
-            reconfigure(encoding="utf-8")
+            # errors= IS PASSED EXPLICITLY, and omitting it was a REGRESSION this function
+            # introduced. MEASURED: `reconfigure(encoding=...)` does NOT preserve the stream's
+            # handler, it resets it to `strict`.
+            #     sys.stderr.errors BEFORE  backslashreplace
+            #     sys.stderr.errors AFTER   strict
+            # CPython ships stderr with backslashreplace precisely so a diagnostic can always be
+            # printed. A lone surrogate is reachable here -- CPython surrogateescape-decodes argv
+            # and the filesystem encoding, both documented in gates.py -- so the first version of
+            # this function turned "stderr prints an escape" into "the process dies while
+            # reporting an error", which is the exact failure it was written to remove.
+            #
+            # NO HANDLER MATCHES NODE, so this does not pretend to. MEASURED on "a\ud800b":
+            #     node                a + EF BF BD + b     (U+FFFD)
+            #     strict              UnicodeEncodeError
+            #     replace             a?b                  (a QUESTION MARK, not U+FFFD)
+            #     backslashreplace    a\ud800b
+            # Exact fidelity needs the substitution at the CALL SITE, which is the pattern
+            # gate_check.py:587 already uses (`_LONE_SURROGATE_RE.sub("�", ...)`) -- an
+            # encoder error handler cannot express it. backslashreplace is chosen as the one that
+            # preserves the information and never raises; it is what stderr already had.
+            reconfigure(encoding="utf-8", errors="backslashreplace")
