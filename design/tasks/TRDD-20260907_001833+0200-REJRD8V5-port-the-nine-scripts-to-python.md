@@ -727,6 +727,24 @@ decision → then the remaining eight. `:144` first because it is the most sever
 (`UNIT_HEADER` at `:103` is the pattern to copy), its divergence is already measured so its control
 is already designed, and finishing one site measures the per-site cost instead of estimating it.
 
+**STEP 1 IS DONE (`47bc2be`), AND IT MEASURED THE PER-SITE COST — which was the point of doing it
+alone.** One site took: a module-level constant, a FOURTH writer surface in `whitespace-diff.sh`
+(the three existing writers provably cannot reach a `^`-anchored finder), a control, and two
+rounds on the control's ANCHOR — the first anchor was unpassable in BOTH the red and green states,
+because this writer pads THROUGH the token its siblings pad away from. So the per-site cost is
+**dominated by the test surface, not the one-line substitution**, and the anchor is the part with
+no reusable shape.
+
+**That measurement is what makes the STATE block's own test strategy (further down: property
+assertion over all 30 code points + a `\s`-absence guard + ONE differential) the right call rather
+than a thrifty one.** Eight more writer surfaces at that cost buys eight controls, most of them
+asserting a single bit. Do NOT plan a writer per remaining site; plan the property assertion.
+
+**Step 2 (`JS_WS_CHARS` + the eight remaining sites) is PROPOSED and under adversarial review** as
+of this edit — proposal in the transcript, per `propose-then-review-then-implement`. The two design
+decisions below (`:464`/now-`:484` no-op scan, and CITATION's negated class) are unchanged and both
+are IN that proposal.
+
 **STANDING RULE ADOPTED (2026-09-07), because two is a coincidence and three would be a policy
 nobody chose:** the next side-finding gets **measure → record here → continue**. Fix it in-stretch
 only if it BLOCKS the sweep. Both displacements ended in correct fixes, which is exactly what makes
@@ -838,11 +856,37 @@ node's own `\s` set and none of the five Python-only ones. That is the precondit
 below, and it is now measured, not assumed.
 
 **Consequence: every port site still spelling Python `\s` differs from its oracle at exactly those
-six code points.** `d750a3d` fixed ONE (`UNIT_HEADER`). NINE remain in `ledger_check.py`:
+six code points.** `d750a3d` fixed `UNIT_HEADER`; **`47bc2be` fixed the header finder (`:144`)**.
+EIGHT remain in `ledger_check.py`.
 
-`:66` MEASURED_RESULT · `:69` EXIT_CODE · `:72` CITATION *(negated `[^`\s]` — polarity INVERTS)* ·
-`:110` CREATED · `:144` header finder · `:243` + `:433` code-span whitespace test ·
-`:275`/`:276` heading · `:464` no-op scan.
+**THE LINE NUMBERS BELOW ARE THE OLD NUMBERING AND HAVE ALL SHIFTED** — the two fixes added
+comment blocks above them. Current numbering, measured 2026-09-07 after `47bc2be`, old → new:
+
+| site | old | new | note |
+|---|---|---|---|
+| PASS_COUNT | `:66` | `:66` | two `\s+` on one line |
+| EXIT_CODE | `:69` | `:69` | |
+| CITATION | `:72` | `:72` | negated `` [^`\s] `` — polarity INVERTS |
+| CREATED | `:110` | `:130` | |
+| header finder | `:144` | `:164` | **DONE — `47bc2be`** |
+| code-span ws test | `:243` | `:263` | |
+| heading | `:275`/`:276` | `:295`/`:296` | |
+| code-span ws test | `:433` | `:453` | |
+| no-op scan | `:464` | `:484` | three `\s` on one line |
+
+**COUNT, settled — three different numbers were in circulation and none was defined.** The old
+text said "NINE remain" over a list of nine ROWS, one of which (`:243` + `:433`) silently held two
+sites; elsewhere this block says "the remaining eight" and "the nine sites are not nine defects".
+The ambiguity is that ROW, LINE and OCCURRENCE were never distinguished. Measured after `47bc2be`
+by TOKENIZING the module (not a `#` heuristic — a `#` inside a string literal already cost a
+miscount once in this task):
+
+- **9 live code LINES** spell a bare `\s`; 13 further lines are comments, correctly excluded.
+- Those 9 lines are **8 SITES** in the table above — the heading site occupies two adjacent lines.
+- They hold **14 `\s` OCCURRENCES** (`:66` ×2, `:72` ×2, `:296` ×2, `:484` ×3, the rest ×1).
+
+Use LINES for the sweep's progress (9), SITES for design decisions (8). Do not re-derive from the
+rows — that is what produced the three numbers.
 
 **FIVE have a MEASURED, user-visible divergence** (fixtures built and run, both runtimes):
 
