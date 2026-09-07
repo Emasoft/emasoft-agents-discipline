@@ -938,6 +938,45 @@ ordered, not independent.
 
 `re.M` is not fixed by `re.A`. `CREATED` needs its own decision.
 
+**RE-MEASURED WITH THE REAL PATTERNS, EXTRACTED FROM SOURCE — the table above used SYNTHETIC
+probes I typed, which is a stand-in for the thing.** Both patterns pulled out of their files (port
+via AST, oracle via its own source text) so no retyped copy can drift from what ships:
+
+`ALWAYS_TRUE` / no-op scan, `sleep`-family, with three controls that must not move:
+
+| input | oracle (spec) | port `re.I` | port `re.I\|re.A` |
+|---|---|---|---|
+| `ſleep 1` | accepted as real | **REJECTED as no-op** | accepted ✓ |
+| `sleep 1` (control) | rejected | rejected | rejected |
+| `echo ok` (control) | rejected | rejected | rejected |
+| `pytest -q` (control) | accepted | accepted | accepted |
+
+**THE ORDERING IS PROVEN, NOT ARGUED — `re.A` applied FIRST breaks a case that works today.**
+Input `sleep<U+00A0>1` (NBSP, which JS `\s` matches and ASCII `\s` does not):
+
+| variant | verdict |
+|---|---|
+| **oracle (the spec)** | rejected as no-op |
+| port today — `re.I`, bare `\s` | rejected — agrees, **by luck** (Python `\s` also matches NBSP) |
+| **`re.A` FIRST — `re.I\|re.A`, bare `\s`** | **accepted — A NEW DIVERGENCE, introduced by the fix** |
+| both, right order — `re.I\|re.A`, `JS_WS_CLASS` | rejected ✓ |
+
+So the module's `:55-59` comment is right on its own terms and the sequencing is load-bearing:
+`re.A` narrows `\s` to ASCII, so applying it to a pattern still spelling `\s` trades a
+case-folding divergence for a whitespace one. Substitute first, then flag.
+
+**`CREATED` confirmed the same way, end to end.** Text read through the port's own
+`read_stable_regular_file` — which uses `os.open`/`os.read`, so there is **no universal-newline
+translation and CR survives** (`'x\rCreated: …'`, verified) — then the real patterns:
+**oracle finds the `Created:` line, port does not.** That premise was unverified when first
+recorded and is the one that would have made the claim false.
+
+**PRECEDENT ALREADY IN THE FILE:** `FILENAME_SHAPED` ships `re.I | re.A` today. `re.A` is not a
+new device here, and `NOT_WORD_BEFORE`/`NOT_WORD_AFTER` are explicit ASCII classes
+(`(?<![0-9A-Za-z_])`), not `\b`/`\w` — so at `MEASURED_RESULT` there is nothing else for `re.A` to
+narrow once its `\s` is gone. Checked, because `re.A` narrows `\w \W \b \B \d \D \s \S`, not just
+`\s`, and a site keeping any of the others would take a new divergence from the fix.
+
 **METHOD NOTE — this class was invisible to the whole test design.** `whitespace-diff.sh` probes
 six code points, all of them whitespace. Not one of them can see a case-folding or a line-anchor
 divergence. Any future "all surfaces green" claim about these sites certifies the whitespace third
