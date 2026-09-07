@@ -684,7 +684,14 @@ def parse_gates(text, options=None):
             elif parsed.get("pathLike"):
                 # Warn rather than reject: the pattern reading may be intended, and a
                 # literal path cannot be expressed once the wrapping slashes sniff.
-                warnings.append("gate " + gate["id"] + ": EXPECT " + json.dumps(gate["expect"]) +
+                # _js_json_text, not a bare json.dumps, against gates.mjs:418's
+                # `JSON.stringify(gate.expect)`. The bare call was the SECOND instance of the
+                # lease-write defect, in USER-VISIBLE text. MEASURED, `EXPECT: /src/café/out.txt/`:
+                #     JS  EXPECT "/src/café/out.txt/"
+                #     PY  EXPECT "/src/caf<6-char backslash-u escape>/out.txt/"
+                # Written in words because spelling the escape literally renders it back as the
+                # character, making the two lines identical -- a diff that proves nothing.
+                warnings.append("gate " + gate["id"] + ": EXPECT " + _js_json_text(gate["expect"]) +
                                  " is read as a regular expression, so its dots and other metacharacters" +
                                  " are wildcards. Escape the inner slashes to keep the pattern, or drop" +
                                  " the wrapping slashes to match a literal substring.")
@@ -926,6 +933,42 @@ MAX_AUTOMATIC_EVIDENCE_CHARS = 900
 _LONE_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 
 
+def _reject_float(value):
+    """Refuse a float anywhere in a payload bound for _js_json_text.
+
+    This helper claims to reproduce JSON.stringify, and for str/int/bool/None/dict/list it does.
+    It does NOT for a float, because `json.dumps` renders one with Python's repr and JS has its
+    own algorithm. MEASURED, this exact helper against `JSON.stringify(x, null, 2)`:
+
+        -0.0       JS `0`        PY `-0.0`
+        1e-7       JS `1e-7`     PY `1e-07`      (Python zero-pads the exponent)
+        0.000001   JS `0.000001` PY `1e-06`      (different notation thresholds)
+
+    jsapi._js_number exists precisely for this and digest_drive.py uses it -- but that is the
+    DRIVER's hand-rolled serializer, deliberately independent so the differential does not
+    compare gates.py with itself. The consequence, which is the reason this guard exists:
+    digest-diff.sh proves the DRIVER spells floats like JS, and proves nothing at all about
+    THIS function, which is what production hashes with (gate_check.py:619, gates.py:1011).
+
+    No float reaches here today -- `_validated_integer` returns `int(...)`, so timeoutMs and
+    friends are ints, and every other field is a str, int or bool. So this cannot fire now. It
+    exists because "unreachable today" is how the previous latent divergence in this same
+    function shipped: a wrong spelling on a HASHING path is silent, and the corpus that looks
+    like it covers it does not. Fail fast and loudly instead of hashing a value the oracle
+    spells differently.
+    """
+    if isinstance(value, float):
+        raise TypeError(
+            "_js_json_text cannot spell a float the way JSON.stringify does; "
+            "route it through jsapi._js_number (got %r)" % (value,))
+    if isinstance(value, dict):
+        for item in value.values():
+            _reject_float(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _reject_float(item)
+
+
 def _js_json_text(value, indent=None):
     """`JSON.stringify(value)` as TEXT -- including its handling of a lone surrogate.
 
@@ -964,10 +1007,12 @@ def _js_json_text(value, indent=None):
     about hashing a raw path. This one is about reproducing JSON.stringify's TEXT, where the
     oracle's own escaping means no surrogate ever reaches its hash.
     """
+    _reject_float(value)
     separators = None if indent is not None else (",", ":")
     return _LONE_SURROGATE_RE.sub(
         lambda m: "\\u%04x" % ord(m.group(0)),
-        json.dumps(value, indent=indent, separators=separators, ensure_ascii=False))
+        json.dumps(value, indent=indent, separators=separators, ensure_ascii=False,
+                   allow_nan=False))
 
 
 def gate_definition_digest(gate):

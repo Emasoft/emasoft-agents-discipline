@@ -116,6 +116,14 @@ def main():
         result = {"matched": matched}
     except re.error as error:
         result = {"error": str(error)}
+    # A BARE json.dumps, and unlike the two sites in gates.py that were just fixed, this one is
+    # correct. Those wrote bytes an oracle-written file is compared against, or text a user
+    # reads; this is a PRIVATE protocol between this worker and gate_check.py's json.loads
+    # (:988), which decodes any \u escape straight back to the same str. Nothing compares these
+    # bytes to regex-worker.mjs's, and nothing could usefully: the two engines' re.error /
+    # SyntaxError messages differ by construction, which regex-worker-diff.sh already treats as
+    # a known gap rather than a divergence. Left as-is so the next scan for bare json.dumps has
+    # this answer rather than re-deriving it.
     sys.stdout.write(json.dumps(result) + "\n")
     sys.stdout.flush()
 
