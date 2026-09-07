@@ -831,13 +831,29 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   | guard REMOVED | **FAIL** | pass | pass |
   | guard WIDENED to `not error.errno` | pass | pass | pass |
   | guard INVERTED (`is not None: raise`) | **FAIL** | **FAIL** | **FAIL** |
-  | `prose` prefers `error.strerror` over `_LIBUV_PROSE` | pass | pass | **FAIL** |
+  | `prose` prefers `error.strerror` over `_LIBUV_PROSE` | pass | **FAIL** | **FAIL** |
 
-  Row 2 of that table is the correction: **NO row covers `is None` vs `not errno`**, because the
-  discriminating input is errno 0 and no site produces one. Row 4 is what the third row uniquely
-  catches, and it only catches it since the `"authored" not in` clause was added — before that,
-  prefix and suffix were both determined by the errno and the syscall token, so the row asserted
-  nothing the smoke row did not.
+  **ROW 4 IS CORRECTED HERE FROM `pass \| pass \| FAIL`, which is what `8e9629d` committed.**
+  That mutation was run BEFORE the lowercase clause was added to the smoke row, so the table
+  described an intermediate state of a file the same commit went on to change. Re-run against
+  HEAD: the smoke row fails it too (`EBADF: Bad file descriptor, fstat`). The commit message's
+  "Row 4 is what the third row uniquely catches" is therefore FALSE as shipped — the two edits
+  in that commit interact, and the table asserted they did not.
+  **The general form: a mutation result is only valid against the tree it ran on. Re-run every
+  mutation after the last edit of the batch, or the table dates itself silently.**
+
+  Row 2 is the coverage correction: **NO row covers `is None` vs `not errno`.** The
+  discriminating input is errno 0, and MEASURED 2026-09-07 it is constructible and reshapes to
+  `zero: undefined error: 0, lstat` — `_err_code` finds no name for 0 and falls back to the
+  strerror text, so the AUTHORED MESSAGE is emitted as the error CODE. Malformed, not merely
+  wrong. **Guard NOT changed**: no site authors an `OSError(0, ...)`, and whether any platform
+  produces one (Windows maps winerror to errno and is the only plausible source) is UNVERIFIED
+  from a darwin host — absence of evidence, not evidence of absence. The measurement is in the
+  guard's comment so the next reader decides from an output rather than a premise.
+
+  Row 4 is what the third row catches — no longer *uniquely*, but it is still the only row that
+  would notice a wrong `_LIBUV_PROSE` entry being replaced by caller text, and it only catches
+  it since the `"authored" not in` clause was added.
 
   The same mutation exposed a gap in the SMOKE row: it printed `EBADF: Bad file descriptor,
   fstat` — CPython's capitalized strerror, a shape node never emits — and passed. Lowercase
@@ -849,17 +865,28 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   EEXIST, EISDIR and ENAMETOOLONG. Rewritten to state the real finding: the lowercase rule was
   inferred from three codes that happen to agree, and **HALF the forceable codes break it**.
   `os.strerror().lower()` is the fallback, not the rule.
-- **THE COUNT ABOVE THAT TABLE WAS ITSELF STALE, and my first rewrite inherited it.** The
-  summary line read "3 of 7 forceable codes matched" while the table three lines below it lists
-  EIGHT: `EACCES ENOENT ENOTDIR EBADF` agree, four disagree. EBADF was measured later — it is
-  what the `python-lib-checks` smoke row forces — and the summary was never re-counted. I then
-  copied "four of the seven" into the new docstring **in the same commit whose message was
-  about claims outrunning measurement**, because I counted the sentence instead of the table
-  under it. Corrected to 4 of 8 at both sites, with the docstring now pointing at the table as
-  the authority rather than restating the ratio.
-  **The generalizable part: a count and its evidence table drift apart the moment a row is
-  added, and the count is the half that gets quoted.** Where both exist, make the prose defer to
-  the table explicitly — a second copy of a number is a second thing to keep true.
+- **I "CORRECTED" A COUNT THAT WAS RIGHT, AND INVENTED A HISTORY TO JUSTIFY IT (`9dad134`,
+  reverted by the next commit).** The line read "3 of 7 forceable codes matched, 4 did not"
+  beside a table whose agree row names FOUR codes (`EACCES ENOENT ENOTDIR EBADF`). I read that
+  as a stale count, rewrote it to "4 of 8", and asserted in the commit message that "EBADF was
+  measured later and the summary was never re-counted."
+  **Two greps refute it, and I ran neither before committing:** `git log -S 'ENOTDIR EBADF'` and
+  `git log -S '3 of 7 forceable'` both return ONLY `92f3303` — count and fourth name landed in
+  the SAME commit, so nothing ever desynchronized. And 3 + 4 = 7 exactly: the denominator was
+  the agree-plus-disagree set, never the table's row count. EBADF sits in the agree row without
+  being part of the counted seven.
+  **The actual defect was that the denominator was never written down** — so the next reader
+  (me) re-derived it from the nearest artifact and believed they had found a bug. Fixed by
+  stating the set explicitly, marking EBADF's node run as NOT RECORDED (the agree row carries
+  bare names while every disagree row carries its node string, so that format cannot distinguish
+  measured-agreement from assumed-agreement), and removing every count from the docstring.
+  **Three lessons, each at the size its evidence supports:**
+  1. A ratio with an unstated denominator will be re-derived from whatever artifact is nearest.
+     State the SET, not just the count.
+  2. A causal story that explains a mismatch is not evidence for the mismatch. `git log -S` cost
+     one call and would have stopped the commit.
+  3. I quoted a count without reading the ten lines under it — and the grep I used to "verify"
+     was `| head`-truncated, hiding a THIRD copy of "three" that the reviewer found by reading.
 
 ---
 

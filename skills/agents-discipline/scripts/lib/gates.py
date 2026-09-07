@@ -275,6 +275,18 @@ def node_call(syscall, call, *args, **kwargs):
         # "authored" alone implies, so the coincidence is worth naming rather than relying on.
         # `is None`, NOT `not error.errno`: errno 0 is falsy but PRESENT, and a truthiness test
         # would send it down the verbatim path on a premise about absence.
+        # WHAT THAT COSTS, measured 2026-09-07 rather than left as the abstract argument it was:
+        # an OSError(0, "zero") reaching here is reshaped to `zero: undefined error: 0, lstat` --
+        # _err_code finds no name for 0 (`0 not in errno.errorcode`) and falls back to the
+        # strerror text, so the AUTHORED MESSAGE is emitted as the error CODE. Malformed, not
+        # merely wrong. The truthiness guard would pass it through verbatim, which is the more
+        # honest output, and NO TEST HERE COVERS THE DIFFERENCE (widening the guard leaves all
+        # three node_call rows green -- measured).
+        # NOT CHANGED, and the reason is the absence of evidence rather than evidence of
+        # absence: no site in this port authors an OSError(0, ...), and whether any PLATFORM
+        # produces one -- Windows maps winerror to errno and is the only plausible source -- is
+        # UNVERIFIED from a darwin host. Change the guard when a producer is found, not before;
+        # the measurement is recorded so that decision starts from an output, not a premise.
         if error.errno is None:
             raise
         raise _node_message_error(error, syscall) from error
@@ -1448,13 +1460,29 @@ def _js_join(*parts):
 # then and stopped being right here.
 # libuv ships its OWN error table; os.strerror reads the C library's, and they agree FAR less
 # often than this function's first version assumed. MEASURED by forcing each code through node
-# and comparing to os.strerror(n).lower(): 4 of the 8 forceable codes matched, 4 did not.
-# The count read "3 of 7" until 2026-09-07 and disagreed with the table three lines below it,
-# which lists EBADF among the agreeing codes -- EBADF was measured later (it is what the
-# python-lib-checks smoke row forces) and the summary line was never re-counted. Corrected by
-# counting the table, which is the only reason to keep the table adjacent to the count.
+# and comparing to os.strerror(n).lower(): of the SEVEN codes forced through node, 3 matched and
+# 4 did not. That denominator is 3 + 4 -- it is the set BELOW, and nothing wider.
 #
-#     EACCES ENOENT ENOTDIR EBADF   agree
+# THE DENOMINATOR IS THE WHOLE DEFECT HERE, and it went unwritten for a day. On 2026-09-07 I
+# read "3 of 7" beside a table whose agree row names FOUR codes, concluded the count was stale,
+# and "corrected" it to 4 of 8 in 9dad134 -- reverted by this comment. Two measurements killed
+# that: `git log -S 'ENOTDIR EBADF'` and `git log -S '3 of 7 forceable'` both return ONLY
+# 92f3303, so the count and the fourth name landed in the SAME commit and no later edit ever
+# desynchronized them; and 3 + 4 = 7 exactly, so the denominator was never the table's row
+# count. The commit message for 9dad134 asserts "EBADF was measured later" as fact. It is not
+# fact, it is a story I built to explain a mismatch I had misread, and git refutes it.
+# EBADF's own status stays UNRESOLVED and is marked so below: the agree row carries bare names
+# while every disagree row carries its node string, so that format cannot distinguish "forced
+# through node and matched" from "assumed to match". Whether EBADF was ever run through node is
+# NOT RECOVERABLE from this file.
+# THE LESSON, at the size the evidence supports: a ratio whose denominator is unstated will be
+# re-derived by the next reader from whatever artifact is nearest, and they will believe they
+# found a bug. State the set, not just the count.
+#
+#     EACCES ENOENT ENOTDIR        agree (forced through node; the 3 in the count)
+#     EBADF                        agree per os.strerror alone -- node run NOT RECORDED,
+#                                  and NOT part of the 7 above
+
 #     EEXIST        node "file already exists"                 vs "file exists"
 #     EISDIR        node "illegal operation on a directory"    vs "is a directory"
 #     ELOOP         node "too many symbolic links encountered" vs "too many levels of symbolic links"
@@ -1508,19 +1536,21 @@ def node_fs_message(error, syscall):
     `os.strerror(n).lower()` is the FALLBACK, not the rule, and this docstring said otherwise
     until the table above existed. What was measured, and what it overturned:
 
-      - EACCES, ENOENT, ENOTDIR, EBADF -- strerror's lowercase MATCHES libuv. The first three
-        were the original evidence, and they are why the lowercase rule looked general.
-      - EEXIST, EISDIR, ELOOP, ENAMETOOLONG -- strerror DISAGREES with libuv, in wording rather
-        than case ("Too many levels of symbolic links" vs "too many symbolic links
-        encountered"). They are in _LIBUV_PROSE for exactly that reason.
+      - the codes where strerror's lowercase MATCHES libuv were the original evidence, and they
+        are why the lowercase rule looked general;
+      - the codes in _LIBUV_PROSE are there because strerror DISAGREES with libuv, in WORDING
+        rather than case ("Too many levels of symbolic links" vs "too many symbolic links
+        encountered") -- which is why a lowercase check cannot detect a wrong entry.
 
-    So the rule was inferred from three codes that happen to agree, and HALF the forceable
-    codes break it -- 4 of 8, per the measured table above the _LIBUV_PROSE literal, which is
-    the authority here. Do not re-derive that ratio from this prose. An errno in NEITHER group
-    still falls through to strerror: a smaller, quieter divergence than dropping the prose, but
-    a divergence -- extend the table rather than assume the fallback is right for a code nobody
-    has forced. Seven more (EMFILE, ENFILE, ENOMEM, EOVERFLOW, ENOSPC, EROFS, EPERM) could not
-    be forced at all and are UNCONFIRMED in either direction.
+    THIS DOCSTRING DELIBERATELY NAMES NO COUNT AND NO CODE LIST. Both live in the measured table
+    above the _LIBUV_PROSE literal, with the denominator stated; a copy here is a second thing
+    to keep true, and the first version of this paragraph went stale exactly that way -- then
+    its replacement quoted a ratio whose denominator it had misread. Read the table.
+
+    An errno in NEITHER group falls through to strerror: a smaller, quieter divergence than
+    dropping the prose, but a divergence -- extend the table rather than assume the fallback is
+    right for a code nobody has forced. The codes that could not be forced at all are listed
+    with the table and are UNCONFIRMED in either direction.
     """
     # An ALREADY-ATTACHED message wins over the caller's `syscall`, because the caller guessed
     # and node_call knew. Seven sites pass "open" for read_stable_regular_file, which makes
