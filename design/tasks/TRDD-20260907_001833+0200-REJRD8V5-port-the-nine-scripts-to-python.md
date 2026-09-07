@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T02:14:00+0200
+updated: 2026-09-07T02:26:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -25,19 +25,34 @@ other than the property it names. Mutate the implementation, confirm the intende
 revert. If no mutation isolates a row, that row does not earn its place.
 
 ### DONE — but THE VERIFICATION STANDARD VARIES; read the per-bullet notes
-**Do not read this heading as uniform, and note the boundary is EARLIER than a first pass
-suggests.** `tests/mutate-probe.sh` was created in `f3a4c86`. **Every bullet below except the
-lease one predates it** — measured: `ec565d6` (format_document/qualify), `1598e34`
-(globs_overlap), `673356a` (discovery) all land before `f3a4c86`. So ALL of their controls,
-including the ones quoting counts like "six mutation controls all redden", were run with the
-inline `probe()` shell function — the SAME generation that produced this session's worst false
-result (a syntax error counted as nine catches, because a mutant that would not import was
-scored as CRASH=catch), and that also ran on `eval echo`-stripped anchors.
+**NO bullet below was verified under the FINISHED harness. Not one.** That is the honest
+summary, and it took three attempts to reach because each earlier attempt drew a boundary it
+could not defend.
 
-**A first attempt at this note marked only three bullets**, which left the others falsely
-reading as current-standard — worse than the undifferentiated heading, because the marking
-implied a verified boundary. The counts are RECORDED, not verified to the standard this
-document asserts elsewhere.
+The mistake worth not repeating: I twice treated "was `tests/mutate-probe.sh` in existence?"
+as the standard, which turns a GRADIENT into a BINARY. A commit is a snapshot, not a
+chronology — controls landing in the same commit that CREATES a harness were not necessarily
+run under it, and `f3a4c86`'s own subject (`a mutation control was measuring a syntax error`)
+makes it the least safe commit to assume that about. MEASURED at `f3a4c86` via
+`git show f3a4c86:…/mutate-probe.sh`: **59 lines, 3 of the 6 guards**.
+
+| guard | landed in | vs `f3a4c86` (position 108) |
+|---|---|---|
+| unique anchor · edit-changed-file · mutant-imports | `f3a4c86` | present |
+| **baseline GREEN before mutating** (guard 0) | `faa8dc6` | **AFTER** |
+| runner argument required | `272df2b` (112) | **AFTER** |
+| INT/TERM handler that exits | `423543c` | **AFTER** |
+
+Guard 0 is the one whose absence produced the R5 false positive — REDDENS for ANY anchor while
+the tree was already red. So the lease bullet, the one previously promoted to CURRENT STANDARD
+because its controls shipped in `f3a4c86` itself, ran without it too. **Every bullet is marked,
+uniformly, and the marker means "recorded, not verified to the standard this document asserts
+elsewhere" — it no longer implies a boundary, because there isn't one.**
+
+The individual predecessors, for the record: `ec565d6` (format_document/qualify), `1598e34`
+(globs_overlap), `673356a` (discovery) all precede `f3a4c86` and used the inline `probe()`
+shell function — the generation that scored a syntax error as nine catches, and that ran on
+`eval echo`-stripped anchors.
 
 **Where the original mutations live — MEASURED per commit, because a blanket claim here was
 wrong once already.** A previous version of this paragraph said "nothing in the repo records
@@ -77,8 +92,13 @@ process. **Uncovered under python: `read_stable_regular_file`'s mid-read replace
 which is a security path, not a cosmetic one. The suite states this in its own comment; the
 TRDD did not, and a resuming session reads the TRDD.
 
-**`AD_RUNTIME` is the TEMPLATE for the remaining `gate-check.mjs` port**, and it is the only
-route that yields this evidence class — see the gate-check section below.
+**`AD_RUNTIME` is the TEMPLATE for the remaining `gate-check.mjs` port** — see the gate-check
+section below. It is NOT "the only route", which a previous revision claimed: this very bullet
+names `dispatch-cli-drive.sh` as the other half of its own evidence. The two are
+COMPLEMENTARY, and the ordering matters — port first, retrofit the suites once there is
+something to point them at. Rounds 5-12 were consumed entirely by harness work while
+`gate-check.mjs` stayed unstarted; a note that sends a resuming session into a four-suite
+retrofit before one line of `gate_check.py` exists walks straight back into that.
 
 - ⚠ OLD-STANDARD — `lib/gates.py`: `read_stable_regular_file`, `write_atomic`, `with_file_lock`,
   `append_status`, `parse_gates`, `validate_scope_id`, `scope_root`, `normalize_owns_glob`,
@@ -89,11 +109,18 @@ route that yields this evidence class — see the gate-check section below.
   one named hole: `read_stable_regular_file`'s mid-read guard is not exercised under python.
   Plus `dispatch-cli-drive.sh`, a hand-written 11-row byte-differential over the CLI surface —
   that half IS the same class as the discovery and lease differentials.
-  **NON-VACUITY CONTROL, run 2026-09-07** (it did not exist before, and "the adapter is the
-  tunable surface" was a fair objection until it did): `validate_state` mutated to `return
-  state` as its first statement → **20/21, exit 1**; restored → 21/21, `git status` clean. The
-  `AD_RUNTIME` adapter demonstrably REACHES the port. It reddened ONE test, so this proves
-  reachability, not thoroughness — do not quote it as the latter.
+  **TWO CONTROLS, both run 2026-09-07** (neither existed before; "the adapter is the tunable
+  surface" was a fair objection until they did). Restored and `git status` clean after each:
+  - *Reaches the port at all* — `validate_state` → `return state`: **20/21, exit 1**.
+  - *Reaches HOW MUCH of it* — this is the one that matters, and the first control could not
+    answer it: 1 reddened test is equally consistent with "the adapter is wired for one case
+    and the other 20 silently still test the JS", which would print `21/21` forever. So:
+    `sys.exit(99)` injected at the top of `dispatch_check.py` → **1/21 passed**. Twenty tests
+    execute the Python CLI; the single survivor is the skip. Coverage of the SUITE is
+    established, not just reachability.
+
+  Still not established by either: whether the assertions are DEEP enough. That is a different
+  question and neither control speaks to it.
 - ⚠ OLD-STANDARD — `lib/jsapi.py`: `js_object_key_order`, `js_json_object`, `js_length`,
   `js_slice`, `locale_compare_key`, `parse_date`, `js_trim`, `js_truthy`,
   `js_string`/`_js_number`
@@ -110,10 +137,10 @@ route that yields this evidence class — see the gate-check section below.
   divergence has no site here. The measured `OWNS:` placeholder disjointness is PINNED as a
   row, so the port reproduces the defect rather than quietly diverging from the oracle.
 
-- **SPLIT BULLET — the only one that is half-and-half, so read the SHAs, not the marker.**
-  ⚠ OLD-STANDARD for `stat_current_named_file` (`36e3785`, position 105, BEFORE `f3a4c86` at
-  108); CURRENT STANDARD for `claim_leases` / `release_leases` / `read_leases` / `sleep`
-  (`f3a4c86` — the commit that created `mutate-probe.sh`, so its controls ran under it).
+- ⚠ OLD-STANDARD — `gates.py`: `stat_current_named_file` (`36e3785`) and `claim_leases` /
+  `release_leases` / `read_leases` / `sleep` (`f3a4c86`). A previous revision SPLIT this bullet
+  and called the lease half CURRENT STANDARD; the guard table above refutes that — `f3a4c86`
+  carried 3 of 6 guards and not guard 0. Both halves are old-standard.
   The leases have their own STATEFUL 22-step differential
   (`tests/lease-diff.sh`) — the first place `globs_overlap` runs against real lock FILES. Four
   controls redden, two only after adding records that ISOLATE the filename-identity and
@@ -340,13 +367,79 @@ difference — but every call site has to drop the await). One item left:
      `GATE_CHECK` alone is NOT enough; the interpreter needs the same `PY ?` treatment
      `dispatch-tests.mjs:59` already uses. A port that flips only the constant will fail in a
      way that looks like a port defect.
-   - **`self-check.mjs` asserts on gate-check's JS SOURCE TEXT and cannot transfer.** Measured:
+   - **`self-check.mjs` asserts on gate-check's JS SOURCE TEXT — zero coverage of the PORT,
+     inside a suite whose green is read as "the port is fine".** Note the precise wording: an
+     earlier revision said these checks "test nothing", which is false and points at deleting
+     them. In the coexistence end state (`dispatch-check.mjs` and `dispatch_check.py` both
+     survive, so `gate-check.mjs` will too) they keep reading the JS and keep asserting TRUE
+     things about the ORACLE. That is real coverage of a real file — of the wrong file for
+     this purpose. It is a coverage gap wearing coverage's clothes, not dead weight, and the
+     remedy is to port or label each, never to delete. (Conditional on coexistence: if
+     `gate-check.mjs` were ever removed these would throw on a missing file — loud, not
+     silent.) Measured:
      `:190` (`src.includes("i !== tIdx + 1")`), `:197` (`"writeAtomic"`), `:198`
      (`"withFileLock"`), plus `:203`, `:211`, `:334`. These are string searches over the `.mjs`
      file. They will pass unchanged against the Python port while testing NOTHING about it —
      a vacuous-green, the exact failure class this document is about. Decide per check: port
      the assertion to the Python spelling, or mark it JS-only. Do NOT leave them silently
      green.
+
+   **`lib/regex_worker.py` ALREADY EXISTED (`85a6c50`) and had NEVER BEEN RUN against the
+   oracle. `tests/regex-worker-diff.sh` (21 rows, new 2026-09-07) is the first thing that
+   executed it, and it surfaced the port's WIDEST divergence surface. Read this before
+   touching `EXPECT`.**
+
+   Recorded because it is the more useful fact: a first draft of this note said "STARTED
+   2026-09-07", written after a `Write` overwrote the committed file without checking whether
+   one was there. `git status` showed ` M` (tracked-modified) rather than `??`, which is what
+   caught it. The file was committed, so nothing was lost — but "I wrote this today" was
+   false, and the shim `regex-worker-drive.mjs` was edited on the strength of it (its comment
+   correctly described the OLD port and was "corrected" to match the new one; now restored
+   with the actual history). **The lesson is the general one: an untested file and a
+   nonexistent file look identical from the TRDD, and only one of them is a gap you created.**
+
+   What actually changed in the port today, and why: the committed version duplicated the JS
+   flag map locally (now IMPORTS `_JS_FLAG_MAP` from `gates`, so the validator in
+   `parse_regex` and the matcher here cannot silently drift), used `json.dumps` default
+   separators (now compact — see the harness note below), and read `stdin.readline()` (now
+   `read()`, matching the oracle's `readFileSync(0)`).
+
+   A SUBPROCESS where the oracle uses a worker THREAD, and that is forced, not chosen: the
+   worker exists so the parent can abandon a catastrophically backtracking match, and CPython
+   cannot interrupt a thread inside `re` at all — the C matcher never returns to the
+   interpreter, checks no signal, releases no GIL. A thread would hang the checker exactly as
+   the oracle's design prevents.
+
+   **`RegExp` and `re` are different ENGINES, so a pattern can compile in both and MEAN
+   different things.** 8 of 21 rows diverge, and they are not exotic:
+
+   | row | JS | Python | severity |
+   |---|---|---|---|
+   | `ok$` vs `"ok\n"` | no match | **match** | **HIGHEST — silently flips gate verdicts** |
+   | `\A` / `\Z` anchors | literal `A`/`Z`, no match | anchors, match | high |
+   | `(?<y>…)` JS named group | works | **error** | high |
+   | `(?P<y>…)` Python named group | **error** | works | high |
+   | `a[]b` empty class | no match | error | medium |
+   | `\p{L}` with `u` | match | error | medium |
+   | error MESSAGE text | `Invalid regular expression: …` | `missing ), unterminated…` | low, but user-visible |
+
+   **The `$` row is the one that will bite.** JS `$` without `m` matches only at the very end;
+   Python `$` also matches BEFORE a final newline — and CHECK output almost always ends with
+   one. So `EXPECT: /ok$/` fails in the oracle and passes in the port, on the most ordinary
+   input there is. Nothing about that is visible in a passing suite.
+
+   **Not yet decided, and it is a REAL decision, not a porting detail**: whether the port
+   should EMULATE JS semantics (translate `$` → `\Z`, reject `(?P<`, accept `(?<`) or DOCUMENT
+   the divergence. Note `parse_regex` in `gates.py` ALREADY chose `re.compile` for validation,
+   so the divergence begins one layer EARLIER than the worker — a `(?<y>…)` EXPECT is rejected
+   at parse time in Python and accepted in JS, inside code sitting under an OLD-STANDARD
+   bullet. Whatever is chosen must be applied at BOTH sites or they disagree.
+
+   Harness note, because it nearly hid all of the above: the first run reported **21/21
+   divergent**. Twenty were `json.dump`'s default `", "`/`": "` separators against
+   `JSON.stringify`'s compact ones. The eight real rows were invisible in that noise. Fixed in
+   the port (`separators=(",", ":")`), and the corpus carries labelled CONTROL rows plus a
+   `rows < 15` vacuity gate for the same reason `lease-diff.sh` does.
 
    **ALSO: `mutate-probe.sh` does NOT work as the verdict reader for this route.** Its verdict
    greps `^DIVERGE` (`:140`), which only the hand-written differential drivers print. The

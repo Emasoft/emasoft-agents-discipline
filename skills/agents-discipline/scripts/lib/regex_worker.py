@@ -1,40 +1,61 @@
 #!/usr/bin/env python3
-"""One-shot EXPECT-regex match worker.
+"""Port of `lib/regex-worker.mjs`: test ONE regex against ONE output, disposably.
 
-Port of regex-worker.mjs. The JS version runs inside a node:worker_threads Worker that
-receives exactly one `{source, flags, output}` message and posts exactly one reply; the
-budget/timeout/pool logic lives in the caller (gate-check.mjs), not in the worker itself.
-This reads one JSON message from stdin and writes one JSON reply to stdout, then exits --
-the same one-shot, single-message contract, just over stdio instead of a worker port.
+A SUBPROCESS, where the oracle uses a worker THREAD, and that is forced rather than
+chosen. The whole point of the worker is that the parent can abandon a catastrophically
+backtracking match after `REGEX_TIMEOUT_MS`. Node can `worker.terminate()` a thread;
+CPython cannot interrupt a thread stuck inside `re` at all -- the C matcher never
+returns to the interpreter, so it checks no signal and releases no GIL. A thread here
+would hang the checker exactly as the oracle's design exists to prevent. The parent
+kills a process instead.
+
+PROTOCOL (stdin/stdout, one JSON object each way) -- the shapes match the oracle's
+`postMessage` payloads exactly, because `safeRegexMatch` branches on them:
+    in :  {"source": str, "flags": str, "output": str}
+    out:  {"matched": bool}   on success
+          {"error": str}      on a bad pattern
+Anything else the parent must treat as a crash, which is what the oracle does with a
+worker that exits without posting a message.
 """
-
-import json
-import re
 import sys
 
-# JS RegExp flags mapped to Python's re flags for a single .test() call: `g`/`y`/`d` affect
-# only stateful/indexed matching, irrelevant here, and `u` is Python's default (Unicode) mode.
-_FLAG_MAP = {"i": re.IGNORECASE, "m": re.MULTILINE, "s": re.DOTALL}
+# BEFORE any local import -- a stale .pyc validates on (source mtime, source size) alone,
+# and a same-size mutation inside one mtime second leaves the OLD bytecode executing.
+sys.dont_write_bytecode = True
+
+import json  # noqa: E402
+import os  # noqa: E402
+import re  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# IMPORTED, not re-declared. `parse_regex` VALIDATES an EXPECT with this map and this
+# worker MATCHES with it; a second copy lets the two drift, and the drift is silent and
+# vacuous -- a pattern validated case-insensitively would be matched case-sensitively,
+# so every EXPECT would still "work" while quietly testing something else.
+from gates import _JS_FLAG_MAP  # noqa: E402,I001  # type: ignore[import-not-found]
 
 
 def main():
-    message = json.loads(sys.stdin.readline())
-    source = message["source"]
-    flags = message.get("flags") or ""
-    output = message["output"]
+    request = json.loads(sys.stdin.read())
+    flags = re.ASCII  # matches parse_regex: JS \d\w\b are ASCII-only, Python's are not
+    for flag_char in request.get("flags", ""):
+        flags |= _JS_FLAG_MAP.get(flag_char, 0)
     try:
-        # re.ASCII always: JS's \w, \b and \d are ASCII-only regardless of the `u` flag, while
-        # Python's are Unicode by default. Without this, the port would silently match more
-        # than the JS oracle it must agree with.
-        py_flags = re.ASCII
-        for ch in flags:
-            py_flags |= _FLAG_MAP.get(ch, 0)
-        matched = re.search(source, output, py_flags) is not None
-        result = {"matched": matched}
+        # `search`, not `match`: JS `RegExp.test` is unanchored, and `re.match` anchors at
+        # the start. That difference is invisible on a pattern beginning with `.*` and
+        # wrong on every other one.
+        matched = re.compile(request["source"], flags).search(request["output"]) is not None
+        reply = {"matched": matched}
     except re.error as error:
-        result = {"error": str(error)}
-    sys.stdout.write(json.dumps(result) + "\n")
-    sys.stdout.flush()
+        reply = {"error": str(error)}
+    # COMPACT separators, matching `JSON.stringify`. Python's default `json.dump` writes
+    # `{"matched": true}` and JS writes `{"matched":true}`; the parent parses either, so this
+    # is not a behavioural fix -- it is so the differential can SEE the semantic rows. With
+    # the default separators every one of the 21 corpus rows reported DIVERGE on whitespace
+    # and the six real engine differences were invisible in the noise.
+    json.dump(reply, sys.stdout, ensure_ascii=False, separators=(",", ":"))
+    sys.stdout.write("\n")
 
 
 if __name__ == "__main__":
