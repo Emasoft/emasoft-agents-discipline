@@ -727,6 +727,30 @@ decision → then the remaining eight. `:144` first because it is the most sever
 (`UNIT_HEADER` at `:103` is the pattern to copy), its divergence is already measured so its control
 is already designed, and finishing one site measures the per-site cost instead of estimating it.
 
+**⚠ TWO CLAIMS IN `47bc2be` AND `7e8d56c` ARE OVER-STATED. The commits are permanent; the
+corrections live here.**
+
+1. **`47bc2be` says "NOTHING WAS WATCHING THIS LINE" and cites the silent settle. Too strong.**
+   Every existing fixture *executes* the finder — that is how any of them parse at all. What the
+   settle actually measured is that **no existing test's verdict changes when the site's semantics
+   change, on the inputs those tests use** — all ordinary space/tab, where the two `\s` sets agree.
+   The correct claim is **"no existing test DISCRIMINATES this site"**. As written it invites the
+   inference that the line is unreached and a mutation there is undetectable, which the new suite
+   itself disproves. Execution and discrimination are not the same measurement, and the commit
+   message conflates them.
+2. **`7e8d56c` advertises tokenizing as superior to the `#` heuristic. Only half true.** It fixes
+   the `#`-inside-a-string direction and INTRODUCES the opposite one: `t.start[0]` collects lines
+   *containing* a comment token, so a line of **code with a trailing comment** is dropped from
+   "live". The file has 6 such lines. It has a second, opposite bias too — `tokenize` emits no
+   COMMENT inside a string, so a `\s` in a docstring would count as LIVE. Neither was measured
+   when the count was committed. "Line has a comment token" is a PROXY for "this `\s` sits in a
+   comment"; the thing itself is which TOKEN the occurrence falls inside.
+
+   **RE-MEASURED BY TOKEN, and the numbers survive** — so the count is now evidence, not luck:
+   all 9 live lines have their `\s` inside a **STRING** token; 13 inside a **COMMENT** token; the
+   intersection is **empty**; none is inside a multi-line string. Use the by-token classification,
+   never the by-line one, if this is ever recomputed.
+
 **STEP 1 IS DONE (`47bc2be`), AND IT MEASURED THE PER-SITE COST — which was the point of doing it
 alone.** One site took: a module-level constant, a FOURTH writer surface in `whitespace-diff.sh`
 (the three existing writers provably cannot reach a `^`-anchored finder), a control, and two
@@ -735,15 +759,51 @@ because this writer pads THROUGH the token its siblings pad away from. So the pe
 **dominated by the test surface, not the one-line substitution**, and the anchor is the part with
 no reusable shape.
 
-**That measurement is what makes the STATE block's own test strategy (further down: property
-assertion over all 30 code points + a `\s`-absence guard + ONE differential) the right call rather
-than a thrifty one.** Eight more writer surfaces at that cost buys eight controls, most of them
-asserting a single bit. Do NOT plan a writer per remaining site; plan the property assertion.
+**⚠ AND THE COST GENERALIZATION FROM IT IS UNSOUND — corrected before it was acted on.** I used
+this one site's cost to conclude the per-site cost is "dominated by the test surface" and then
+applied that to all eight remaining sites. But this site was chosen precisely BECAUSE it was the
+most severe and structurally unusual: `^`-anchored, provably unreachable from all three existing
+writers, needing a novel anchor that took two rounds. **That is the least representative sample
+available, and I generalized its cost UPWARD onto eight sites I had not sampled.** Three of them
+(`:66`, `:69`, `:130`) live in evidence text that `_write_ledger_ev` ALREADY reaches, so their
+surface cost is plausibly near zero. Same shape as the reasoning this task has twice had refuted by
+measuring — a property of one instance projected onto a set.
 
-**Step 2 (`JS_WS_CHARS` + the eight remaining sites) is PROPOSED and under adversarial review** as
-of this edit — proposal in the transcript, per `propose-then-review-then-implement`. The two design
-decisions below (`:464`/now-`:484` no-op scan, and CITATION's negated class) are unchanged and both
-are IN that proposal.
+**THE CONCLUSION STANDS; THE JUSTIFICATION DOES NOT.** Prefer the property assertion for a
+COVERAGE reason, not a cost one: it covers sites **no fixture can reach**, which is a thing a
+differential cannot do at any price. That argument needs no cost sample and survives whatever the
+per-site cost turns out to be. Do NOT plan a writer per remaining site; plan the property
+assertion — and if a per-site cost figure is ever needed, sample a second site first.
+
+**Step 2 was PROPOSED and REVIEWED (2026-09-07). The review REJECTED its shape.** Findings
+accepted, and every one of them changes the plan:
+
+1. **DO NOT land the eight sites as one commit.** Each is an independent behavioural change with
+   its own predicate, reachability and failure direction; backing out two of them would be two
+   unrelated reverts, which is this project's own test for "that was two changes". Bundled, a
+   single red is unattributable, and eight correct substitutions carry a ninth wrong one in under
+   their green — the exact ratchet measured earlier in this task, where two defects were each
+   introduced by the fix for the previous one. **One site, one red-then-green, one commit.**
+2. **`JS_WS_CHARS` is a footgun name.** `"[^`" + JS_WS_CLASS + "]"` — the obvious-looking mistake —
+   **compiles cleanly** and silently means something else (`[^`[…]` followed by a literal `]`). Two
+   near-synonyms where one must never appear in the natural place. Name it **`JS_WS_CLASS_BODY`**
+   so the misuse reads wrong, or expose one entry point instead.
+3. **Substitute, then apply `re.A`** at the four `re.I` sites — see the FLAG CLASS section above.
+   Ordered, not independent.
+4. **Measure CITATION's direction independently; do NOT infer it by symmetry.** A NEGATED class
+   inverts the sign: `[^`\s]` today EXCLUDES U+001C-1F/0085 (port stricter → fails CLOSED) and
+   INCLUDES U+FEFF (port looser → fails OPEN) — the opposite split from `TABLE_HEADER`'s five/one.
+   This block already records that arguing the five by symmetry from the one predicted the wrong
+   direction; this is the same trap with the sign flipped again.
+5. **Two sites share one evidence line and strong-evidence is an OR** (`:66` vs `:69`), as do
+   `:263` and `:453` (both consume `inner` from a code span). A fixture can red the wrong one, or
+   go vacuous while looking green. The per-case ATTRIBUTION marker added to `_case` is the
+   discriminating instrument — give each a marker unique to its target predicate.
+6. **`$` vs `\Z` at the heading site.** Python `$` also matches before a trailing `\n`; JS `$`
+   without `/m` does not. `:484` already uses `\Z`; `:296` uses `$`. Two spellings, no stated
+   reason. Default to `\Z`.
+7. **"All `\s` sites converted" will be an over-claim** while the known-open `[ \t]` stripper
+   (`:755`) stands. Fine to leave it — name the carve-out.
 
 **STANDING RULE ADOPTED (2026-09-07), because two is a coincidence and three would be a policy
 nobody chose:** the next side-finding gets **measure → record here → continue**. Fix it in-stretch
@@ -836,6 +896,58 @@ sets `SKIP_RERUN=1`, and the oracle refuses to sign a skipped run. Asserts stamp
 EQUALITY of two independently-signed files, deliberately not a grep for `STALE` (a downstream
 proxy, and a negative grep that would also pass on empty output). Red-then-green and
 discriminating: 8 trailing-run cases fail on the unfixed port, all 4 controls stay green.
+
+### ⚠ THE FLAG CLASS — BIGGER THAN THE `\s` CLASS, FOUND 2026-09-07 WHILE REVIEWING THE `\s` FIX
+### `re.I` is not JS `/i`, and `re.M` is not JS `/m`. MEASURED, both runtimes, first-hand.
+
+**This was found by an adversarial review of the `\s` proposal, not by the sweep** — the sweep was
+looking at the pattern BODIES and the divergence is in the FLAGS. Measured directly, node vs
+python3, same inputs:
+
+| case | node | python | direction |
+|---|---|---|---|
+| `/i` — `ſ` (U+017F) matches `s` | reject | **MATCH** | port LOOSER |
+| `/i` — `K` (U+212A KELVIN) matches `k` | reject | **MATCH** | port LOOSER |
+| `/i` — `İ` (U+0130) matches `i` | reject | **MATCH** | port LOOSER |
+| `/m` — `^` anchors after `\r` | **MATCH** | reject | port STRICTER |
+| `/m` — `^` anchors after U+2028 | **MATCH** | reject | port STRICTER |
+| `/m` — `^` anchors after `\n` (control) | MATCH | MATCH | same |
+
+**Cause.** JS `/i` WITHOUT the `u` flag — which is what every oracle regex here uses — refuses
+case foldings that map a non-ASCII character onto an ASCII one. Python's `re.I` on `str` performs
+them. Symmetrically, JS `/m` anchors after `\n \r    `; Python's `re.M` anchors after
+`\n` only.
+
+**User-visible instances, one per affected site:**
+- `MEASURED_RESULT` (`:66`) — the evidence line `12 paſſed` is STRONG evidence in the port and not
+  in the oracle, so a ledger's `evidence:` verdict splits.
+- `NOOP` (`:484`) — the acceptance `ſleep 1` is REJECTED as a no-op cheat by the port and ACCEPTED
+  as a real check by the oracle. The port is stricter here, which is the safe direction, but it is
+  still a divergence from the spec.
+- heading (`:296`) — `## Ruleſ of thiſ ledger` enters rules-skip mode in the port only, changing
+  what counts as evidence for the whole file.
+- `CREATED` (`:130`) — a ledger with CR line endings, or a U+2028 separator, has a `Created:` line
+  the ORACLE finds and the port does not. That feeds the stale-artifact comparison at oracle `:321`.
+
+**THE FIX IS UNBLOCKED BY THE `\s` FIX ITSELF, and that is the non-obvious part.** This module's
+`:55-59` comment records that `re.ASCII` was rejected because it *also* narrows `\s`. Once a site
+spells the whitespace as an explicit literal class, **`re.A` narrows nothing** — it only restricts
+`re.I` folding to ASCII, which is exactly JS non-`u` semantics. So `re.A` becomes correct and safe
+at precisely the four `re.I` sites, but ONLY after their `\s` is substituted. The two fixes are
+ordered, not independent.
+
+`re.M` is not fixed by `re.A`. `CREATED` needs its own decision.
+
+**METHOD NOTE — this class was invisible to the whole test design.** `whitespace-diff.sh` probes
+six code points, all of them whitespace. Not one of them can see a case-folding or a line-anchor
+divergence. Any future "all surfaces green" claim about these sites certifies the whitespace third
+of what they do. New vectors required: `ſ`, `K`(U+212A), `İ` for the `re.I` sites; `\r` and U+2028
+for `CREATED`; a trailing `\n` for the `$`-vs-`\Z` question.
+
+**VERIFIED CLEAN, so it does not need re-checking:** the JS→Python method mapping at every site.
+`CREATED.search(text)` correctly ports `text.match(/…/m)` (search semantics — `re.match` would
+anchor at position 0 and defeat `re.M` entirely); `MEASURED_RESULT.search` / `EXIT_CODE.search`
+port `.test()`; `CITATION.findall` ports `matchAll`. Read at the call sites, not inferred.
 
 ### REGEX-WHITESPACE CLASS — OPEN. The port transliterated the oracle's `\s`, and the two
 ### languages do not agree on what `\s` means.
