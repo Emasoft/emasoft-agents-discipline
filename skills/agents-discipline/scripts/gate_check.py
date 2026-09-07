@@ -316,7 +316,6 @@ def as_directory(path, label):
         description = (exc.strerror or "").lower()
         fail_usage("cannot inspect " + label + " " + path + ": "
                    + name + ": " + description + ", stat '" + path + "'")
-        return
     if not _stat.S_ISDIR(stat_result.st_mode):
         fail_usage(label + " is not a directory: " + path)
 
@@ -967,7 +966,10 @@ def main(argv):
             }).encode("utf-8") + b"\n"
             budget_seconds = (REGEX_STARTUP_TIMEOUT_MS + REGEX_TIMEOUT_MS) / 1000.0
             try:
-                stdout_bytes, _stderr_bytes = worker.communicate(input=payload, timeout=budget_seconds)
+                # stderr is deliberately dropped: the worker's diagnostics are not part of the
+                # match verdict, and the oracle ignores them too. Bare `_`, not `_stderr_bytes`
+                # -- a checker treats only `_` as the intentionally-unused name.
+                stdout_bytes, _ = worker.communicate(input=payload, timeout=budget_seconds)
             except subprocess.TimeoutExpired:
                 # kill() + a bounded communicate() reaps the process before this function
                 # returns on every path -- constraint 1: no process this file spawns may

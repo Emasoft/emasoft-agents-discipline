@@ -85,9 +85,18 @@ _write_fixture() {
       # The two hash sets are not nested, though, and the gap is CWD's SPELLING:
       #   gateDefinitionDigest (gates.mjs:445-455) hashes the RAW `gate.cwd` string
       #   oracle()             (gate-check.mjs:340-356) hashes resolvedGateCwd(gate, file)
-      # so `.` and `./` are DIFFERENT to the digest and IDENTICAL to the signature. Respelling
-      # CWD moves exactly one disjunct, which is what makes this case a pin rather than a
+      # `resolvedGateCwd` is `resolve(base, gate.cwd)` (gate-check.mjs:332-338) and path.resolve
+      # NORMALIZES, so `.` and `./` yield the identical absolute string -- while the digest
+      # hashes `String(gate.cwd)` verbatim. DIFFERENT to the digest, IDENTICAL to the signature:
+      # respelling CWD moves exactly one disjunct, which is what makes this a pin rather than a
       # second copy of CASE 1.
+      #
+      # MEASURED, not reasoned. With the digest disjunct disabled in the port, CASES 1 and 2
+      # stay GREEN and this one diverges in exactly the shape the claim predicts -- the port
+      # WRITES the result the oracle refuses:
+      #     -   STALE leaf:G1: definition or runtime approval oracle changed; result not written
+      #     - - [ ] G1: x        (oracle)
+      #     + - [x] G1: x        (port, plus a fresh EVIDENCE line)
       printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: ./check.sh\n  EXPECT: ok\n  CWD: .\n' \
         > "$root/.agents-discipline/s/gates/leaf.md"
       printf '#!/bin/sh\nprintf "%s" > .agents-discipline/s/gates/leaf.md\necho ok\n' \
