@@ -18,7 +18,7 @@ import re
 import typing
 
 from gates import (  # type: ignore[import-not-found]
-    _node_fs_message, append_status, read_stable_regular_file, scope_root, validate_scope_id,
+    node_fs_message, append_status, read_stable_regular_file, scope_root, validate_scope_id,
     with_file_lock, write_atomic,
 )
 from jsapi import (  # type: ignore[import-not-found]
@@ -267,16 +267,29 @@ def read_state(root, path):
         #         port    invalid dispatch state: [Errno 13] Permission denied: '<path>'
         # THIS COMMENT USED TO CALL THAT DIVERGENCE OUT OF SCOPE -- "three different strings,
         # none reproducing the oracle", deferring to the drivers' errno-NAME comparison. Honest
-        # when written, and wrong now: _node_fs_message reproduces node's shape exactly for this
+        # when written, and wrong now: node_fs_message reproduces node's shape exactly for this
         # class, and 9071a84 (gate-lint), ledger_check.py:96 and this line are three instances of
         # one defect that were each found separately because the first fix was not swept. A
         # deferral whose premise was "nothing can reproduce it" has to be revisited the day
         # something can, and nothing re-reads a deferral on its own.
-        # `open` is the syscall for the structural reason gate_lint's site records: every OSError
-        # escaping read_stable_regular_file comes from its FIRST syscall.
+        # `open` IS THE SYSCALL, but NOT for the reason gate_lint's site gives -- that argument
+        # does not transfer and reusing it was wrong. gate_lint's try wraps one call and passes NO
+        # root, so the open is genuinely the only syscall that can raise to it. THIS try passes
+        # `root=`, which makes read_stable_regular_file realpath(strict=True) the ROOT after the
+        # open, and that CAN raise ENOENT/EACCES naming lstat. MEASURED that the vector is real:
+        # calling read_state directly with a symlink-loop root and an unrelated readable target
+        # produces `ELOOP: too many levels of symbolic links` from that stage.
+        # WHAT ACTUALLY CLOSES IT IS THE CALL GRAPH, not the helper: all three read_state callers
+        # pass `dispatch_state_path(root, scope)`, which is BUILT from the same root, so the
+        # target is always the root's descendant. If the open succeeded, the root resolved. The
+        # probe above only reached that stage because it handed the function a root the target
+        # does not live under -- a shape no caller can produce. Same residual as gate_lint's, and
+        # no larger: a concurrent mutation between the open and the realpath.
+        # (json.loads raises ValueError and validate_state raises DispatchError; neither is an
+        # OSError, so the wider try adds no other errno-bearing path.)
         raise DispatchError(
             "invalid dispatch state: "
-            + (_node_fs_message(error, "open") if error.errno is not None else str(error))
+            + (node_fs_message(error, "open") if error.errno is not None else str(error))
         ) from error
     except DispatchError as error:
         # The oracle re-raises ONLY when the message ALREADY carries the prefix, and wraps

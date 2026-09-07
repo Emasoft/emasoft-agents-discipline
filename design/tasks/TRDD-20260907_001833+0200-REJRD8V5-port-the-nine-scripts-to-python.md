@@ -59,10 +59,10 @@ from a `head -20` grep whose output was truncated, which is the same defect one 
 
 That is the TRIAGE surface, not the fix list, and it is wrong in BOTH directions — it is a
 SPELLING grep. It over-counts (the worker, spawn and regex sites carry V8/CPython text where
-`str()` is correct and `_node_fs_message` would be wrong) and it under-counts (`f"{e}"`,
+`str()` is correct and `node_fs_message` would be wrong) and it under-counts (`f"{e}"`,
 `repr(err)`, `err.strerror`, or an error bound to a variable and interpolated later all evade
 it). So the numbers bound the reading, not the work. Each site needs its errno checked: the
-`_node_fs_message(...) if errno is not None else str(...)` guard degrades correctly by
+`node_fs_message(...) if errno is not None else str(...)` guard degrades correctly by
 construction, but applying it blindly would claim node-shaped fidelity for messages node never
 produced. `gate_check.py:929` already carries a note about exactly this asymmetry; read it first.
 

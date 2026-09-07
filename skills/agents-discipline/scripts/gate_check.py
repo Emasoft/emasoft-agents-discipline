@@ -114,7 +114,7 @@ from gates import (  # noqa: E402  # type: ignore[import-not-found]
     # exact primitives gate-check.mjs's own approval machinery needs (path.join,
     # pathIsInside, and JSON.stringify-as-text). REUSE them rather than re-derive a second,
     # driftable copy -- the standing rule for every helper this project has already ported.
-    _js_join, _js_json_text, _LONE_SURROGATE_RE, _path_is_inside,
+    _js_join, _js_json_text, _LONE_SURROGATE_RE, _path_is_inside, node_fs_message,
 )
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
     force_utf8_streams, js_json_object, js_length, js_slice, js_to_number, js_trim,
@@ -469,13 +469,28 @@ def main(argv):
         except OSError as exc:
             if exc.errno == _errno.ENOENT:
                 fail_usage("no such gate file: " + file)
-            fail_usage("cannot inspect gate file " + file + ": " + str(exc))
+            # gate-check.mjs:234 interpolates `error.message`. THE FIFTH SITE OF ONE DEFECT, and
+            # the first one a RUNNER found rather than a person: errno-message-diff.sh's
+            # gate-check row was written green-or-red-is-information and came back red on its
+            # first execution.
+            #     oracle  ... : EACCES: permission denied, open '<path>'
+            #     port    ... : [Errno 13] Permission denied: '<path>'
+            # `open` even though the message says "inspect": this is a read_ledger_file catch,
+            # not a stat, so the failing syscall is the helper's open -- confirmed by the oracle
+            # naming `open` in the measured output above rather than assumed from the wording.
+            fail_usage("cannot inspect gate file " + file + ": "
+                       + (node_fs_message(exc, "open") if exc.errno is not None else str(exc)))
 
     def load_ledger(file):
         try:
             text = read_ledger_file(file)
         except OSError as exc:
-            fail_usage("cannot read " + file + ": " + str(exc))
+            # gate-check.mjs:241, the twin of the site above and of gate_lint's. Fixed in the
+            # same edit DELIBERATELY: every previous instance of this defect was found alone and
+            # its identical sibling left in place, four times running, because each fix was
+            # scoped to the line that had been measured. The pattern is the finding.
+            fail_usage("cannot read " + file + ": "
+                       + (node_fs_message(exc, "open") if exc.errno is not None else str(exc)))
         doc = parse_gates(text)
         for warning in doc["warnings"]:
             error("gate-check: " + file + ": warning: " + warning)

@@ -295,7 +295,7 @@ fi
 # leftover: case 4 went red on its first ever run against `ledger_check.py:96`, the same
 # `err.message`-vs-`str()` divergence 9071a84 fixed in gate-lint, at a second call site no sweep
 # had reached. Both rows are proven to discriminate it -- replacing either CLI's
-# `_node_fs_message(...) if errno else str(...)` with a bare `str(...)` reddens that row alone.
+# `node_fs_message(...) if errno else str(...)` with a bare `str(...)` reddens that row alone.
 _lint_missing() {  # exe script
   "$1" "$2" "$WORK/nope-$BAD_SEQ.md" > "$WORK/.o" 2> "$WORK/.e"
   printf 'exit=%s\n' "$?"

@@ -187,7 +187,7 @@ def _node_message_error(error, syscall):
         _NODE_MESSAGE_TYPES[base] = subclass
     rebuilt = subclass(error.errno, error.strerror)
     rebuilt.filename = error.filename
-    rebuilt._node_message = _node_fs_message(error, syscall)
+    rebuilt._node_message = node_fs_message(error, syscall)
     return rebuilt
 
 
@@ -1254,13 +1254,19 @@ def _js_join(*parts):
     return normalized
 
 
-# CALLERS OUTSIDE THIS MODULE: gate_lint.py:249 and ledger_check.py:96. The leading underscore
-# says "implementation detail of gates.py" and that is no longer true -- two other modules pin
-# this function's exact OUTPUT, which is itself pinned to node's. So its signature and its
-# measured errno scope are a contract now, not a private choice, and a change to either has a
-# blast radius of three files. Left underscored rather than renamed because a rename is churn
-# that would not make the coupling any smaller; this line is the whole fix.
-def _node_fs_message(error, syscall):
+# PUBLIC, and the missing underscore is the point. CALLERS OUTSIDE THIS MODULE: gate_lint.py,
+# ledger_check.py, dispatch.py and dispatch_check.py -- four modules pinning this function's
+# exact OUTPUT, which is itself pinned to node's `error.message`. Its signature and its measured
+# errno scope are a CONTRACT, not a private choice.
+#
+# It carried a leading underscore until four callers existed, and a note here naming TWO of them.
+# That note was written when two was the count and was already stale one commit later, which is
+# the argument against the underscore rather than for it: a marker saying "internal, refactor
+# freely" on the most externally-constrained function in this file misdirects exactly the reader
+# who greps before changing it, and a hand-maintained caller list decays the same way the
+# commit-tally table did. The rename is cheap; deferring it as churn at two callers was right
+# then and stopped being right here.
+def node_fs_message(error, syscall):
     """Node's `error.message` for a failed fs call, which is NOT Python's `str(error)`.
 
     The oracle interpolates `error.message` at this one site (it reads `error.code`
@@ -1371,10 +1377,10 @@ def _markdown_discovery(root, directory):
         return {"files": files, "errors": []}
     except OSError as error:
         # OSError, not Exception -- see list_scopes. A non-OSError here also degrades
-        # _node_fs_message twice over (no errno => code falls back to str(error), and prose
+        # node_fs_message twice over (no errno => code falls back to str(error), and prose
         # then repeats it), emitting the message doubled around a colon.
         return {"files": [], "errors": [
-            "cannot inspect gate directory " + directory + ": " + _node_fs_message(error,
+            "cannot inspect gate directory " + directory + ": " + node_fs_message(error,
                                                                                    "scandir")]}
 
 

@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
-    _node_fs_message, read_stable_regular_file)
+    node_fs_message, read_stable_regular_file)
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
     force_utf8_streams, normalize_argv)
 
@@ -105,7 +105,7 @@ except OSError as err:
     # before. The `errno is not None` guard preserves the helper's OWN raised errors (kind check,
     # size cap), which carry no errno and whose text is already the message the oracle prints.
     fail(2, "agents-discipline: cannot read " + path + ": " +
-            (_node_fs_message(err, "open") if err.errno is not None else str(err)))
+            (node_fs_message(err, "open") if err.errno is not None else str(err)))
 
 lines = text.split("\n")
 

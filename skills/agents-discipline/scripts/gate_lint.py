@@ -32,7 +32,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
-    _node_fs_message, parse_gates, read_stable_regular_file)
+    node_fs_message, parse_gates, read_stable_regular_file)
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
     force_utf8_streams, normalize_argv)
 
@@ -219,7 +219,7 @@ for file in files:
         #     oracle  ... : ENOENT: no such file or directory, open '/nonexistent/plain.md'
         #     port    ... : No such file or directory
         # The port dropped the errno CODE, node's lowercase prose, and the `, open '<path>'`
-        # suffix. gates.py has carried _node_fs_message for exactly this since the port began
+        # suffix. gates.py has carried node_fs_message for exactly this since the port began
         # and this call site never used it; gate-lint.mjs:150 interpolates `error.message`,
         # which is precisely what that helper reproduces. Reusing it also inherits its measured
         # scope note: EACCES/ENOENT/ENOTDIR are verified against node, anything rarer is not.
@@ -245,7 +245,7 @@ for file in files:
         # post-open fstat/stat/realpath CAN raise an errno if a concurrent mutator unlinks the
         # file mid-read, and node would name THAT syscall. No vector in this suite can produce
         # it, and a single-process caller cannot. Scoped, not proven absent.
-        message = (_node_fs_message(error, "open")
+        message = (node_fs_message(error, "open")
                    if error.errno is not None else str(error))
         print("gate-lint: cannot read " + terminal_safe(file, 512) + ": " + terminal_safe(message, 1024),
               file=sys.stderr)

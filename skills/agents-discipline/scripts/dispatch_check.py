@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 from dispatch import (  # noqa: E402  # type: ignore[import-not-found]
     DispatchError, get_dispatch_wave, update_dispatch,
 )
-from gates import _node_fs_message  # noqa: E402  # type: ignore[import-not-found]
+from gates import node_fs_message  # noqa: E402  # type: ignore[import-not-found]
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
     force_utf8_streams, js_trim, normalize_argv)
 
@@ -223,19 +223,21 @@ def main(argv):
         # classes this can actually raise, so a genuine bug in the port surfaces as a traceback
         # rather than being reported as a user-facing validation failure with exit 2.
         #
-        # THE THIRD SITE OF ONE DEFECT, after gate-lint (9071a84) and ledger-check. The two
-        # classes need OPPOSITE treatment and a bare str() was right for only one of them: a
-        # DispatchError already CARRIES the oracle's own message text, while an OSError is an fs
-        # error whose node shape str() does not reproduce. MEASURED on an unreadable
-        # dispatch.json, which is the ordinary way to reach the second branch:
-        #     oracle  ... invalid dispatch state: EACCES: permission denied, open '<path>'
-        #     port    ... invalid dispatch state: [Errno 13] Permission denied: '<path>'
-        # `open` is the syscall for the same structural reason as gate_lint's site: every OSError
-        # that escapes read_stable_regular_file comes from its FIRST syscall, the open, because
-        # everything after runs on the descriptor and raises the helper's own errno-less error.
-        # The `errno is not None` guard is what makes one expression serve both classes -- a
-        # DispatchError has no errno and keeps its text unchanged.
-        die(_node_fs_message(error, "open")
+        # THE OSError HALF IS PROPHYLAXIS, and saying so is the point. The two classes need
+        # OPPOSITE treatment -- a DispatchError already CARRIES the oracle's own message text,
+        # while an OSError is an fs error whose node shape str() does not reproduce -- and the
+        # `errno is not None` guard is what lets one expression serve both.
+        #
+        # BUT NO MEASURED VECTOR REACHES THE OSError BRANCH HERE. The obvious one (an unreadable
+        # dispatch.json) is WRAPPED by read_state into a DispatchError before it can arrive; that
+        # is where the real fix went, and putting the guard here first is what revealed it -- the
+        # row still diverged after the edit. What is left is the paths read_state does not wrap:
+        # write_atomic and with_file_lock. An uncaught UnicodeEncodeError from write_atomic HAS
+        # been observed escaping update_dispatch to this handler, so exceptions do get out
+        # unwrapped; whether an errno-bearing OSError specifically does is UNMEASURED.
+        # Labelled rather than left to read as covered, which is the standard argv-diff.sh's
+        # own prophylaxis block set one commit earlier and this site did not meet.
+        die(node_fs_message(error, "open")
             if getattr(error, "errno", None) is not None else str(error))
 
 
