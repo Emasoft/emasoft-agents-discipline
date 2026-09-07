@@ -102,6 +102,26 @@ JS_TRIM = "".join(map(chr, _JS_TRIM_CODEPOINTS))
 JS_WS_CLASS = "[" + "".join(map(re.escape, JS_TRIM)) + "]"
 UNIT_HEADER = re.compile(r"^\*\*unit" + JS_WS_CLASS + r"+([0-9]+)" + NOT_WORD_AFTER, re.I)
 
+# The table-header FINDER, mirroring `ledger-check.mjs:47`'s `/^\|\s*#\s*\|/`. JS_WS_CLASS, never
+# Python `\s` -- this is the single most consequential of the class's sites, because it does not
+# decide how a row parses, it decides whether the file IS A LEDGER AT ALL.
+#
+# MEASURED before the fix, one byte after the header row's leading `|`, both runtimes, plus three
+# controls (U+0020, U+0009, no pad -- all agreeing at exit 0, which is what proves the probe
+# reached this line rather than failing earlier):
+#   U+001C U+001D U+001E U+001F U+0085 -> node exit 2 `not a DELEGATION.md ledger` but port
+#     exit 0 `ledger complete: every unit verified`. The port FAILED OPEN: it certified the work
+#     done on a file the oracle refuses to parse.
+#   U+FEFF -> the reverse (node 0, port 2), because that code point is the one JS `\s` matches
+#     and Python's does not.
+# Both directions come from the same disagreement, so the class substitution fixes both at once.
+#
+# Compiled at module level rather than inline in the `next()` below, deliberately: UNIT_HEADER
+# above is the house form, eight more `\s` sites are still to be converted and will copy whatever
+# this one does, and an inline four-term concatenation buried in a generator expression is the
+# one shape in this file with no precedent.
+TABLE_HEADER = re.compile(r"^\|" + JS_WS_CLASS + r"*#" + JS_WS_CLASS + r"*\|")
+
 TRAILING_PIPE = re.compile(r"(^|[^\\])\|$")
 SEPARATOR_CELL = re.compile(r"^:?-+:?$")
 RECEIPT_RE = re.compile(r"\n?<!-- agents-discipline-check: [^>]*-->\n?")
@@ -141,7 +161,7 @@ except OSError as err:
 lines = text.split("\n")
 
 # Find the table: a line starting with `| # |` is the header we accept.
-header_idx = next((i for i, l in enumerate(lines) if re.match(r"^\|\s*#\s*\|", l)), -1)
+header_idx = next((i for i, l in enumerate(lines) if TABLE_HEADER.match(l)), -1)
 if header_idx == -1:
     fail(2, f"agents-discipline: {path} is not a DELEGATION.md ledger (no unit table header)")
 

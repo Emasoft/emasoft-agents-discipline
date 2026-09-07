@@ -153,6 +153,25 @@ _write_ledger() {
 # one runtime closes is one the other refuses outright. Arguing the five by symmetry from the one
 # would have predicted the wrong direction here; the first version of this file asserted exactly
 # that symmetry and only U+001C had actually been run.
+# FOURTH WRITER: pads the header row between its leading `|` and the `#`, which is the only
+# position the header FINDER's whitespace class governs. `_write_ledger_hdr` below pads the row's
+# TRAILING position and so reaches `column_count` instead -- a different expression, a different
+# failure, and it is why nothing here had ever exercised the finder.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
+_write_ledger_find() {
+  local dest="$1" ws="$2" pad
+  pad="$(printf '%b' "$ws")"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n\n'
+    printf '| %s# | Unit | Files (mine) | Worker | Acceptance | Status |\n' "$pad"
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '\n## Evidence\n\n'
+    printf '**Unit 1 —** ran the suite by hand; 12 passed.\n'
+  } > "$dest"
+}
+
 # shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
 _write_ledger_hdr() {
   local dest="$1" ws="$2" pad
@@ -212,8 +231,19 @@ _verdict() {
   printf 'exit=%s\n%s\n' "$rc" "${out//$mine/<LEDGER>}"
 }
 
+# $5 is OPTIONAL: a string the ORACLE's padded output must contain when $4 is `differ`, and must
+# NOT contain when $4 is `same`. Absent (the three original surfaces) it is skipped, so their four
+# -argument calls are unchanged.
+#
+# WHY IT EXISTS, and it is specific to the header-finder surface. Everywhere else the oracle moves
+# between exit 0 and exit 1, so "the verdict moved" has one meaning. The finder moves 0 -> exit 2,
+# and exit 2 is ALSO what `fail(2, "cannot read ...")` emits. `_verdict` captures the message text
+# as well as the code, so a fixture that became unreadable would still DIFFER from its baseline and
+# satisfy the effect check -- six green rows asserting nothing about the header finder. The marker
+# `no unit table header` is emitted from exactly one branch, so requiring it converts "something
+# moved" into "the finder rejected this line".
 _case() {
-  local name="$1" ws="$2" writer="$3" effect="$4" led o p base
+  local name="$1" ws="$2" writer="$3" effect="$4" marker="${5:-}" led o p base
   led="$WORK/$(printf '%s' "$name" | tr -c 'A-Za-z0-9' '-').md"
   "$writer" "$led" "$ws"
   o="$(_verdict node "$led")"
@@ -241,6 +271,20 @@ _case() {
     printf '    unpadded: %s\n' "$(printf '%s' "$base" | tr '\n' '|')"
     printf '    padded  : %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
     exit 1
+  fi
+  # ATTRIBUTION. Without this the effect check above proves only that SOMETHING moved.
+  # shellcheck disable=SC2016  # the backticks below are literal report text, not command substitution
+  if [ -n "$marker" ]; then
+    if [ "$effect" = differ ] && ! printf '%s' "$o" | grep -qF "$marker"; then
+      printf 'DIVERGE  %-38s oracle moved, but not via `%s`; not attributable\n' "$name" "$marker"
+      printf '    padded  : %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
+      exit 1
+    fi
+    if [ "$effect" = same ] && printf '%s' "$o" | grep -qF "$marker"; then
+      printf 'DIVERGE  %-38s oracle must NOT reject this pad, but emitted `%s`\n' "$name" "$marker"
+      printf '    padded  : %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
+      exit 1
+    fi
   fi
   p="$(_verdict py "$led")"
   if [ "$o" = "$p" ]; then
@@ -429,13 +473,57 @@ for i in "${!CASE_NAME[@]}"; do
   _case "evidence-header ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_ev "${CASE_ORACLE_EFFECT[$i]}"
 done
 
+# The anchor is NOT `\| # \|` here, and the difference is forced. The other three writers pad AWAY
+# from the token their anchor names, so that token survives the pad; this one pads THROUGH it -- a
+# correctly-placed pad destroys `| # |` by construction, that being the whole surface. Anchoring on
+# it would fail in BOTH the red and green states, reporting a working fix as a broken test.
+#
+# So the anchor asserts the pad's POSITION instead of a surviving token: `[^ |]` immediately before
+# the `#`, inside the first cell. That is exactly the placement this writer exists to produce, and
+# it rejects both ways of getting it wrong -- a pad moved in front of the `|` fails the line-initial
+# `\|` (the shared rule above), and a pad moved to the row's TRAILING position leaves `| # |` with
+# nothing before the `#` and fails here. A token-further-along anchor like `\| Unit \| Files` would
+# have accepted the trailing-pad case, i.e. accepted `_write_ledger_hdr`'s surface as this one's.
+# It is also matched line-initially (`^> ${anchor}`), so a mid-line token cannot match at all.
+_control _write_ledger_find "control: header-finder writer" '\| [^|]*[^ |]# \|'
+
+# FOURTH SURFACE: the table-header FINDER (`^\|\s*#\s*\|`, oracle `:47` / port TABLE_HEADER). It
+# does not decide how a row parses -- it decides whether the file IS A LEDGER AT ALL, so it is the
+# most consequential site of this whole class.
+#
+# THE THREE SURFACES ABOVE CANNOT REACH IT, and that is measured rather than argued. The header
+# writer pads the row's TRAILING position, which feeds `column_count`; a `^`-anchored finder is
+# untouchable from there. Reading that writer is only an argument, and an argument of exactly the
+# shape this repo has had refuted twice by measuring -- so the real evidence is that applying the
+# port fix changed NOTHING anywhere: all 14 diff suites, `ledger-tests.mjs` under both runtimes,
+# and `npm test` stayed green. Nothing was watching this line.
+#
+# Measured before the fix, both runtimes, three controls:
+#   U+001C/1D/1E/1F/0085  node exit 2 `not a DELEGATION.md ledger` / port exit 0 `ledger complete:
+#                         every unit verified`  -- the port FAILED OPEN
+#   U+FEFF                the reverse (node 0, port 2)
+#   U+0020, U+0009, none  agree at 0 -- which is what proves the probe reached this line
+#
+# The pad goes AFTER the existing space (`| %s# |`), never instead of it, for the reason
+# `_write_ledger_ev` already documents: replacing the space would make the CONTROL a different
+# shape from the one the template ships, and a control that is not the unpadded case of the same
+# fixture vouches for nothing.
+#
+# After the fix five of these six pass with BOTH runtimes at exit 2. That is correct -- the oracle
+# is the spec -- but it means those five assert exactly one bit (does the finder reject?) and are
+# blind to everything downstream. Do not read six green rows as coverage of the parse.
+for i in "${!CASE_NAME[@]}"; do
+  _case "header-finder ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_find \
+        "${CASE_ORACLE_EFFECT[$i]}" 'no unit table header'
+done
+
 echo
 if [ "$fail" = 0 ]; then
   # "check(s) passed", not "trim vector(s) identical": `$pass` has always also counted the
   # controls, and a control does not assert identity -- it asserts a count, and now also that the
   # padded verdict DIFFERS from the unpadded one. A summary line that calls every check an
   # identity is the kind of over-claim this suite exists to catch.
-  echo "--- $pass check(s) passed (cell + header + evidence-header surfaces) ---"
+  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"
