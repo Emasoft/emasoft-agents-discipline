@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T04:26:00+0200
+updated: 2026-09-07T04:39:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -23,6 +23,15 @@ test.
 this project — the recurring defect all session has been an assertion satisfied by something
 other than the property it names. Mutate the implementation, confirm the intended row reddens,
 revert. If no mutation isolates a row, that row does not earn its place.
+
+> **⚠ THE SUITE IS NOT ALL-GREEN, WHATEVER THE TALLY SAYS.** `regex-worker-diff.sh` exits 0
+> while **7 port divergences remain UNRESOLVED**, five of them ways the PORT differs from the
+> ORACLE — including `EXPECT: /ok$/`, which fails in the oracle and PASSES in the port on
+> output `gate-check` assembles without trimming. Exit 0 there means *no regression since the
+> set was pinned*, never *the port is correct*. Earlier commit messages in this TRDD's history
+> report "11 suites PASS"; **that number is wrong in the way that matters** — it converted the
+> document's own headline finding into green. The script's passing message now says so itself.
+> Read it as **10 PASS + 1 green-with-known-defects**.
 
 ### DONE — but THE VERIFICATION STANDARD VARIES; read the per-bullet notes
 **NO bullet below was verified under the FINISHED harness. Not one.** That is the honest
@@ -707,18 +716,36 @@ difference — but every call site has to drop the await). One item left:
    twelve digest fields — `check`, `expect`, `cwd`, `shell`, `PATH` (`:511-519`). So a
    divergence in those five is visible by eye in the failure output. **The other seven —
    `schema`, `timeoutMs`, `maxOutputBytes`, `regexTimeoutMs`, `regexStartupTimeoutMs`,
-   `maxRegexWorkers`, `platform` — are never printed**, and they are exactly the fields where
-   JS and Python formatting differs (JS renders `1.0` as `1`; `sys.platform` carries version
-   digits). A divergence there is invisible in the output AND indistinguishable from a missing
-   `--approve`. That is the gap worth closing by measurement rather than by debugging.
+   `maxRegexWorkers`, `platform` — are never printed**, so a divergence there is invisible in
+   the output AND indistinguishable from a missing `--approve`.
 
-   **Feasibility caveat, since the first draft called it "~10 lines, needs no `gate_check.py`":**
-   `oracle()` reads module-level state established during argument parsing — `shell`
-   (`resolveShell`), `timeoutSeconds`, `pathValue`, `approvalDir`. A differential must either
-   reproduce those or pin them to fixed values. Pinning is legitimate and keeps it small — the
-   seven unprinted fields are constants or `platform`, so a fixed-input comparison of
-   `sha256(JSON.stringify(oracle(...)))` still answers the question — but it is not free, and
-   calling it trivial was a guess.
+   **How risky each of those seven actually is — measured, because "exactly the fields where
+   formatting differs" inflated a one-field risk into seven.** `schema` is the literal `1`;
+   `maxOutputBytes`, `regexTimeoutMs`, `regexStartupTimeoutMs` and `maxRegexWorkers` are
+   integer constants; and `timeoutMs` is `timeoutSeconds * 1000` where `timeoutValue`
+   (`:130-137`) REJECTS anything failing `Number.isInteger`. So six of the seven are integers,
+   which serialize identically in both runtimes — **the float hazard cannot occur on this
+   path**. The genuinely risky ones are:
+   - **`platform`** — the one unprinted field that can differ (`sys.platform` version digits).
+   - **The whole-object serialization**, which is not a "field" at all and affects all twelve:
+     `JSON.stringify` compact separators vs `json.dumps`' `", "`/`": "`, and key ORDER.
+
+   That is still worth measuring first — a serialization mismatch breaks every approval — but
+   the argument is "two hazards, one of them object-wide", not "seven fields".
+
+   **SPLIT IT IN TWO — the first draft promised the expensive half and priced the cheap one.**
+   "Needs no `gate_check.py`, only `oracle()`'s twelve fields" hides two different jobs:
+   1. **Does serialization + hashing agree GIVEN identical inputs?** Genuinely small: pin
+      twelve literal values, compare `sha256(JSON.stringify(...))` against the Python side.
+      This is what tests the two real hazards above. **Do this first.**
+   2. **Does the port compute the same twelve VALUES?** Not small. `shell` comes from
+      `resolveShell` (`:306`), `timeoutSeconds` from `timeoutValue` (`:130`) via `parseArgs`,
+      `pathValue` from the `executableCandidates`/`delimiter` machinery (`:299`), and `cwd`
+      from `resolvedGateCwd` (`:332`). Obtaining those IS porting a chunk of `gate_check.py`.
+      **A later gate, after `parseArgs` and `resolveShell` exist.**
+
+   Recorded because a resuming session told "cheap, do it first" would meet `resolveShell` and
+   `parseArgs` in the way and either abandon the ordering or silently spend a round on it.
 
    **ALSO: `mutate-probe.sh` does NOT work as the verdict reader for this route.** Its verdict
    greps `^DIVERGE` (`:140`), which only the hand-written differential drivers print. The

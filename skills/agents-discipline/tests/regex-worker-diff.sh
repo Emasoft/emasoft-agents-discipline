@@ -165,5 +165,14 @@ if [ "$actual" != "$expected" ]; then
   diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") | sed 's/^/    /'
   exit 1
 fi
-echo "--- known engine divergences only, set unchanged ---"
+# THE MESSAGE MUST NOT CLAIM HEALTH. Exit 0 means "no REGRESSION since the set was pinned" --
+# it does NOT mean the port is correct, and the earlier wording ("known engine divergences
+# only, set unchanged") was read as a clean bill in a regression tally that then reported
+# "11 suites PASS". Five of these seven are ways the PORT behaves differently from the ORACLE,
+# including the highest-ranked hazard in the TRDD: `EXPECT: /ok$/` fails in the oracle and
+# PASSES in the port, on output gate-check assembles without trimming. The emulate-vs-document
+# decision is still open, so those are UNRESOLVED DEFECTS, not neutral facts about two
+# runtimes. A pin is the right tool here; asserting health in its passing message was not.
+echo "--- $differed KNOWN PORT DIVERGENCES, UNRESOLVED (see TRDD) — set unchanged, no regression ---"
+echo "    exit 0 means NOTHING NEW, not 'the port is correct'. Do not tally this as a plain PASS."
 exit 0
