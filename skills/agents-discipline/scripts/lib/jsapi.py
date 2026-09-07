@@ -113,9 +113,16 @@ def js_to_number(value):
       "0X"  "0b"  "0o"  "0xg"                a radix prefix with no valid digits is NaN
       " 0x10 "  "+0x10"  " +0x10"            trimmed first; a SIGN before a prefix is NaN
       "+"  "-"  "."  ".e3"  "1.2.3"  "1 2"   incomplete or multi-token is NaN
+    THE OPERATIONAL RULE, which is the part a reader can act on: a shape added HERE FIRST and
+    then to the corpus stands on this block. A row that predates this block does not, however
+    well it happens to match a line. Doc-before-row is a ground; row-before-doc is the
+    laundering above.
+
     Adding a shape here means adding its corpus row too -- python-lib-checks enforces that ONE
-    direction. It does NOT close the corpus: 31 of the 65 rows are named nowhere above, and a
-    66th can be added tomorrow with nothing objecting.
+    direction. It does NOT close the corpus: most rows are named nowhere above, and another can
+    be added tomorrow with nothing objecting. (No count here on purpose. An earlier draft wrote
+    one, which would have been false the next time a row landed -- an unchecked number in the
+    file whose whole thesis is that unchecked prose drifts.)
 
     Returns a float (`float("nan")` for the NaN cases) so callers can use the same
     `Number.isInteger` / range tests the oracle does.
@@ -141,6 +148,11 @@ def js_to_number(value):
         # cannot catch either, because int() does not consider them errors.
         if any(c not in _RADIX_DIGITS[radix] for c in digits):
             return float("nan")
+        # NO try/except HERE, AND THAT IS DELIBERATE BUT LOAD-BEARING: the whitelist above is
+        # now the ONLY thing standing between "0xg" and an uncaught ValueError. Measured --
+        # disabling the guard does not degrade to a wrong answer, it CRASHES the caller. So the
+        # guard is doing two jobs, and a future edit that "simplifies" it back to a try/except
+        # silently reopens the Unicode-digit and underscore holes while still looking correct.
         return float(int(digits, radix))
     if not _JS_DECIMAL_RE.match(text):
         return float("nan")                          # rejects 1_000, 12abc, 1e, 1,000, --5

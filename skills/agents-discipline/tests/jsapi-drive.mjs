@@ -152,9 +152,27 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   // same bytes, and a literal Arabic-Indic digit in a source file is invisible to a reader and
   // one careless re-encode away from silently becoming a different code point.
   //
-  // Mutations that isolate them (each reddens ONLY its own rows; both mutants still IMPORT):
-  //   `[0-9]` -> `\d` in _JS_DECIMAL_RE   reddens the three unicode-digit rows
-  //   drop the _RADIX_DIGITS guard        reddens "0x1_0" and the radix unicode-digit row
+  // GROUNDS, MEASURED -- and the first version of this comment got them wrong twice.
+  //
+  //   M1  `[0-9]` -> `\d` in _JS_DECIMAL_RE   reddens the THREE unicode-digit rows, together
+  //   M2' revert the radix whitelist to the   reddens "0x1_0" and "0x<U+0661>", together
+  //       pre-fix `try/except ValueError`
+  //
+  // Both mutants IMPORT and run to completion, so both verdicts are catches, not crashes.
+  //
+  // ERROR 1, and it is the interesting one: the mutation this comment ORIGINALLY named for the
+  // radix pair -- "drop the _RADIX_DIGITS guard" -- is NOT a valid control. It CRASHES the
+  // driver with an uncaught ValueError on "0xg", because the whitelist is now the only thing
+  // catching that (the try/except was removed as dead when the whitelist landed). A crash is
+  // not a catch; every row reddens and the result reads as a huge isolated set. M2' -- reverting
+  // to the code as it actually was before the fix -- is the control that means something.
+  //
+  // ERROR 2: neither mutation isolates a ROW. M1 reddens three at once, M2' reddens two at
+  // once. That is CLASS isolation. Under the precedent already set for `["a//","b"]` -- "every
+  // mutation tried reddens them together; none isolates it" -- exactly ONE row per class earns
+  // ground one, and the redundant siblings are kept on the WEAK ground and said to be. They are
+  // kept anyway: U+FF11 and U+06F4 are different Unicode blocks from U+0661, and a future
+  // narrowing that fixed only Arabic-Indic would pass a corpus holding just the one.
   String.fromCharCode(0x0661, 0x0662),  // Arabic-Indic -- the pair that shipped as 12
   String.fromCharCode(0xFF11),          // fullwidth ONE
   String.fromCharCode(0x06F4),          // Extended Arabic-Indic FOUR

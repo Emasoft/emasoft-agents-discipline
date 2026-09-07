@@ -15,8 +15,16 @@ Anything past that boundary exits PORT_INCOMPLETE_EXIT (90) with a message namin
 That is deliberate and load-bearing: a partial port that fell through to a silent success
 would let a differential PASS on a vector it never actually implemented, which is this
 project's recurring defect (an assertion satisfied by something other than the property it
-names). 90 collides with no oracle exit code -- gate-check uses 0, 1, 2 and 3 -- so a vector
-that runs off the end of the port is always visible as a divergence rather than as agreement.
+names). 90 collides with no oracle exit code, so a vector that runs off the end of the port is
+always visible as a divergence rather than as agreement.
+
+That range claim is ENUMERATED, not induced from the codes a few scenarios happened to produce
+-- a bound asserted from observation is exactly the shape this task has had to retract twice.
+Every `process.exit(...)` in gate-check.mjs takes a LITERAL, at :118 :155 :186 :209 :212 :246
+:263 :266 :279 :291 :294 :859 :904 :932 :936 :950, and the set of those literals is {0,1,2,3};
+:856 sets `process.exitCode = 2`, which :859 turns into `exit(2)`. There is no
+`process.exit(<variable>)` site, so nothing computes a code at runtime. Node's own uncaught
+-throw exit is 1, already in the set. Re-run that grep if this file's boundary ever moves.
 
 SELF-NAMING follows the convention gate_lint.py established: the HELP usage line names this
 file, and every other string -- including the "gate-check: " prefix and the "run gate-check.mjs

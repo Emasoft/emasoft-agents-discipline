@@ -448,10 +448,10 @@ report(_by.get("localeCompare pairs") != sorted(_by.get("localeCompare pairs", [
 # A DRIFT GUARD, AND ONLY THAT -- read the next paragraph before citing it for anything more.
 # It enforces ONE direction: every shape the docstring enumerates has a corpus row. It CANNOT
 # detect the opposite, a corpus row named nowhere, which is the direction an unbounded corpus
-# grows in. Measured at this commit: 65 corpus rows, 31 of them quoted nowhere in js_to_number's
-# docstring. So this check does NOT close the corpus, and the commit that introduced it
-# (aef1856) said it did. What it does buy is real but small: an enumerated shape cannot silently
-# lose its row.
+# grows in -- and most rows ARE named nowhere. So this check does NOT close the corpus, and the
+# commit that introduced it (aef1856) said it did. What it buys is real but small: an enumerated
+# shape cannot silently lose its row. No count in this comment on purpose; it would be stale the
+# next time a row landed.
 _gram = re.search(r"THE GRAMMAR THIS ACCEPTS.*?\n(.*?)\n\s*Adding a shape",
                   pathlib.Path(LIB, "jsapi.py").read_text(encoding="utf-8"), re.S)
 # Shape lines ONLY -- indented, starting at a quote. The captured region also holds two PROSE
