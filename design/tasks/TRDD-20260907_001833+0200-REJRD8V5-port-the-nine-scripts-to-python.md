@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T22:34:23+0200
+updated: 2026-09-07T22:52:06+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -723,7 +723,8 @@ and `67fafd3` are both TEST/RECEIPT work, not `\s` sites.
 
 **Order, settled by two independent reviews that agreed:** this STATE block → **`:144` alone, as
 one complete change** → then `JS_WS_CHARS` factoring + the compromised control + the `\s`-membership
-decision → then the remaining eight. `:144` first because it is the most severe, it is mechanical
+decision → then the remaining eight. (**SUPERSEDED in part:** the compromised control was tested
+out of this position — see the RESUMPTION POINT below. It now gates one site, not the sweep.) `:144` first because it is the most severe, it is mechanical
 (`UNIT_HEADER` at `:103` is the pattern to copy), its divergence is already measured so its control
 is already designed, and finishing one site measures the per-site cost instead of estimating it.
 
@@ -873,10 +874,13 @@ premise. So a fork's approval is not evidence the work was the right work.
 BEFORE the first tool call that changes anything.** Not "before acting" — before EDITING. The two
 commits above were both preceded by long, careful, entirely misdirected measurement.
 
-**RESUMPTION POINT, unchanged by the above:** `:144` is done (`47bc2be`). Next is the compromised
-positive control in `abandoned-unreasoned.md` — it is the instrument that will judge all nine
-sites, so it is a genuine blocker rather than a side-finding — then `JS_WS_CLASS_BODY` factoring
-and the `\s`-membership decision, then the remaining eight ONE SITE PER COMMIT.
+**RESUMPTION POINT — the blocker was TESTED, and the test NARROWED it rather than killing it.**
+`:144` is done (`47bc2be`). Next is `JS_WS_CLASS_BODY` factoring and the `\s`-membership decision,
+then the remaining eight ONE SITE PER COMMIT. `abandoned-unreasoned.md` is NOT "the instrument that
+will judge all nine sites" — that was asserted here without ever being measured, and measuring it
+refutes it. It IS a weak assertion inside the blast radius of ONE pair of sites (the `^##\s+`
+heading finder). Repair it THERE, gated on a mutation test — not ahead of the whole sweep. Entry
+below.
 
 **SITE NUMBERS IN THIS BLOCK ARE STALE — map by CONTENT, never by number.** It calls `UNIT_HEADER`
 `:103`; `d88f586` and `9ee169e` pushed it to `:148`. So the eight remaining bare-`\s` sites are
@@ -912,10 +916,47 @@ measured divergences" gets quoted as nine defects.
 - the fail-open stripper at `ledger-check.mjs:656`, which uses `[ \t]` where the header uses `\s`.
   A fork supplied an alternative; still unverified first-hand. **Re-locate it with `grep -a`** —
   see the NUL finding above; a bare grep for it proves nothing.
-- the compromised positive control in `tests/fixtures/abandoned-unreasoned.md` (`**Unit 3 —**` is
-  the last header, so ~25 trailing prose lines land in its block). This is a MEASURING INSTRUMENT
-  defect in the corpus that will judge all nine sweep changes — the same defect class the last two
-  commits fixed. Repair it before taking nine more readings with it.
+- **the compromised positive control in `tests/fixtures/abandoned-unreasoned.md` — the defect is
+  REAL, the "blocks all nine sites" claim was never measured and is FALSE, and the residue blocks
+  ONE pair of sites.** Measured 2026-09-07:
+  1. **0 of 29 files in `tests/fixtures/` carry any of the six `\s`-divergent codepoints**
+     (`U+001C U+001D U+001E U+001F U+0085` python-only, `U+FEFF` node-only); the same detector
+     reports both on a synthetic control, so the zero can fail. **Claim only what that measures:
+     no static fixture holds an input on which node's `\s` and Python's `\s` disagree, so none can
+     exercise a `\s` DIVERGENCE at any of the nine sites.** NOT "produces byte-identical output" —
+     that is a claim about the whole checker, and this session already found the runtimes
+     differing on pure ASCII for an unrelated reason (the oracle's `counts[r.status]` prototype
+     lookup).
+  2. **No injection path makes a static fixture divergence-capable:** `ledger-tests.mjs` has
+     exactly one `mutate` (pure-ASCII `| pending |` → `| verified |`), and `whitespace-diff.sh`
+     builds every ledger from scratch in `mktemp -d`, reading nothing under `tests/fixtures/`.
+  3. **BUT IT SITS IN THE BLAST RADIUS OF THE `^##\s+` HEADING FINDER.** It carries a
+     `## Evidence` heading and its blocks are produced by the scanner that drops those lines. It
+     still cannot produce a DIFFERING reading (1 stands) — it can produce a MEANINGLESS GREEN,
+     because unit 3 passes on the ~28 trailing prose lines rather than on its reason sentence, so
+     nearly any block content passes it. **GATE: at that site, mutate the converted regex and check
+     whether this case reddens. If it does not, repair the control before landing the site.**
+     Everywhere else it gates nothing, and the repair itself belongs to the `abandoned` feature.
+- **CORRECTED IN FLIGHT — there are TWO divergence instruments, not one.** Scanning all fourteen
+  `*-diff.sh` for literal divergent characters AND for the escape spellings that build them:
+  `whitespace-diff.sh` (the regex `\s` surfaces) and `receipt-diff.sh` (all six, against
+  `trimEnd()` vs `rstrip()`) carry them; the other twelve carry none. A draft of this entry called
+  `whitespace-diff.sh` "the only instrument" on the strength of having grepped only
+  `whitespace-diff.sh` — the measured-one-thing-claimed-about-all shape this block already records
+  twice, caught by review before it landed rather than after.
+- **PER-SITE PROTOCOL — both halves, neither substitutes.** `npm test` green is evidence about
+  ORDINARY-INPUT regressions and NO evidence about runtime divergence (reading 1). The two
+  instruments above are evidence about divergence and say nothing about ordinary input. Run BOTH
+  per site. And a `same` from a divergence suite means nothing until a writer provably REACHES the
+  site — a fixture that never reaches its site also prints `same`, which is why three sites above
+  are UNDETERMINED.
+- **WRITER → SURFACE MAP, from reading all four writers, so the per-site cost is inspectable
+  rather than guessed:** `_write_ledger` pads around the Status cell value → cell trim;
+  `_write_ledger_find` pads between the leading `|` and the `#` → the header FINDER;
+  `_write_ledger_hdr` pads the header row's trailing position → `column_count`; `_write_ledger_ev`
+  pads inside `**Unit %s2 —**` → `UNIT_HEADER`. **None of the four reaches any of the eight
+  remaining sites.** So a writer is part of each site's cost, as `:144` already demonstrated. That
+  sentence is a PLAN, not a finding.
 - **A COVERAGE CLAIM IS A MUTATION RESULT, NOT A GREP.** Recorded because I got it wrong twice in
   one turn on the same sentence. "No suite reaches the receipt path" was first argued from two
   named suites, then re-argued from `grep -l ledger.check tests/*-diff.sh` and labelled
