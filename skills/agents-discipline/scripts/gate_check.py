@@ -5,8 +5,10 @@ Port of gate-check.mjs. The JavaScript suite is the ORACLE: it is held FIXED and
 implementation varies, so any divergence is a porting defect and never a re-specified test.
 
 PARTIAL PORT -- THE ARGUMENT FRONT END, TARGET DISCOVERY, LEDGER-EXISTENCE CHECKS, THE
---list-scopes/--log/--claim/--release ACTIONS, AND (NEW) THE DEFAULT RUN MODE'S LEDGER
-LOADING, GATE SELECTION, AND FULL APPROVAL-CLASSIFICATION LOOP, gate-check.mjs:27-775.
+--list-scopes/--log/--claim/--release ACTIONS, THE DEFAULT RUN MODE'S LEDGER LOADING, GATE
+SELECTION, FULL APPROVAL-CLASSIFICATION LOOP, AND (NEW) CHECK EXECUTION -- spawning
+lib/check_supervisor.py, the regex-worker subprocess pool, process-tree teardown, per-check
+timeouts, and the PASS/FAIL print loop -- gate-check.mjs:27-793.
 
 The boundary sat at :295 (the `--claim`/`--release` block's closing brace) until this pass
 moved it forward. It CANNOT sit at :297 (`ledgers = target.files.map(loadLedger)`, where the
@@ -22,33 +24,43 @@ silently diverges the moment `--approve` is passed (which tests/run-tests.mjs:45
 into nearly every case) -- exactly the shape of bug a differential run without that flag would
 never catch.
 
-The boundary now ends exactly at gate-check.mjs:775, the last line of the RUN-print loop, one
-statement before `results = opt.status ? [] : await runRolling(runnable, jobs)` at :776 --
-the single call that spawns lib/check-supervisor.mjs (via lib/dispatch.mjs's sibling,
-lib/process-tree.mjs, and a `node:worker_threads` Worker pool for regex matching). That is the
-ONLY process/thread-spawning site reachable from this default run mode, so it is where "no
-spawn, no Worker, no process-tree teardown, no timeout machinery" has to draw the line. Ported
-in this pass: ledger loading (:297), the `pending` gate-selection loop with real CWD
+The boundary now ends exactly at gate-check.mjs:793, the last line of the RUN results
+PASS/FAIL print loop, one statement before `function failureOutput(...)`'s call site chain
+resumes into `function evidenceFor(result)` at :802 -- the start of the ledger-mutation half
+(rewriting EVIDENCE lines under `withFileLock`, detecting stale results, and the final
+MET/UNMET/ABANDONED tally). Everything that SPAWNS a process or a worker in this default run
+mode is now ported: `runRolling`/`run_rolling` (:700-714), `runCheck`/`run_check`
+(:593-698, spawning lib/check_supervisor.py -- ported here as CHECK_SUPERVISOR -- as a
+detached process-group leader, capturing stdout/stderr with the same live MAX_OUTPUT_BYTES
+cap, tearing the group down via lib/process_tree.py's `terminate_process_tree` on overflow or
+per-check timeout), and `safeRegexMatch`/`safe_regex_match` (:538-586, a `MAX_REGEX_WORKERS`-
+wide pool of disposable lib/regex_worker.py subprocesses in place of the oracle's
+`node:worker_threads` Worker pool -- the same one-shot, single-message contract
+regex_worker.py's own docstring already documents, bounded by the same
+REGEX_STARTUP_TIMEOUT_MS/REGEX_TIMEOUT_MS pair). These are LOCAL to gate-check.mjs (0 matches
+for any of them in lib/gates.mjs), so they are ported HERE rather than assumed to already
+exist in lib/gates.py.
+
+Ported in this pass: ledger loading (:297), the `pending` gate-selection loop with real CWD
 resolution and validation (:716-739), shell resolution and the full approval-token machinery
 -- `resolveShell`/`oracle`/`approvalOracleSignature`/`approvalPath`/`validatedApprovalDir`/
 `assertPrivateApprovalEntry`/`assertApprovalDirUnchanged`/`readApprovalFile`/`approvalExists`/
-`recordApproval`/`printOracle` (:299-519) -- and the classification loop that turns `pending`
-into `runnable`/`notRun` while genuinely reading and writing the on-disk approval store
-(:741-775). These are LOCAL to gate-check.mjs (0 matches for any of them in lib/gates.mjs), so
-they are ported HERE rather than assumed to already exist in lib/gates.py.
+`recordApproval`/`printOracle` (:299-519) -- the classification loop that turns `pending` into
+`runnable`/`notRun` while genuinely reading and writing the on-disk approval store
+(:741-775) -- and now CHECK execution itself: `runCheck`, `safeRegexMatch`, `runRolling`,
+`outputFingerprint`, and `failureOutput` (:538-800), all spawning real subprocesses rather
+than being stubbed.
 
-PORT_INCOMPLETE_EXIT (90) now fires unconditionally the moment this file reaches the line
-that would call `runRolling` -- not only when `runnable` is non-empty. A tempting shortcut was
-rejected here: when `runnable` and `notRun` are BOTH empty (nothing needed running -- either
-`--status`, or every gate was already met and `--reverify` was not given), `results` really is
-always `[]`, and the oracle's tail (the staleResults ledger-rewrite loop, the reloaded-ledger
-MET/UNMET tally, dispatchStatus aggregation, the extraUnmet bookkeeping across `--reverify` and
-stale results) is complex enough that reproducing it from the empty-`results` case alone would
-have been exactly the kind of "looks complete, is not measured" simplification this project's
-own history keeps warning about. So the sentinel fires every time, and the next porting pass
-inherits a clean, single, textually-obvious boundary instead of a conditional one that would
-need re-auditing later. Anything past that boundary exits PORT_INCOMPLETE_EXIT (90) with a
-message naming the stop.
+PORT_INCOMPLETE_EXIT (90) now fires unconditionally the moment this file would continue past
+the PASS/FAIL print loop -- not only when `results` is non-empty. The same reasoning as the
+earlier boundary still applies to the NEXT one: the oracle's tail (the staleResults
+ledger-rewrite loop, the reloaded-ledger MET/UNMET tally, dispatchStatus aggregation, the
+extraUnmet bookkeeping across `--reverify` and stale results) is complex enough that
+reproducing it from an empty-`results` shortcut would have been exactly the kind of "looks
+complete, is not measured" simplification this project's own history keeps warning about. So
+the sentinel fires every time, and the next porting pass inherits a clean, single,
+textually-obvious boundary instead of a conditional one that would need re-auditing later.
+Anything past that boundary exits PORT_INCOMPLETE_EXIT (90) with a message naming the stop.
 
 That is deliberate and load-bearing: a partial port that fell through to a silent success
 would let a differential PASS on a vector it never actually implemented, which is this
@@ -94,12 +106,16 @@ import json
 import math
 import os
 import re
+import signal as _signal_module
 import stat as _stat
+import subprocess
 import sys
+import threading
 import time
 import typing
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+_LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+sys.path.insert(0, _LIB_DIR)
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
     AGENTS_DISCIPLINE_DIR, MAX_CHECK_OUTPUT_BYTES, claim_leases, gate_definition_digest,
     gate_state, js_dirname, js_resolve, list_scopes, parse_gates, qualify,
@@ -111,8 +127,16 @@ from gates import (  # noqa: E402  # type: ignore[import-not-found]
     # driftable copy -- the standing rule for every helper this project has already ported.
     _js_join, _js_json_text, _LONE_SURROGATE_RE, _path_is_inside,
 )
-from jsapi import js_json_object, js_length, js_slice, js_to_number  # noqa: E402  # type: ignore[import-not-found]
+from jsapi import js_json_object, js_length, js_slice, js_to_number, js_trim  # noqa: E402  # type: ignore[import-not-found]
 from dispatch import _iso_now  # noqa: E402  # type: ignore[import-not-found]
+from process_tree import terminate_process_tree  # noqa: E402  # type: ignore[import-not-found]
+
+# gate-check.mjs:72 -- the sibling supervisor process that keeps a stable process-group
+# leader alive until CHECK's stdio closes. lib/regex_worker.py is the disposable one-shot
+# EXPECT matcher (gate-check.mjs's node:worker_threads Worker, ported onto stdio -- see
+# regex_worker.py's own module docstring).
+CHECK_SUPERVISOR = os.path.join(_LIB_DIR, "check_supervisor.py")
+REGEX_WORKER = os.path.join(_LIB_DIR, "regex_worker.py")
 
 # Only the first line differs from the oracle's HELP; a program names itself in its own usage
 # line. Every other line is transliterated exactly.
@@ -906,19 +930,294 @@ def main(argv):
         log("  RUN  " + qualify(task["file"], task["gate"]["id"]) + " shell=" + str(shell)
             + " cwd=" + task["cwd"] + " PATH=" + str(path_transcript))
 
-    # THE PORT STOPS HERE -- gate-check.mjs:776, `results = opt.status ? [] : await
-    # runRolling(runnable, jobs)`. That call is the only place this default run mode spawns a
-    # process (lib/check-supervisor.mjs) or a Worker (the regex pool); everything from there to
-    # the final MET/UNMET tally at :950 depends on its output. See the module docstring for why
-    # this fires even when `runnable` is empty. Loud on purpose: see the module docstring on
-    # why a silent fall-through would let a differential agree on a vector nothing implemented.
-    error("gate_check.py: PORT INCOMPLETE -- ledger loading, gate selection, and the full "
-          "approval-classification loop end at gate-check.mjs:775; the actual CHECK "
-          "execution (spawning lib/check-supervisor.mjs, the regex Worker pool, process-tree "
-          "teardown, per-check timeouts) and the final ledger/verdict tally are not ported "
-          "yet. jobs=" + str(jobs) + " pending=" + str(len(pending)) + " runnable="
-          + str(len(runnable)) + " not_run=" + str(len(not_run)) + " approval_infra_failures="
-          + str(approval_infrastructure_failures))
+    # gate-check.mjs:521-536: a bounded, MAX_REGEX_WORKERS-wide pool of disposable EXPECT
+    # matchers. JS backs this with a Promise-queue semaphore around node:worker_threads
+    # Worker instances; a plain counting Semaphore around one-shot regex_worker.py
+    # subprocesses is the same bound with this file's synchronous, thread-based concurrency
+    # model (every `run_check` call already executes inside its own `run_rolling` worker
+    # thread, so blocking here blocks only that one task, exactly like awaiting the JS Promise
+    # blocks only that one task's async chain).
+    _regex_worker_semaphore = threading.Semaphore(MAX_REGEX_WORKERS)
+
+    def safe_regex_match(expectation, output):
+        """gate-check.mjs:538-586. `text` is a substring check; `regex` spawns the disposable
+        one-shot lib/regex_worker.py and bounds it by the same two timeouts the oracle uses:
+        REGEX_STARTUP_TIMEOUT_MS for the worker to come alive, REGEX_TIMEOUT_MS for the match
+        itself (catastrophic backtracking budget) once it has."""
+        if expectation["kind"] == "text":
+            return {"matched": expectation["value"] in output}
+        _regex_worker_semaphore.acquire()
+        try:
+            try:
+                worker = subprocess.Popen(
+                    [sys.executable, REGEX_WORKER],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+            except OSError as exc:
+                return {"matched": False, "error": "EXPECT worker could not start: " + str(exc)}
+            payload = _js_json_text({
+                "source": expectation["source"], "flags": expectation.get("flags") or "",
+                "output": output,
+            }).encode("utf-8") + b"\n"
+            budget_seconds = (REGEX_STARTUP_TIMEOUT_MS + REGEX_TIMEOUT_MS) / 1000.0
+            try:
+                stdout_bytes, _stderr_bytes = worker.communicate(input=payload, timeout=budget_seconds)
+            except subprocess.TimeoutExpired:
+                # kill() + a bounded communicate() reaps the process before this function
+                # returns on every path -- constraint 1: no process this file spawns may
+                # outlive the call that spawned it.
+                worker.kill()
+                try:
+                    worker.communicate(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    threading.Thread(target=worker.wait, daemon=True).start()
+                return {"matched": False, "error": "EXPECT regex exceeded " + str(REGEX_TIMEOUT_MS) + "ms"}
+            if worker.returncode != 0:
+                return {"matched": False,
+                        "error": "EXPECT worker exited " + str(worker.returncode) + " without a result"}
+            try:
+                first_line = stdout_bytes.decode("utf-8", errors="replace").splitlines()[0]
+                return json.loads(first_line)
+            except (IndexError, ValueError) as exc:
+                return {"matched": False,
+                        "error": "EXPECT worker exited " + str(worker.returncode)
+                                 + " without a result: " + str(exc)}
+        finally:
+            _regex_worker_semaphore.release()
+
+    def output_fingerprint(output):
+        """gate-check.mjs:588-591."""
+        value = str(output)
+        return {"sha256": sha256(value), "bytes": len(value.encode("utf-8"))}
+
+    def _signal_name(returncode):
+        """`subprocess.Popen.returncode` is POSIX's own convention (negative = killed by
+        signal -returncode); Node instead reports `(code=null, signal="SIGxxx")` for the same
+        event -- the same translation lib/check_supervisor.py already does at its own exit."""
+        if returncode is None or returncode >= 0:
+            return None
+        try:
+            return _signal_module.Signals(-returncode).name
+        except ValueError:
+            return "unknown signal"
+
+    def run_check(task):
+        """gate-check.mjs:593-698. Synchronous (this whole file is), unlike the oracle's
+        callback-driven Promise -- the concurrency `runRolling`/`run_rolling` gives each task
+        is a worker THREAD here rather than an event-loop turn there, so a blocking call here
+        blocks only that one task, matching the oracle's per-task isolation.
+
+        Constraint 1 (process reaping): every path below either (a) never spawns a process
+        (the OSError branch), or (b) spawns exactly one lib/check_supervisor.py and calls
+        `child.wait()` before returning -- including the timeout/overflow branch, which sends
+        SIGKILL to the whole process group first (terminate_process_tree) so the blocking wait
+        below resolves promptly. A bounded final `wait(timeout=...)` is followed by a daemon
+        reaper thread only for the pathological case where the group refuses to die even after
+        SIGKILL -- so this call never blocks forever on a wedged descendant, and the process is
+        still reaped eventually rather than left a zombie."""
+        state = {
+            "bytes": 0, "raw_overflow": False, "timed_out": False, "stop_called": False,
+            "cleanup_diagnostic": None,
+        }
+        lock = threading.Lock()
+        chunks = {"stdout": [], "stderr": []}
+
+        try:
+            # `shell` is Optional only because :535 sets it None under --status, and run_check
+            # is unreachable there: --status makes the :808 guard `continue` for every gate, so
+            # `pending` is empty and `runnable` with it. MEASURED, not inferred from the oracle's
+            # shape -- the port run gives pending=0 under --status and pending=1 with the same
+            # ledger and only that flag removed. Same justification as the cast at :623.
+            child = subprocess.Popen(
+                [sys.executable, CHECK_SUPERVISOR, typing.cast(str, shell), task["gate"]["check"]],
+                cwd=task["cwd"], env=os.environ,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                start_new_session=(sys.platform != "win32"),
+                creationflags=(subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0),
+            )
+        except OSError as exc:
+            fingerprint = output_fingerprint("")
+            return {**task, "ok": False, "output": "", "outputFingerprint": fingerprint,
+                    "exitCode": None, "signal": None, "matched": False, "error": str(exc)}
+
+        def stop_child():
+            # gate-check.mjs:639-660 (`stopChild`). Idempotent -- both the byte-cap capture
+            # thread and the timeout timer can call this, and only the first one must act.
+            with lock:
+                if state["stop_called"]:
+                    return
+                state["stop_called"] = True
+            cleanup = terminate_process_tree(child)
+            state["cleanup_diagnostic"] = cleanup.get("diagnostic")
+
+        def capture(stream_name, handle):
+            # gate-check.mjs:662-671 (`capture`). Enforces MAX_OUTPUT_BYTES as data arrives,
+            # not after the process exits -- a runaway CHECK is cut off mid-stream.
+            while True:
+                try:
+                    chunk = handle.read(65536)
+                except (OSError, ValueError):
+                    break
+                if not chunk:
+                    break
+                trigger = False
+                with lock:
+                    remaining = MAX_OUTPUT_BYTES - state["bytes"]
+                    if remaining > 0:
+                        chunks[stream_name].append(chunk[:remaining])
+                    state["bytes"] += len(chunk)
+                    if state["bytes"] > MAX_OUTPUT_BYTES and not state["raw_overflow"]:
+                        state["raw_overflow"] = True
+                        trigger = True
+                if trigger:
+                    stop_child()
+            try:
+                handle.close()
+            except OSError:
+                pass
+
+        stdout_thread = threading.Thread(target=capture, args=("stdout", child.stdout), daemon=True)
+        stderr_thread = threading.Thread(target=capture, args=("stderr", child.stderr), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        def on_timeout():
+            state["timed_out"] = True
+            stop_child()
+
+        timeout_timer = threading.Timer(timeout_seconds, on_timeout)
+        timeout_timer.daemon = True
+        timeout_timer.start()
+
+        # SIGKILL to the whole process group (stop_child, above) closes every inherited pipe
+        # almost immediately, so these joins return promptly on the overflow/timeout paths
+        # too; the bound below only guards the pathological case of a descendant that escaped
+        # the group and still holds a pipe open.
+        stdout_thread.join(timeout=5.0)
+        stderr_thread.join(timeout=5.0)
+        try:
+            exit_status = child.wait(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            stop_child()
+            try:
+                exit_status = child.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                # Never block the caller forever on a wedged descendant; keep trying to reap
+                # it in the background so it does not linger as a zombie (constraint 1).
+                threading.Thread(target=child.wait, daemon=True).start()
+                exit_status = None
+        timeout_timer.cancel()
+
+        stdout_text = b"".join(chunks["stdout"]).decode("utf-8", errors="replace")
+        stderr_text = b"".join(chunks["stderr"]).decode("utf-8", errors="replace")
+        output = stdout_text + ("\n" if stdout_text and stderr_text else "") + stderr_text
+        fingerprint = output_fingerprint(output)
+        normalized_overflow = fingerprint["bytes"] > MAX_OUTPUT_BYTES
+        overflow = state["raw_overflow"] or normalized_overflow
+        timed_out = state["timed_out"]
+        if timed_out or overflow:
+            match = {"matched": False}
+        else:
+            match = safe_regex_match(task["gate"]["expectation"], output)
+        cleanup_diagnostic = state["cleanup_diagnostic"]
+        cleanup_suffix = ("; cleanup: " + cleanup_diagnostic) if cleanup_diagnostic else ""
+        if timed_out:
+            check_error = "timed out after " + str(timeout_seconds) + "s" + cleanup_suffix
+        elif overflow:
+            check_error = ("output exceeded " + str(MAX_OUTPUT_BYTES) + " bytes"
+                            + ("" if state["raw_overflow"] else " after stdout/stderr UTF-8 combination")
+                            + cleanup_suffix)
+        else:
+            check_error = match.get("error")
+        exit_code = None if exit_status is None or exit_status < 0 else exit_status
+        return {
+            **task, "output": output, "outputFingerprint": fingerprint, "exitCode": exit_code,
+            "signal": _signal_name(exit_status), "matched": bool(match.get("matched")),
+            "error": check_error, "ok": not check_error and exit_code == 0 and bool(match.get("matched")),
+        }
+
+    def run_rolling(tasks, limit):
+        """gate-check.mjs:700-714. A pull-based work queue -- `limit` worker threads race to
+        claim the next index, so `results[index]` always lands the right task's result even
+        though completion order is unordered, exactly like the oracle's `limit` concurrent
+        async workers racing the same shared `next` counter."""
+        # Annotated because `[None] * n` alone infers list[None], after which EVERY later
+        # `results[i] = run_check(...)` and every `result["..."]` read is a type error --
+        # 9 of the 10 the checker raised here cascade from this one line. The prefill is
+        # deliberate: the oracle's runRolling writes results BY INDEX so output order matches
+        # task order regardless of completion order, and a list that grows by append would
+        # silently reorder them under concurrency.
+        results: list = [None] * len(tasks)
+        next_index = [0]
+        index_lock = threading.Lock()
+
+        def worker():
+            while True:
+                with index_lock:
+                    index = next_index[0]
+                    next_index[0] += 1
+                if index >= len(tasks):
+                    return
+                results[index] = run_check(tasks[index])
+
+        workers = []
+        for _ in range(min(limit, len(tasks))):
+            thread = threading.Thread(target=worker)
+            thread.start()
+            workers.append(thread)
+        for thread in workers:
+            thread.join()
+        return results
+
+    # gate-check.mjs:776: the single call that spawns every CHECK process and regex worker.
+    results = [] if opt.get("status") else run_rolling(runnable, jobs)
+
+    def failure_output(output, max_len=480):
+        """gate-check.mjs:795-800. `js_trim`/`js_slice`, not `str.strip()`/Python slicing --
+        the oracle's `.trim()`/`.slice()` operate on JS's whitespace set and UTF-16 code
+        units, not Python's."""
+        lines = [line for line in (js_trim(part) for part in re.split(r"\r?\n", str(output))) if line]
+        if len(lines) <= 8:
+            return js_slice(" | ".join(lines) or "(no output)", 0, max_len)
+        summary = " | ".join(lines[:6] + ["..."] + lines[-2:])
+        return js_slice(summary, 0, max_len)
+
+    # gate-check.mjs:777-793: the RUN results -- PASS/FAIL per task, printed before anything
+    # touches a ledger file.
+    for result in results:
+        fingerprint = result["outputFingerprint"]
+        if result["ok"]:
+            output_summary = "sha256=" + fingerprint["sha256"] + "; bytes=" + str(fingerprint["bytes"])
+        else:
+            output_summary = failure_output(result["output"])
+        outcome = ("exit=" + ("none" if result["exitCode"] is None else str(result["exitCode"]))
+                   + (" signal=" + result["signal"] if result["signal"] else "")
+                   + "; EXPECT=" + ("matched" if result["matched"] else "not matched")
+                   + "; output=" + output_summary)
+        if result["ok"]:
+            log("  PASS " + qualify(result["file"], result["gate"]["id"]) + ": " + str(result["gate"]["title"]))
+            log("       " + outcome)
+        else:
+            log("  FAIL " + qualify(result["file"], result["gate"]["id"]) + ": " + str(result["gate"]["title"]))
+            log("       " + ((result["error"] + "; ") if result["error"] else "") + outcome)
+
+    # THE PORT STOPS HERE -- gate-check.mjs:794, the `failureOutput` declaration boundary is
+    # already crossed above; the actual next unported statement is gate-check.mjs:802
+    # (`function evidenceFor(result)`), which starts the ledger-mutation half: writing
+    # PASS/FAIL back into EVIDENCE lines under withFileLock, detecting stale results, and the
+    # final MET/UNMET/ABANDONED tally that decides the process exit code. That half touches
+    # disk state (ledger files) rather than spawning processes, so it is a distinct, separable
+    # remaining vector -- left unported rather than guessed. Loud on purpose: see the module
+    # docstring on why a silent fall-through would let a differential agree on a vector
+    # nothing implemented.
+    error("gate_check.py: PORT INCOMPLETE -- ledger loading, gate selection, the full "
+          "approval-classification loop, and CHECK execution (spawning lib/check_supervisor.py, "
+          "the regex worker pool, process-tree teardown, per-check timeouts, and the PASS/FAIL "
+          "print loop) end at gate-check.mjs:793; the ledger EVIDENCE rewrite and the final "
+          "MET/UNMET/ABANDONED verdict tally are not ported yet. jobs=" + str(jobs)
+          + " pending=" + str(len(pending)) + " runnable=" + str(len(runnable)) + " not_run="
+          + str(len(not_run)) + " approval_infra_failures=" + str(approval_infrastructure_failures)
+          + " results=" + str(len(results)))
     sys.exit(PORT_INCOMPLETE_EXIT)
 
 
