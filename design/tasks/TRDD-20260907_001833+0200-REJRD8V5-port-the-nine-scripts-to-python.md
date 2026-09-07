@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T06:48:00+0200
+updated: 2026-09-07T05:33:18+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -12,6 +12,34 @@ scope: project
 # Port all nine scripts to Python
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
+
+**WHERE THE PORT ACTUALLY IS (`d4a1acc`, and this line is the one to trust over anything older
+in this file).** `gate_check.py` is 851 lines against a 950-line oracle. `PORT_INCOMPLETE_EXIT`
+(90) fires from exactly ONE site, `:847`, now standing at `gate-check.mjs:775` — up from `:295`.
+Ported since: ledger loading, gate selection, `resolve_shell` (`:550`, which was the rank-1
+unported hazard because it feeds the approval payload's `shell` field), and the full
+approval-classification loop with a real token store. NOT ported: CHECK execution (spawning
+`lib/check-supervisor.mjs`, the regex Worker pool, process-tree teardown, per-check timeouts)
+and the final ledger/verdict tally.
+
+**THE GAP THAT ADVANCE CREATED, named here so it is not rediscovered as a surprise: nothing
+drives the new approval loop.** `gate-args-diff.sh` exercises `--approve` only as an ARGUMENT
+string; `digest-diff.sh` compares two hand-built serializers and never calls the production
+`approval_oracle_signature`. A branch nothing drives is this port's recurring defect class, and
+this is its highest-stakes instance — if the two runtimes compute different approval tokens,
+every approval written by one is silently rejected by the other, and the symptom is
+indistinguishable from a missing `--approve`. `tests/approval-diff.sh` is being built to close it.
+
+**Three digest rows were relabelled in `d4a1acc`, and the retraction is the point.** `"null path
+/ null shell (the --status arm)"` and `"both ambient fields null (the whole --status payload)"`
+each asserted a REACHABILITY I had not measured. `gate-check.mjs:165` is `if (opt.status &&
+opt.approve) failUsage("--status never approves commands; remove --approve")` — measured, exit 2
+— so `--status` never produces an approval FILE. They survive as SERIALIZER CONTROLS, which is
+all they ever were: `null`, `""` and absent are three DISTINCT digests (`99c12694` / `4eb17f71` /
+`2535b409`), so a port normalizing between them reddens. **This is the SECOND time a digest row
+was justified by a hazard the oracle cannot produce** (the first was `"absent path"`, where
+`:325`'s `String(... || "")` means `undefined` never reaches the payload). Same defect, same
+corpus, found the same way both times: by reading the line instead of reasoning about the shape.
 
 **Method (do not vary it).** The JS suite is held FIXED as the ORACLE; only the implementation
 varies. Any divergence is a porting defect, never a re-specified test. `AD_RUNTIME=python`
@@ -112,12 +140,19 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > differential in this repo can reach it; these assertions are the only thing that can, and they
 > currently say nothing about `gate_check.py`.
 >
-> **DO NOT ADD THEM YET, and the reason is a real one rather than deferral:** the port's boundary
-> is `gate-check.mjs:295` and the write path is past it, so a `write_atomic`/`with_file_lock`
-> assertion against `gate_check.py` would fail today for the honest reason that the code is not
-> there. They land WITH the write path — the runtime-selector shape `run-tests.mjs` established
-> in `e5578a3` is additive and applies here too (the oracle's ASSERTIONS stay fixed; only which
-> file is read varies). The Python spellings are `write_atomic` / `with_file_lock`.
+> **NO LONGER BLOCKED — the reason this said "not yet" has expired (2026-09-07, `d4a1acc`).**
+> The paragraph below stood while the boundary was `gate-check.mjs:295`, which put the write path
+> past it, so the assertion would have failed for the honest reason that the code was absent.
+> **That is no longer true.** The boundary is now `:775` and `record_approval` exists at
+> `gate_check.py:704`, so a `write_atomic`/`with_file_lock` assertion against `gate_check.py`
+> would now be testing something real. The runtime-selector shape `run-tests.mjs` established in
+> `e5578a3` is additive and applies here (the oracle's ASSERTIONS stay fixed; only which file is
+> read varies). The Python spellings are `write_atomic` / `with_file_lock`.
+>
+> **Recorded rather than done, and the distinction matters:** this is now a live TODO, not a
+> deferral with a standing excuse. A resuming session that reads the old wording would keep
+> deferring on grounds that stopped holding — which is the shape of a stale claim outliving its
+> measurement, the defect this file has caught three times in its own corpus.
 >
 > **⚠ THE REVIEW LOOP WENT SELF-SUSTAINING, AND THE COUNT IS THE ARGUMENT (2026-09-07).**
 > Of the ten commits `b525af2`..`33a3b3a`, exactly **ONE** advanced a ported script's behaviour
