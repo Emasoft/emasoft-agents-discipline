@@ -41,6 +41,12 @@ jobs:
       # (chmod 300), which has no Windows meaning -- hence the guard rather than a matrix-wide
       # step. Coverage on windows-latest is therefore the node suites only, and that gap is
       # deliberate and recorded, not accidental.
+      # THE GUARD IS LOAD-BEARING FOR THE SCRIPT ITSELF, not only for what the suites contain:
+      # `test:diff` is a POSIX `for ... do ... done` loop, and npm's script-shell on Windows is
+      # cmd, where that is not valid syntax at all. So making the twelve Windows-tolerant would
+      # NOT make it safe to drop this `if:` -- the runner would still have to be rewritten.
+      # A failing suite is caught here even though it exits 2 rather than 1: the loop's
+      # `|| exit 1` fires on ANY non-zero, and 2 is what the permission probes use to refuse.
       - name: Run node-vs-python differential suites
         if: runner.os != 'Windows'
         run: npm run test:diff

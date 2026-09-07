@@ -902,6 +902,18 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
 - **COVERAGE:** 14 differential rows; only 4 of the 7 suites honour `AD_RUNTIME`
   (`contract-tests`, `hardening-tests`, `stress-tests` are node-only and cannot exercise the
   port). Rows 12-14 depend on DIRECTORY permission bits and are gated by their own probe.
+  **"GATED BY THEIR OWN PROBE" MEANT A LOUD REFUSAL, AND THAT PHRASING MISLED A REVIEWER INTO
+  THE MOST PLAUSIBLE SILENT FAILURE THIS PORT COULD HAVE HAD** — probe-gated rows self-skipping
+  on a new platform, suite still exiting 0, cross-platform coverage shrinking with no signal.
+  Worth chasing, and MEASURED FALSE: the probe `exit 2`s (three sites in `errno-message-diff.sh`
+  — chmod 300 must deny a scan AND allow a write, each asserted separately), and across all
+  twelve suites there is exactly ONE occurrence of the word "skip", in a comment that reads
+  *"It is not skipped"*. No suite has a silent-skip path. A `chmod 300` semantics difference on
+  ubuntu therefore REDDENS CI rather than quietly reducing coverage, because `exit 2` is
+  non-zero and the runner's `|| exit 1` fires on any non-zero.
+  **The defect was in my prose, not the code:** "gated by their own probe" reads as "skipped
+  when the probe declines". Say "refuses to run" when the gate exits non-zero — a reviewer
+  reasoning from the wrong verb chased a failure mode that does not exist.
 - **THE THREE `node_call` ROWS, MUTATION-TESTED rather than argued** (2026-09-07). I had written
   that the third row "fails if the guard is widened to `if not error.errno`". It does not, and
   the table is the reason to run these instead of reasoning about them:
