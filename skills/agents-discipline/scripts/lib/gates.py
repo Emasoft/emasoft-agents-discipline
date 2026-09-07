@@ -1459,29 +1459,20 @@ def _js_join(*parts):
 # commit-tally table did. The rename is cheap; deferring it as churn at two callers was right
 # then and stopped being right here.
 # libuv ships its OWN error table; os.strerror reads the C library's, and they agree FAR less
-# often than this function's first version assumed. MEASURED by forcing each code through node
-# and comparing to os.strerror(n).lower(): of the SEVEN codes forced through node, 3 matched and
-# 4 did not. That denominator is 3 + 4 -- it is the set BELOW, and nothing wider.
+# often than this function's first version assumed. MEASURED by forcing codes through node and
+# comparing to os.strerror(n).lower(): 3 matched, 4 did not.
 #
-# THE DENOMINATOR IS THE WHOLE DEFECT HERE, and it went unwritten for a day. On 2026-09-07 I
-# read "3 of 7" beside a table whose agree row names FOUR codes, concluded the count was stale,
-# and "corrected" it to 4 of 8 in 9dad134 -- reverted by this comment. Two measurements killed
-# that: `git log -S 'ENOTDIR EBADF'` and `git log -S '3 of 7 forceable'` both return ONLY
-# 92f3303, so the count and the fourth name landed in the SAME commit and no later edit ever
-# desynchronized them; and 3 + 4 = 7 exactly, so the denominator was never the table's row
-# count. The commit message for 9dad134 asserts "EBADF was measured later" as fact. It is not
-# fact, it is a story I built to explain a mismatch I had misread, and git refutes it.
-# EBADF's own status stays UNRESOLVED and is marked so below: the agree row carries bare names
-# while every disagree row carries its node string, so that format cannot distinguish "forced
-# through node and matched" from "assumed to match". Whether EBADF was ever run through node is
-# NOT RECOVERABLE from this file.
-# THE LESSON, at the size the evidence supports: a ratio whose denominator is unstated will be
-# re-derived by the next reader from whatever artifact is nearest, and they will believe they
-# found a bug. State the set, not just the count.
+# WHICH SEVEN, exactly, is NOT RECOVERABLE from this file, and the count is useless without it:
+# 3 + 4 = 7 is CONSISTENT with the denominator being the two rows below, but so is a plain
+# miscount at authoring, and nothing here discriminates them. Read "7" as "the codes someone
+# compared", membership unrecorded. Do not re-derive it -- that is how 9dad134 got written and
+# reverted; the reasoning is in TRDD-REJRD8V5, not here.
 #
-#     EACCES ENOENT ENOTDIR        agree (forced through node; the 3 in the count)
-#     EBADF                        agree per os.strerror alone -- node run NOT RECORDED,
-#                                  and NOT part of the 7 above
+#     EACCES ENOENT ENOTDIR   agree (node string compared)
+#     EBADF                   agree per os.strerror alone -- node run NOT RECORDED, and so
+#                             PRESUMABLY not among the 3 + 4. The agree row carries bare names
+#                             while every disagree row carries its node string, so this format
+#                             cannot distinguish a measured match from an assumed one.
 
 #     EEXIST        node "file already exists"                 vs "file exists"
 #     EISDIR        node "illegal operation on a directory"    vs "is a directory"

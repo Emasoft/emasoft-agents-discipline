@@ -825,9 +825,30 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   `python-lib-checks.py`). So a captured `npm exit=0` is the whole signal: every command ran and
   every one exited 0, and a failure short-circuits the rest. **Take the exit code, from a
   redirect — never `$?` after a pipeline** (that reports the LAST stage; an `exit=0` I quoted on
-  2026-09-07 was `grep`'s status, not npm's). A `grep -c '^FAIL'` alongside it adds nothing: the
-  anchor happens to be right — all four node reporters emit line-initial `FAIL `, verified — but
-  it is a second, weaker check on a question the exit code already answers.
+  2026-09-07 was `grep`'s status, not npm's).
+  **THE SET, since a count without one is what this file keeps getting wrong:** the nine are
+  `run-tests, dispatch-tests, hardening-tests, stress-tests, lint-tests, contract-tests,
+  self-check, ledger-tests` (node) + `python-lib-checks.py`. **This is NOT the same 7 as the
+  `AD_RUNTIME` bullet below** — that 7 counts test SUITES and excludes `self-check` (a
+  structural checker) and `python-lib-checks` (python-only, so `AD_RUNTIME` is meaningless to
+  it). Two different denominators, both now named.
+  **DEMONSTRATED, not read (2026-09-07).** Reading the exit lines of all nine is what I did
+  first, and it is not the same thing: `python-lib-checks.py`'s exit code had never once been
+  OBSERVED, because every run of it this session went through `| grep` or `| tail`, so `$?` was
+  the consumer's. It is also the LAST link in the chain — the one a failure has the most ways to
+  escape. So: planted `report(False, "DELIBERATE FAILURE PROBE")` before its tail, ran unpiped
+  → `exit=1`; ran the whole chain → **`npm test exit=1`**; restored → `exit=0`, `all pass`. The
+  gate is now shown to fail, which is the only evidence that it can.
+  **The `grep -c '^FAIL'` clause is DROPPED, and calling it "verified" was wrong twice over.**
+  The grep used `-h` (strips filenames) with `-o` and `sort -u`, so it carried **zero file
+  attribution** — "all four node reporters" was a distribution the artifact cannot express. Its
+  own output also contained `console.log("failed: " + ...)` and `` `${failed} failing` ``,
+  neither of which the `^FAIL` anchor matches. Counterevidence I read past while citing the
+  result as confirmation.
+  **Still NOT established by any of this: that a suite which exits 0 actually RAN its
+  assertions.** Exit code answers "did anything fail", never "was anything checked" — and this
+  file already records a runner that "prints 21/21; it counts the skip as a pass". That is what
+  the suites' own vacuity-control rows are for, and they are per-row, not per-suite.
 - **COVERAGE:** 14 differential rows; only 4 of the 7 suites honour `AD_RUNTIME`
   (`contract-tests`, `hardening-tests`, `stress-tests` are node-only and cannot exercise the
   port). Rows 12-14 depend on DIRECTORY permission bits and are gated by their own probe.
@@ -867,7 +888,18 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   The same mutation exposed a gap in the SMOKE row: it printed `EBADF: Bad file descriptor,
   fstat` — CPython's capitalized strerror, a shape node never emits — and passed. Lowercase
   prose is now asserted there by slicing the prose out from between the code and the syscall.
-  **Both fixes came from running a mutation, not from re-reading the assertion.**
+  **`8e9629d`'s message says "Both fixes came from RUNNING a mutation, not from re-reading the
+  assertion." That is wrong, and it is wrong in the direction that flatters the expensive
+  method.** The `"authored" not in` clause came from an adversarial review that made ZERO tool
+  calls — pure reading of the assertion text — and the mutation only CONFIRMED it. Only the
+  lowercase fix originated from a mutant's output. Accurate: one came from reading, one from
+  running, both were confirmed by running. Cheap review found the subtler of the two, which is
+  the opposite of the lesson I recorded.
+  **A tripwire row now pins the errno-0 output** (`zero: undefined error: 0, lstat`), labelled
+  in the source as a tripwire and NOT a specification: errno 0 is the only input separating
+  `is None` from `not errno`, so without it a future widening of that guard would change
+  behaviour with nothing reddening. If it fails because someone widened the guard, that is
+  probably an improvement — delete the row and record why.
 - **`node_fs_message`'s docstring was stale and said the OPPOSITE of the code below it** — it
   declared ELOOP "unverified" and any errno outside EACCES/ENOENT/ENOTDIR "UNCONFIRMED", while
   `_LIBUV_PROSE` three lines above already carried the measured libuv wording for ELOOP,
@@ -881,17 +913,33 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   measured later and the summary was never re-counted."
   **Two greps refute it, and I ran neither before committing:** `git log -S 'ENOTDIR EBADF'` and
   `git log -S '3 of 7 forceable'` both return ONLY `92f3303` — count and fourth name landed in
-  the SAME commit, so nothing ever desynchronized. And 3 + 4 = 7 exactly: the denominator was
-  the agree-plus-disagree set, never the table's row count. EBADF sits in the agree row without
-  being part of the counted seven.
+  the SAME commit, so nothing ever desynchronized. **That is ALL the greps establish**, and it
+  is worth being exact about: a commit is a snapshot, not a keystroke log, so same-commit does
+  NOT mean same-sitting, and the pickaxe cannot see edits that did not change an occurrence
+  count.
+  **What replaced the false story is a BETTER-SUPPORTED READING, not a recovered fact — my
+  first correction here overstated it and is itself corrected.** I wrote "3 + 4 = 7 exactly:
+  the denominator was the agree-plus-disagree set, never the table's row count." But 3+4=7 is
+  merely CONSISTENT with that; a plain miscount at authoring time — writing "3" with four names
+  in the row — predicts it equally well and needs no story at all. Nothing available
+  discriminates them, so the honest reading is **"7 = the codes someone compared, membership
+  unrecorded"**, and EBADF is *presumably* outside it. Per `evidence-must-discriminate`: an
+  observation every hypothesis predicts cannot select among them, and I reached for it twice.
   **The actual defect was that the denominator was never written down** — so the next reader
   (me) re-derived it from the nearest artifact and believed they had found a bug. Fixed by
-  stating the set explicitly, marking EBADF's node run as NOT RECORDED (the agree row carries
-  bare names while every disagree row carries its node string, so that format cannot distinguish
-  measured-agreement from assumed-agreement), and removing every count from the docstring.
+  saying the membership is unrecoverable rather than asserting it, marking EBADF's node run as
+  NOT RECORDED (the agree row carries bare names while every disagree row carries its node
+  string, so that format cannot distinguish measured-agreement from assumed-agreement), and
+  removing every count and code list from the docstring.
+  **The comment block was ALSO cut back by two thirds.** The first version of this fix wrote the
+  whole confession — commit hashes, both greps, the story, the lesson — into `gates.py`, where
+  ~15 of 22 lines were about my editing history rather than node's error table, duplicating what
+  this TRDD already said, **in the commit whose own lesson is "a second copy is a second thing
+  to keep true."** `gates.py` now carries the denominator caveat and EBADF's status and points
+  here for the rest.
   **Three lessons, each at the size its evidence supports:**
-  1. A ratio with an unstated denominator will be re-derived from whatever artifact is nearest.
-     State the SET, not just the count.
+  1. A ratio with an unstated denominator gets re-derived from whatever artifact is nearest —
+     I did it, and believed I had found a bug. State the SET, not just the count.
   2. A causal story that explains a mismatch is not evidence for the mismatch. `git log -S` cost
      one call and would have stopped the commit.
   3. I quoted a count without reading the ten lines under it — and the grep I used to "verify"

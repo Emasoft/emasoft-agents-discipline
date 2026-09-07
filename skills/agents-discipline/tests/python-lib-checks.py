@@ -1055,6 +1055,33 @@ report(_both_text.startswith("EACCES: ") and _both_text.endswith(", lstat")
        and "authored" not in _both_text,
        "node_call reshapes an authored error that DOES carry an errno (control)", _both_text)
 
+# ERRNO 0 -- this row PINS OUTPUT THE PORT SHOULD PROBABLY NOT PRODUCE, deliberately, and the
+# label says so. `_err_code` finds no name for 0 (`0 not in errno.errorcode`) and falls back to
+# the strerror text, so the AUTHORED MESSAGE is emitted in the CODE position: "zero: undefined
+# error: 0, lstat". Malformed, not merely divergent.
+# WHY PIN IT RATHER THAN FIX IT: no site in this port authors an OSError(0, ...), and whether
+# any platform produces one (Windows maps winerror to errno; unverified from a darwin host) is
+# unknown -- so changing the `errno is None` guard to a truthiness test would ship a behaviour
+# change that CANNOT be exercised here, and unexecuted code is where this port's defects have
+# lived. But leaving it unpinned is worse in a specific way: errno 0 is the ONLY input that
+# distinguishes `is None` from `not errno`, so without this row a future widening of that guard
+# changes behaviour with nothing reddening at all.
+# READ THIS ROW AS A TRIPWIRE, NOT A SPECIFICATION. If it fails because someone widened the
+# guard, that is very likely an IMPROVEMENT -- delete the row and record why. It exists to make
+# the decision visible in a diff, not to defend the output it asserts.
+def _authored_errno_zero(*_a, **_k):
+    raise OSError(0, "zero")
+
+
+try:
+    _g.node_call("lstat", _authored_errno_zero)
+    _zero_text = "NO ERROR"
+except OSError as _error:
+    _zero_text = str(_error)
+report("undefined error: 0" in _zero_text and _zero_text.startswith("zero: "),
+       "node_call on errno 0 emits the AUTHORED TEXT as the error code (tripwire, not a spec)",
+       _zero_text)
+
 # returns emptyState() on ENOENT, so a port that re-raised the raw error would hand back an
 # empty wave set on exactly the interleaving the oracle refuses.
 _probe_src = r"""
