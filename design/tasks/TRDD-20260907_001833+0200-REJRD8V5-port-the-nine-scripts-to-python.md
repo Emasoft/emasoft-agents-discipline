@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T06:02:30+0200
+updated: 2026-09-07T06:05:31+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -101,6 +101,26 @@ did not match `codec can't encode`, and I reported the gap in my pattern as a pr
 program. What IS true and narrower: the EXIT CODE is non-discriminating (90 in both arms) and the
 approval file simply does not appear, so anything reading only the exit status sees nothing wrong.
 
+**`js_resolve` IS LEXICAL, `os.path.realpath` IS NOT — and one comment's correctness turns on it
+(2026-09-07).** Measured: on a symlink `link -> real`, `js_resolve` returns `.../link` while
+`os.path.realpath` returns `/private/.../real`. This is node's `path.resolve` semantics (purely
+lexical, never touches the filesystem) faithfully ported, and it is why `gate_check.py:597`
+building `approval_dir` with `js_resolve` leaves it NON-canonical. That in turn is what makes
+the `:845` re-call's `lstat(approval_dir)` non-vacuous: it inspects the ORIGINAL entry path,
+which can be a symlink planted after the write, where `assert_approval_dir_unchanged` only ever
+sees the canonical `store["path"]`. Had `js_resolve` canonicalized, that half of the argument
+would have been empty — worth checking rather than assuming, since the two functions' names
+suggest they do the same thing and they do not.
+
+**Why the `--status` attribution is airtight, spelled out because "the difference must be the
+flag" is the kind of claim that is usually hand-waved.** `:808` is
+`if opt.get("status") or (not opt.get("reverify") and state == "met")`. Between the two arms of
+the discriminating control, `--reverify` was absent in BOTH, and `state` comes from
+`gate_state(gate, abandoned)` — verified to take no `opt` argument at all, so it cannot vary with
+a flag. The gate is `- [ ]`, so `state == "unmet"` in both runs and the second disjunct is False
+in both. `:805` (abandoned / no CHECK) is likewise flag-independent. So `opt.get("status")` is
+the ONLY term that differs, and `pending` 0 vs 1 is attributable to it alone.
+
 **WHAT THE THREE `typing.cast` CALLS IN `gate_check.py` ARE ACTUALLY WORTH (2026-09-07).** They
 are not equivalent, and lumping them together as "seven benign type errors" hid that:
 - `:623` (inside `validated_approval_dir`) — **MEASURED SAFE.** Contiguous read of `:798-830`
@@ -118,15 +138,31 @@ are not equivalent, and lumping them together as "seven benign type errors" hid 
   identical hole at `:762`. So this cast asserts away a risk nothing exercises — faithful, but
   unfalsified is not the same as verified, and a green suite says nothing about it.
 
-**The `:627` `return None` arm IS exercised, contrary to a review finding.** `approval_exists`
-calls `validated_approval_dir()` with `create=False` at `:839` — BEFORE the `--approve` branch,
-so it is on the approve path — and handles the result explicitly (`if not store: return False`).
-**The load-bearing half, checked rather than assumed:** `approval-diff.sh` does NOT pre-create
-its approval directories. `:110` only assigns `APPR_O`/`APPR_P`; the runner's single `mkdir -p`
-(`:54`) builds the repo scaffold. So the directories are genuinely absent on the first run and
-the arm fires. Had the runner pre-created them, `os.path.exists` would be True, the arm would be
-dead in the suite, and the review finding I contradicted would have been right — so this was the
-part worth verifying, not the call order.
+**The `:627` `return None` arm — the answer is between my claim and the review's, and my first
+correction of it was ALSO wrong.** Sequence worth keeping, because the second error is subtler
+than the first:
+- A review said nothing exercises the arm. I contradicted it: `approval_exists` calls
+  `validated_approval_dir()` with `create=False` at `:839`, before the `--approve` branch, and
+  handles `None` (`if not store: return False`). True.
+- I then "verified" it by checking that the RUNNER does not pre-create its approval directories
+  (`:110` only assigns `APPR_O`/`APPR_P`; the sole `mkdir -p` at `:54` builds the repo scaffold).
+  Also true, **and it was the wrong hazard.** I checked whether the runner creates the directory
+  and missed that THE CODE UNDER TEST creates it: `record_approval` calls
+  `validated_approval_dir(create=True)` → `os.makedirs`. So the arm is dead from the second
+  invocation against any given directory onward, whatever the runner does.
+- Measured properly: the runner uses FIVE distinct approval dirs — `APPR_O`/`APPR_P` (`:110`),
+  `APPR_CTRL` (`:150`), `APPR_SG_O`/`APPR_SG_P` (`:232`). The arm fires on the FIRST invocation
+  against each fresh one (`:112`, `:151`, `:235`) and is dead on the re-run at `:188`, which
+  reuses `APPR_O`.
+
+So the arm executes several times, **incidentally, and nothing ASSERTS on it.** That is the
+honest statement, and it is why the `:845` cast stays graded UNFALSIFIED rather than verified:
+executing a branch is not testing it.
+
+**The generalisable error:** I named a hazard ("does the runner pre-create the dir?"), checked
+exactly that, and reported the check as settling the question. The hazard I did not name — the
+program under test creating its own state — was the one that decided it. Checking the hazard you
+thought of proves only that you thought of it.
 
 **A FALSE CLAIM ABOUT MY OWN PROCESS, corrected.** I told the user the `row`-indentation coverage
 question was "asked of the replacement BEFORE relying on it rather than after". The real ordering
