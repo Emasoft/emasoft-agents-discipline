@@ -67,67 +67,69 @@ CASES = {
     "infinity becomes null": oracle(timeoutMs=float("inf")),
     "nan becomes null": oracle(timeoutMs=float("nan")),
     "negative zero": oracle(timeoutMs=-0.0),
+    # See digest-drive.mjs: the non-integral floats are the gap that let a real defect through.
+    "float exponent spelling": oracle(timeoutMs=1e-7),
+    "float at the notation threshold": oracle(timeoutMs=0.000001),
+    "float non-integral": oracle(timeoutMs=1.5),
     "large integer": oracle(maxOutputBytes=9007199254740991),
     "empty strings": oracle(check="", expect="", path=""),
     "platform without version digits": oracle(platform="freebsd"),
 }
 
 
-def _js_numbers(value):
-    """Render every FLOAT the way `JSON.stringify` would, before json.dumps sees it.
+def _js_value(value):
+    """One value, spelled exactly as `JSON.stringify` spells it.
 
-    `json.dumps` offers no hook for float formatting -- `default=` fires only for types it
-    cannot handle at all -- so the conversion has to happen on the value. Two divergences,
-    both MEASURED by this differential rather than assumed:
+    NUMBERS ARE EMITTED AS TEXT AND NEVER ROUND-TRIPPED, which is the whole reason this
+    function exists instead of a `json.dumps` call with clever arguments. The previous version
+    did `json.loads(_js_number(value))` -- producing the correct JS spelling and then throwing
+    it away, because `json.dumps` re-renders the resulting float with Python's repr. MEASURED,
+    and it is wrong for exactly the cases `_js_number` was written to fix:
 
-      1500.0        json.dumps writes `1500.0`, JSON.stringify writes `1500`. Caught by the
-                    "float timeout" case, which is UNREACHABLE in production (timeoutValue
-                    rejects non-integers) and kept precisely so the guard is proven to work.
-      float("inf")  json.dumps writes `Infinity`, which is NOT VALID JSON. JSON.stringify
-                    writes `null`. Same for NaN. This is worse than a byte difference: the
-                    port would emit a document node cannot parse.
+        1e-7       JS `1e-7`      round-tripped `1e-07`   (Python zero-pads the exponent)
+        0.000001   JS `0.000001`  round-tripped `1e-06`   (the two switch to exponential
+                                                           notation at DIFFERENT thresholds)
 
-    Integral floats go through int(); the rest through `_js_number`, the project's existing
-    Number::toString port, rather than a second copy of that logic here -- it already handles
-    -0.0, the 1e-6/1e-4 exponential-notation threshold mismatch, and values above 2**53.
+    The corpus could not catch it: its only float case was `1500.0`, which is INTEGRAL, so
+    `_js_number` returned "1500" and the round trip happened to survive. A control proved the
+    line did something; it did not prove the line was right. `_js_number`'s output is now the
+    output.
+
+    SCOPE, stated rather than implied: this handles the shapes `oracle()` actually contains --
+    a flat dict of str/int/float. It is NOT a general JSON.stringify: no `undefined`/function
+    dropping, no `toJSON()`, no nesting. `oracle()` (gate-check.mjs:340-356) returns twelve
+    flat str/int fields, so those paths are unreachable there; anything else raises rather
+    than guessing.
     """
-    if isinstance(value, dict):
-        return {k: _js_numbers(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_js_numbers(v) for v in value]
-    # bool BEFORE float: bool is a subclass of int in Python, and True would otherwise be
-    # rendered as the number 1.
+    # bool BEFORE int: bool subclasses int in Python, so True would render as 1.
     if isinstance(value, bool):
-        return value
+        return "true" if value else "false"
+    if isinstance(value, str):
+        # json.dumps is CORRECT for strings -- the corpus proves it on control characters,
+        # quote/backslash, U+2028/U+2029, non-ASCII and an astral character. ensure_ascii=False
+        # because JSON.stringify never escapes non-ASCII and json.dumps escapes it by default.
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, int):
+        return str(value)
     if isinstance(value, float):
         if value != value or value in (float("inf"), float("-inf")):
-            return None                          # JSON.stringify(Infinity) === "null"
-        # ONE path, not two. An `if value.is_integer(): return int(value)` fast path sat here
-        # and was DELETED after a mutation control could not make it redden: `_js_number(1500.0)`
-        # already returns "1500", which re-parses to the int 1500, so the branch was redundant
-        # with the line below rather than covering anything. A branch no mutation isolates does
-        # not earn its place -- this project's own rule, applied to code written five minutes
-        # earlier.
-        return json.loads(_js_number(value))     # exact JS spelling, re-parsed as a number
-    return value
+            return "null"                        # JSON.stringify(Infinity) === "null"
+        return _js_number(value)                 # verbatim; see the docstring
+    raise TypeError("oracle field of unsupported type %r: %r" % (type(value).__name__, value))
 
 
 def js_stringify(value):
-    """`JSON.stringify(value)` for the shapes an oracle contains.
+    """`JSON.stringify(obj)` for a FLAT oracle object.
 
-    Settings, each matching a documented JSON.stringify behaviour json.dumps gets wrong:
-      separators=(",", ":")  -- json.dumps defaults to ", " and ": ".
-      ensure_ascii=False     -- json.dumps ESCAPES non-ASCII by default; JSON.stringify never
-                                does. This changes the most bytes and is the easiest to miss,
-                                because ASCII-only test data hides it completely.
-      sort_keys is NOT set   -- insertion order is what JSON.stringify emits, and sorting here
-                                would silently reorder the hashed bytes.
-      allow_nan=False        -- so a non-finite that somehow escapes _js_numbers RAISES instead
-                                of emitting the invalid `Infinity` token. Fail fast; do not
-                                write a document the oracle cannot read.
+    Built by hand rather than delegated to `json.dumps` because there is no hook for float
+    formatting and the digest must be byte-exact. Key ORDER is insertion order, which is what
+    JSON.stringify emits -- nothing here sorts, and sorting would silently reorder the hashed
+    bytes.
     """
-    return json.dumps(_js_numbers(value), separators=(",", ":"), ensure_ascii=False,
-                      allow_nan=False)
+    if not isinstance(value, dict):
+        raise TypeError("js_stringify expects the flat oracle object, got %r" % type(value).__name__)
+    body = ",".join(json.dumps(k, ensure_ascii=False) + ":" + _js_value(v) for k, v in value.items())
+    return "{" + body + "}"
 
 
 answers = {}

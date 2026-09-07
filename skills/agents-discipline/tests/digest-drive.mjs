@@ -78,6 +78,14 @@ export const CASES = {
   "infinity becomes null": oracle({ timeoutMs: Infinity }),
   "nan becomes null": oracle({ timeoutMs: NaN }),
   "negative zero": oracle({ timeoutMs: -0 }),
+  // NON-INTEGRAL floats, the gap that let a real defect through. The corpus had only 1500.0,
+  // which is integral -- so a serializer that round-tripped through a Python float survived by
+  // accident. These are the two spellings where the runtimes genuinely disagree: Python
+  // zero-pads the exponent (1e-07), and the two switch to exponential notation at DIFFERENT
+  // thresholds (Python at 1e-4, JS not until 1e-6).
+  "float exponent spelling": oracle({ timeoutMs: 1e-7 }),
+  "float at the notation threshold": oracle({ timeoutMs: 0.000001 }),
+  "float non-integral": oracle({ timeoutMs: 1.5 }),
   "large integer": oracle({ maxOutputBytes: 9007199254740991 }),
   "empty strings": oracle({ check: "", expect: "", path: "" }),
   "platform without version digits": oracle({ platform: "freebsd" }),

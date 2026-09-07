@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T05:14:00+0200
+updated: 2026-09-07T05:41:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -768,7 +768,7 @@ difference — but every call site has to drop the await). One item left:
    the argument is "two hazards, one of them object-wide", not "seven fields".
 
    **✅ THE SERIALIZATION HALF IS DONE (2026-09-07) — `tests/digest-diff.sh` + `digest-drive.mjs`
-   / `digest_drive.py`, 15 pinned cases, digests identical.** The highest-ranked hazard in this
+   / `digest_drive.py`, 18 pinned cases, digests identical.** The highest-ranked hazard in this
    document is settled for the half that could be settled without `gate_check.py`.
 
    `json.dumps(obj)` is WRONG here in four ways, every one silent, and each is now pinned by a
