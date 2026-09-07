@@ -1469,10 +1469,17 @@ def _js_join(*parts):
 # reverted; the reasoning is in TRDD-REJRD8V5, not here.
 #
 #     EACCES ENOENT ENOTDIR   agree (node string compared)
-#     EBADF                   agree per os.strerror alone -- node run NOT RECORDED, and so
-#                             PRESUMABLY not among the 3 + 4. The agree row carries bare names
-#                             while every disagree row carries its node string, so this format
-#                             cannot distinguish a measured match from an assumed one.
+#     EBADF                   agree per os.strerror alone -- node run NOT RECORDED. The agree
+#                             row carries bare names while every disagree row carries its node
+#                             string, so this format cannot distinguish a measured match from
+#                             an assumed one.
+#
+# THE PARTITION ITSELF IS DARWIN-MEASURED, and WHICH codes need an override is a property of the
+# HOST's libc, not a fixed fact: libuv's table is compiled in and stable, while the fallback is
+# os.strerror(n), which is glibc on Linux and musl on Alpine. A code that agrees here can
+# disagree there and would need a _LIBUV_PROSE entry that this table does not have. The 14
+# differential rows do NOT cover this -- they run node and python on the SAME machine, so they
+# confirm agreement on the host and say nothing about any other libc. UNVERIFIED off darwin.
 
 #     EEXIST        node "file already exists"                 vs "file exists"
 #     EISDIR        node "illegal operation on a directory"    vs "is a directory"

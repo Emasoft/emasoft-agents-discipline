@@ -835,10 +835,19 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   **DEMONSTRATED, not read (2026-09-07).** Reading the exit lines of all nine is what I did
   first, and it is not the same thing: `python-lib-checks.py`'s exit code had never once been
   OBSERVED, because every run of it this session went through `| grep` or `| tail`, so `$?` was
-  the consumer's. It is also the LAST link in the chain — the one a failure has the most ways to
-  escape. So: planted `report(False, "DELIBERATE FAILURE PROBE")` before its tail, ran unpiped
-  → `exit=1`; ran the whole chain → **`npm test exit=1`**; restored → `exit=0`, `all pass`. The
-  gate is now shown to fail, which is the only evidence that it can.
+  the consumer's. **That — and only that — is why it was the right link to plant in.** I first
+  wrote that it was the last link, "where a failure has the most ways to escape"; that is
+  backwards. Under `&&` every link's failure short-circuits and becomes npm's exit, so the links
+  are equivalent for propagation and the last is the SIMPLEST case, not the hardest. A reason
+  that sounds like one is worth deleting.
+  So: planted `report(False, "DELIBERATE FAILURE PROBE")` before its tail, ran unpiped
+  → `exit=1`; ran the whole chain → **`npm test exit=1`**; restored → `exit=0`, `all pass`.
+  **SCOPE OF THAT PROOF, because "the gate is shown to fail" is broader than one plant:** it
+  demonstrates ONE link failing and npm propagating the chain's status. The other eight are
+  READ, not demonstrated. And the link chosen matters — the LAST one has nothing after it, so
+  this run never exercised short-circuiting; a plant in an early link would additionally show
+  that later suites are skipped and the chain still reports failure. Demonstrated: 1 of 9. Read:
+  9 of 9.
   **The `grep -c '^FAIL'` clause is DROPPED, and calling it "verified" was wrong twice over.**
   The grep used `-h` (strips filenames) with `-o` and `sort -u`, so it carried **zero file
   attribution** — "all four node reporters" was a distribution the artifact cannot express. Its
@@ -900,6 +909,27 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   `is None` from `not errno`, so without it a future widening of that guard would change
   behaviour with nothing reddening. If it fails because someone widened the guard, that is
   probably an improvement — delete the row and record why.
+  **ITS FIRST VERSION WOULD HAVE BROKEN CI ON TWO OF THREE PLATFORMS**, and I shipped it after
+  measuring on darwin alone. It asserted `"undefined error: 0" in _zero_text` — that string is
+  `os.strerror(0)` on **darwin**; glibc returns `"Success"`, so on `ubuntu-latest` and
+  `windows-latest` (both in `test-matrix.yml`, node 16/20/24) the message is `zero: success,
+  lstat` and the row reddens **for a libc difference, blaming the errno-0 guard** — the exact
+  false attribution a tripwire exists to prevent. Now asserts structure only: `startswith("zero:
+  ")` is portable BY CONSTRUCTION because "zero" is the strerror the TEST authored, surfaced by
+  `_err_code`'s fallback, so no libc supplies it.
+  **The general form, and it is the session's pattern in one line: a test that pins prose it did
+  not author pins the platform it was written on.** `os.strerror` is libc, not Python. And this
+  suite ships INSIDE the plugin, so the red row would have reached users, not just CI.
+  **THE SAME LIBC DEPENDENCE REACHES FURTHER THAN THE TRIPWIRE, and nothing said so until now:
+  the whole agree/disagree partition behind `_LIBUV_PROSE` is DARWIN-MEASURED.** libuv's table
+  is compiled in and stable; the fallback is `os.strerror(n)`, which is glibc on Linux and musl
+  on Alpine — so WHICH codes need an override is a property of the host's libc. A code that
+  agrees here can disagree there and would need an entry this table does not have. **The 14
+  differential rows do not cover it**: they run node and python on the SAME machine, confirming
+  agreement on the host and saying nothing about any other libc. Recorded as UNVERIFIED off
+  darwin rather than fixed — fixing it means measuring on glibc, which this host cannot do.
+  And I committed it without running the mutation it exists to catch — run afterward, and it
+  does discriminate (widened guard → `[Errno 0] zero`, the only one of four rows to fail).
 - **`node_fs_message`'s docstring was stale and said the OPPOSITE of the code below it** — it
   declared ELOOP "unverified" and any errno outside EACCES/ENOENT/ENOTDIR "UNCONFIRMED", while
   `_LIBUV_PROSE` three lines above already carried the measured libuv wording for ELOOP,

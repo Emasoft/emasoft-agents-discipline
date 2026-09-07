@@ -1063,9 +1063,12 @@ report(_both_text.startswith("EACCES: ") and _both_text.endswith(", lstat")
 # any platform produces one (Windows maps winerror to errno; unverified from a darwin host) is
 # unknown -- so changing the `errno is None` guard to a truthiness test would ship a behaviour
 # change that CANNOT be exercised here, and unexecuted code is where this port's defects have
-# lived. But leaving it unpinned is worse in a specific way: errno 0 is the ONLY input that
-# distinguishes `is None` from `not errno`, so without this row a future widening of that guard
-# changes behaviour with nothing reddening at all.
+# lived. But leaving it unpinned is worse in a specific way: errno 0 is the only PLAUSIBLE input
+# that distinguishes `is None` from `not errno`, so without this row a future widening of that
+# guard changes behaviour with nothing reddening at all. ("Only plausible", not "only": they
+# also differ on any falsy non-None errno -- `False`, `0.0`, `""` -- since OSError(a, b) sets
+# errno = a with no type check. Those crash in os.strerror rather than mis-routing, so they are
+# a louder failure, but the unqualified "only" was wrong.)
 # READ THIS ROW AS A TRIPWIRE, NOT A SPECIFICATION. If it fails because someone widened the
 # guard, that is very likely an IMPROVEMENT -- delete the row and record why. It exists to make
 # the decision visible in a diff, not to defend the output it asserts.
@@ -1078,7 +1081,17 @@ try:
     _zero_text = "NO ERROR"
 except OSError as _error:
     _zero_text = str(_error)
-report("undefined error: 0" in _zero_text and _zero_text.startswith("zero: "),
+# ASSERTS THE STRUCTURE ONLY, NEVER THE LIBC PROSE, and the first version got this wrong in a
+# way that would have broken CI on two of three platforms. It also asserted
+# `"undefined error: 0" in _zero_text` -- which is `os.strerror(0)` on DARWIN. glibc returns
+# "Success" for errno 0, so on ubuntu-latest and windows-latest (both in the test matrix, node
+# 16/20/24) the message is `zero: success, lstat` and that clause fails -- a red row blaming the
+# errno-0 guard for a libc difference, which is the opposite of what a tripwire is for.
+# `startswith("zero: ")` is portable BY CONSTRUCTION: "zero" is the strerror THIS TEST authored,
+# surfaced by _err_code's fallback when errno has no name, so no libc supplies it.
+# MEASURED that it still discriminates: widening the guard to `if not error.errno` yields
+# `[Errno 0] zero` and this is the ONLY row of the four that fails.
+report(_zero_text.startswith("zero: ") and _zero_text.endswith(", lstat"),
        "node_call on errno 0 emits the AUTHORED TEXT as the error code (tripwire, not a spec)",
        _zero_text)
 
