@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T11:39:41+0200
+updated: 2026-09-07T11:46:16+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -607,7 +607,11 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   qualifier exists. **Derive it by walking the raise sites, never from memory.**
 - **THE ENUMERATION IS FROZEN** — the list is in Round 4. Audit against it to exhaustion;
   widening it is a NEW class, decided deliberately and once.
-- **`gate_check.py` IS AUDITED (`b9a6ccc`+1) — 14 sites → 8, and it found a real defect.**
+- **RENAME, so the rounds below stay decodable:** `_node_call` → **`node_call`** (public, at
+  `25bd004`). The rounds still say `_node_call` because they record what was true when written
+  and the write-side rule above forbids editing them — this line is the decoder, not a licence
+  to rewrite history. Same for `_mkdirs` → `mkdirs`.
+- **`gate_check.py` IS AUDITED (`25bd004`) — 14 sites → 8, and it found a real defect.**
   `read_approval_file` had the SAME shape as `read_stable_regular_file`: an open followed by
   `fstat`/`read`, the oracle (`gate-check.mjs:416-447`) wrapping none of them, everything
   escaping to a catch that hardcodes `open`. Six wrapped — `fstat`, `read`, the three
@@ -615,6 +619,20 @@ the round is left standing as wrong-at-the-time rather than corrected in place.
   8 carry verdicts: `:321`/`:943` already pass the right constant, `:789`/`:857` genuinely ARE
   opens, and `:667`/`:912`/`:915` are swallowed without emitting. **The audit was worth doing —
   it was NOT a formality**, which is the answer to four commits' worth of deferring it.
+  **USER-VISIBLE, traced not assumed:** `read_approval_file` → `approval_exists` → the catch at
+  `:987`, which prints `node_fs_message(exc, "open")`. So a failing `fstat`/`read` reached a user
+  labelled `open`. **Evidence grade differs across the six, and the difference is real:** that
+  path is traced and its shape is measured; the three `os.lstat` wraps are RACE-ONLY —
+  a first-pass comment claimed EACCES-from-an-unsearchable-parent and was wrong, because
+  `os.path.exists` swallows EACCES and returns False (measured), so the function returns before
+  reaching them. They are wrapped for uniformity, not because a fixture can reach them.
+  **EVIDENCE GRADE, stated because the six were first recorded at one confidence and are not:**
+  ONE of them (`fstat`/`read` in `read_approval_file`) is a traced path with a measured oracle
+  shape but was NOT forced end-to-end — structural, unforced. The other five are race-only
+  uniformity. **None of the six is `os.listdir`-grade**, which was red-then-green against the
+  real defect. Recording an inferred fix at the same confidence as a measured one is the
+  "MEASURED must not outrun measurement" lesson moving up a level, from a docstring to the
+  register of findings itself.
 - **REMAINING OPEN:** `ledger_check.py`'s 2 (trivial) and `gates.py`'s remainder (mostly inside
   functions already audited this session). **Not mechanical** — step 3 (could any other call
   under this catch raise?) is judgment, and it is where every defect in this class has hidden.

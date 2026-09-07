@@ -224,8 +224,11 @@ def node_call(syscall, call, *args, **kwargs):
 
     PUBLIC for the third time on the same lesson, after node_fs_message and mkdirs: gate_check's
     read_approval_file is a SECOND multi-syscall reader with the exact shape this fixes, and it
-    could not import the helper while the name was underscored. A helper the neighbours cannot
-    import is one they will re-implement -- or, here, simply go without.
+    SHOULD NOT import a name marked private. Not "could not" -- Python does not enforce the
+    underscore, `from gates import _node_call` would have worked, and stating a convention as a
+    technical constraint is the same overclaim this module keeps correcting. The convention plus
+    a lesson now paid three times is the stronger argument anyway: a helper the neighbours are
+    told not to import is one they re-implement, or -- here -- simply go without.
 
     read_stable_regular_file makes seven more syscalls after its open, and the oracle wraps
     NONE of them: gates.mjs:152-181 lets fstatSync, lstatSync, realpathSync and readSync throw

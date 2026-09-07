@@ -768,8 +768,13 @@ def main(argv):
             return None
         # The lstat trio below (here, the canonical one, and assert_approval_dir_unchanged) has no
         # local try, so each escapes to an approval catch that hardcodes `open` -- the same shape
-        # as read_approval_file above. Reachable on EACCES from an unsearchable parent; the
-        # os.path.exists guard one line up only covers absence.
+        # as read_approval_file above. Wrapped for that uniformity.
+        # RACE-ONLY, and the first version of this comment got that wrong by not walking the path:
+        # it claimed EACCES from an unsearchable parent, but `os.path.exists` one line up SWALLOWS
+        # EACCES and returns False (measured), so the function returns None before reaching here.
+        # The guard covers denial as well as absence. What is left is the directory changing
+        # between that check and this call -- the same race category as read_stable_regular_file's
+        # internals, and equally unreachable by a static fixture.
         info = node_call("lstat", os.lstat, directory)
         assert_private_approval_entry(directory, info, "directory")
         canonical = os.path.realpath(directory)
