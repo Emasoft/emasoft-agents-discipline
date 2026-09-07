@@ -113,10 +113,12 @@ def js_to_number(value):
       "0X"  "0b"  "0o"  "0xg"                a radix prefix with no valid digits is NaN
       " 0x10 "  "+0x10"  " +0x10"            trimmed first; a SIGN before a prefix is NaN
       "+"  "-"  "."  ".e3"  "1.2.3"  "1 2"   incomplete or multi-token is NaN
-    THE OPERATIONAL RULE, which is the part a reader can act on: a shape added HERE FIRST and
-    then to the corpus stands on this block. A row that predates this block does not, however
-    well it happens to match a line. Doc-before-row is a ground; row-before-doc is the
-    laundering above.
+    THE RULE THAT FOLLOWS -- and it is a NORM, not a test, which an earlier draft called "the
+    part a reader can act on" and thereby oversold: a shape added HERE FIRST and then to the
+    corpus stands on this block; a row that predates it does not, however well it happens to
+    match a line. Git records commit ORDER, not authoring order WITHIN a commit, so someone who
+    writes the line and the row together produces an artifact indistinguishable from the honest
+    case. Nothing can check this. It binds the author or it binds nobody.
 
     Adding a shape here means adding its corpus row too -- python-lib-checks enforces that ONE
     direction. It does NOT close the corpus: most rows are named nowhere above, and another can
@@ -150,9 +152,19 @@ def js_to_number(value):
             return float("nan")
         # NO try/except HERE, AND THAT IS DELIBERATE BUT LOAD-BEARING: the whitelist above is
         # now the ONLY thing standing between "0xg" and an uncaught ValueError. Measured --
-        # disabling the guard does not degrade to a wrong answer, it CRASHES the caller. So the
-        # guard is doing two jobs, and a future edit that "simplifies" it back to a try/except
-        # silently reopens the Unicode-digit and underscore holes while still looking correct.
+        # DELETING the guard does not degrade to a wrong answer, it CRASHES the caller mid-run.
+        #
+        # An earlier version of this comment ended "a future edit that simplifies it back to a
+        # try/except silently reopens both holes while still looking correct." That was FALSE,
+        # and the commit that wrote it had measured the opposite four lines earlier: reverting to
+        # try/except reddens "0x1_0" and "0x<U+0661>" in the differential. It is caught, loudly.
+        # The rows added alongside this guard are exactly what makes it loud -- before them the
+        # sentence would have been true, and it was describing that vanished world. A false
+        # warning is worse than none: it teaches the next reader to discount this file's
+        # warnings, and they are load-bearing.
+        #
+        # The residual hazard is narrower: removing the whitelist WITHOUT restoring try/except
+        # crashes rather than diverging -- still loud, but as a driver crash, not a red row.
         return float(int(digits, radix))
     if not _JS_DECIMAL_RE.match(text):
         return float("nan")                          # rejects 1_000, 12abc, 1e, 1,000, --5

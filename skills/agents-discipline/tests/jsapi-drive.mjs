@@ -167,12 +167,28 @@ const NUM_STRINGS = ["", "   ", "0", "12", "-12", "+5", ".5", "5.", "1e3", "1E3"
   // not a catch; every row reddens and the result reads as a huge isolated set. M2' -- reverting
   // to the code as it actually was before the fix -- is the control that means something.
   //
-  // ERROR 2: neither mutation isolates a ROW. M1 reddens three at once, M2' reddens two at
-  // once. That is CLASS isolation. Under the precedent already set for `["a//","b"]` -- "every
-  // mutation tried reddens them together; none isolates it" -- exactly ONE row per class earns
-  // ground one, and the redundant siblings are kept on the WEAK ground and said to be. They are
-  // kept anyway: U+FF11 and U+06F4 are different Unicode blocks from U+0661, and a future
-  // narrowing that fixed only Arabic-Indic would pass a corpus holding just the one.
+  // ERROR 2, AND IT NEEDED A METHOD CHANGE RATHER THAN A LABEL. Neither mutation isolates a
+  // ROW: M1 reddens three at once, M2' reddens two at once. Calling that "class isolation" and
+  // filing it under ground one was a THIRD GROUND INTRODUCED BY NAMING IT -- the identical move
+  // retracted two commits earlier, where the new name was "documentation". Ground two is not
+  // available either: this file forbids non-ASCII LITERALS, and a docstring is prose that cannot
+  // call chr(), so a non-ASCII shape can never be enumerated there. These rows were structurally
+  // groundless.
+  //
+  // So the method gains a THIRD GROUND, declared rather than smuggled -- EQUIVALENCE-CLASS
+  // COVERAGE, with its own bound:
+  //   a mutation that reddens N rows together grounds ONE of them. A sibling is kept only when
+  //   a MECHANISM is named that would separate it -- and "named" means an implementation you
+  //   can write down, not a story about one.
+  //
+  // Applied honestly here, that keeps ONE row per class on solid ground and leaves three
+  // siblings. They are kept, and the reason is cost, not mechanism: U+FF11 and U+06F4 are
+  // different Unicode blocks, but every implementation anyone would actually write --
+  // `[0-9]`, `\d` + re.ASCII, str.isascii, str.isdecimal, category(c) == "Nd" -- treats all
+  // three identically, so no separating mechanism could be named. An earlier version of this
+  // comment asserted such a narrowing as if it were the reason; nobody had run it, and it is
+  // very likely impossible. Three free rows against a hazard class is a fine trade. Pretending
+  // they were isolated was not.
   String.fromCharCode(0x0661, 0x0662),  // Arabic-Indic -- the pair that shipped as 12
   String.fromCharCode(0xFF11),          // fullwidth ONE
   String.fromCharCode(0x06F4),          // Extended Arabic-Indic FOUR

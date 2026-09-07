@@ -25,13 +25,21 @@ Every `process.exit(...)` in gate-check.mjs takes a LITERAL, at :118 :155 :186 :
 :856 sets `process.exitCode = 2`, which :859 turns into `exit(2)`. No site in that file computes
 a code at runtime. Node's own uncaught-throw exit is 1, already in the set.
 
-THE SCOPE OF THAT ENUMERATION IS gate-check.mjs ITSELF, and saying so matters, because widening
-the grep to what it imports DOES find both a 127 and a computed code -- `lib/check-supervisor.mjs`
-has `process.exit(127)` and `process.exitCode = code`. Those do not reach the sentinel: the
-supervisor is a SPAWNED CHILD whose status gate-check reads as DATA (:634, :685, :782) and never
-re-raises as its own; all 16 of its own exits take literals. A reader who checks the imports
-would otherwise find the 127 and reasonably conclude this enumeration was careless. Re-run both
-greps -- this file and everything it imports -- if the boundary ever moves.
+THE DOMAIN OF THAT ENUMERATION IS THE RUNNING PROGRAM, not one file -- a `process.exit()` inside
+an IMPORTED module is the importer's exit too, so bounding only gate-check.mjs would bound a
+smaller domain than the sentence covers. It matters here: `lib/check-supervisor.mjs` has BOTH a
+`process.exit(127)` and a computed `process.exitCode = code`. It is not imported. gate-check's
+imports are exactly `lib/gates.mjs`, `lib/process-tree.mjs`, `lib/dispatch.mjs`, and none of the
+three exits the process at all; the supervisor is reached only by `spawn()` at :674, as a
+separate process whose status is read as DATA (:607 `settle(exitCode, signal)`, :634, :685, :782
+`"exit=" + result.exitCode`) and never re-raised, and `lib/regex-worker.mjs` only by `new
+Worker()` at :555, a thread with no exit site of its own.
+
+NONE OF THAT IS PROSE ANY MORE. python-lib-checks derives the literal set, asserts no computed
+exit, walks the real import list, and asserts no imported module exits -- with a vacuity control
+on the extraction itself. The line numbers above are a reader's shortcut to the same facts; the
+check is what holds them true. (Earlier drafts cited :634/:685/:782 from a planning document
+rather than from the file. They were verified directly before being written here.)
 
 SELF-NAMING follows the convention gate_lint.py established: the HELP usage line names this
 file, and every other string -- including the "gate-check: " prefix and the "run gate-check.mjs

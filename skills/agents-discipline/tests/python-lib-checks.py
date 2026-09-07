@@ -471,7 +471,67 @@ _unbacked = [s for s in _shapes
              if "Number(string) " + json.dumps(s, ensure_ascii=False) not in _by]
 report(_shapes and not _unbacked,
        "jsapi: every docstring-enumerated grammar shape has a corpus row", str(_unbacked)[:200])
+# THE OTHER DIRECTION, COMPUTED RATHER THAN NARRATED. bd82b3e deleted a hand-written "31 of 65"
+# from two files as prose that would rot, and wrote a parenthetical explaining the deletion that
+# was LONGER than the computation would have been -- both inputs were already in hand. The
+# remedy for a fact that rots is to compute it, not to make it too vague to be wrong. This is a
+# RATCHET, not an equality: the gap may shrink, never grow, so a new unnamed row has to be
+# argued for in a commit rather than added silently.
+_corpus = [json.loads(k[len("Number(string) "):]) for k, _v in _jr
+           if k.startswith("Number(string) ")]
+_named = set(re.findall(r'"([^"]*)"', _gram.string[_gram.start():]) if _gram else [])
+_named |= set(re.findall(r'"([^"]*)"', pathlib.Path(LIB, "jsapi.py").read_text(encoding="utf-8")))
+_unnamed = [s for s in _corpus if s not in _named]
+report(len(_unnamed) <= 30,          # control: 29 FAILs, reporting "30 unnamed of 65 rows"
+       "jsapi: the count of corpus rows named nowhere in jsapi.py has not grown",
+       "%d unnamed of %d rows" % (len(_unnamed), len(_corpus)))
 completed.append("jsapi")
+
+# --- the PORT_INCOMPLETE_EXIT sentinel really is disjoint from the oracle's exit codes -------
+# gate_check.py stops at target discovery and exits 90 there, so a vector running off the end of
+# the port shows as a DIVERGENCE rather than as agreement. That only works while 90 collides with
+# nothing gate-check.mjs can exit with, and the justification for it was 16 line numbers written
+# into a docstring -- exactly the unchecked prose that got a "31 of 65" count deleted two commits
+# earlier. Same rule, so: checked here instead of narrated there.
+#
+# The oracle is held FIXED by the method, which is a discipline and not a mechanism. This is the
+# mechanism.
+_gc = pathlib.Path(ROOT, "scripts", "gate-check.mjs").read_text(encoding="utf-8")
+_exit_literals = {int(m) for m in re.findall(r"process\.exit\((\d+)\)", _gc)}
+_exit_computed = re.findall(r"process\.exit\((?!\d+\))[^)]*\)", _gc)
+# Vacuity control: an empty set is disjoint from everything, so the sentinel check alone would
+# pass on a file this regex could not read at all.
+report(len(_exit_literals) >= 4, "gate-check: exit literals were actually found",
+       str(sorted(_exit_literals)))
+# A computed code is the real hazard -- it makes the literal set an incomplete enumeration, and
+# no static read can then bound what the oracle exits with. lib/check-supervisor.mjs HAS one
+# (`process.exitCode = code`), which is why this is scoped to gate-check.mjs: that file is
+# reached only by spawn() at :674, as a separate process whose status gate-check reads as data.
+report(not _exit_computed, "gate-check: every exit code is a literal, so the set is closed",
+       str(_exit_computed)[:200])
+# THE DOMAIN HAS TO MATCH THE CLAIM. "90 collides with no oracle exit code" is about the running
+# PROGRAM, and `process.exit()` inside an IMPORTED module is the importer's exit too. Checking
+# only gate-check.mjs would bound a smaller domain than the sentence covers -- the same
+# argument-shape defect this block replaced. So the imports are read as well, and the two
+# NON-imported helpers are excluded by name with the reason each is safe.
+_imported = [m.group(1) for m in re.finditer(r'from "\./(lib/[\w-]+\.mjs)"', _gc)]
+_spawned = {"lib/check-supervisor.mjs",   # spawn() at :674 -- separate process, status read as
+            "lib/regex-worker.mjs"}       # data; Worker at :555 -- thread, not an exit source
+report(sorted(_imported) and not (set(_imported) & _spawned),
+       "gate-check: the spawned helpers are not also imported", str(sorted(_imported)))
+_imported_exits = {}
+for _rel in _imported:
+    _p = pathlib.Path(ROOT, "scripts", _rel)
+    _t = _p.read_text(encoding="utf-8") if _p.exists() else ""
+    _found = re.findall(r"process\.exit\(([^)]*)\)", _t)
+    if _found:
+        _imported_exits[_rel] = _found
+report(not _imported_exits,
+       "gate-check: no imported module exits the process on its own", str(_imported_exits)[:200])
+report(90 not in _exit_literals,
+       "gate_check.py: the 90 sentinel collides with no oracle exit code",
+       str(sorted(_exit_literals)))
+completed.append("exit_sentinel")
 
 # --- parse_gates: the whole parse result, field by field -----------------------------------
 # The drivers existed and NOTHING RAN THEM. 8424c59 cites "5/5 whole-object diffs identical" as

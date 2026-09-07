@@ -43,14 +43,26 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > - It states *"The second writer has been stopped; a65c95ff owns these paths now."* **False.**
 >   That agent's own report says `gate_check.py` "changed under me twice mid-edit" and that
 >   `argv-drive.mjs`/`argv_drive.py` appeared afterwards. The ownership message did not stop
->   recurrence in the window it was issued for. **Early commit is the part that worked** — it is
->   what made the second loss recoverable. Ownership-by-message did not.
+>   recurrence in the window it was issued for. **That correction was ALSO unsupported** — the
+>   agent's report carries no timestamps, the two file creations sit at 04:01 with the delivery
+>   time unknown, and I never established the window's boundary before claiming a write fell
+>   inside it. **The claim that IS settled needs no timeline at all:** SendMessage returns
+>   *"queued for delivery at its next tool round"*, so **ownership-by-message has a latency
+>   floor — it cannot stop a write already in flight.** Early commit has no such floor, and it
+>   is what made the loss recoverable. Prefer the mechanism without the race.
 > - Its post-mortem blames *"two writers on one untracked path"*. That is the PROXIMATE
->   mechanism. **The root cause is upstream: I dispatched two agents with REVIEW briefs, saw
->   both drift into IMPLEMENTATION in their own progress lines, and answered the drift with an
->   ownership assignment instead of stopping it.** Ownership cannot be assigned ahead of time for
->   a path nobody was supposed to write — only noticing the drift covers that. A reviewer that
->   starts writing production code is the signal; the colliding write is already the consequence.
+>   mechanism. My first correction moved up one level — I saw the drift and answered with
+>   ownership rather than stopping it — and that was STILL downstream. **THE ROOT CAUSE: I
+>   completed both agents' briefs MYSELF, from the outside, and did not tell them.** I acted on
+>   both reviews and committed `aef1856` while both were still running; my own stop message says
+>   so — *"has already been acted on and committed as aef1856."* A reviewer whose brief is
+>   finished is supposed to report and stop. These had nothing left to report, so they drifted
+>   into the only visible open work, which was the same file. **Drift was the rational response
+>   to a brief I had silently emptied**, not a failure of agent discipline — and no ownership
+>   scheme covers a path nobody was supposed to write.
+>   **The prescription that fires early enough to matter: when you complete a running agent's
+>   brief yourself, message it to stop BEFORE you commit — not after you notice it writing
+>   files.** Neither earlier version of this post-mortem says that.
 >
 > **THE SAME TRAP, WALKED INTO AGAIN ON 2026-09-07 WHILE WRITING A MUTATION CLAIM — and this
 > time in the paragraph directly above's own subject matter.** 7bcace8 grounded five new
@@ -67,6 +79,18 @@ revert. If no mutation isolates a row, that row does not earn its place.
 > 2. **The natural mutation for a whitelist is to DELETE it, and deleting a guard that also
 >    prevents a crash is never a control.** Prefer "revert to the previous implementation" over
 >    "remove the new code" whenever the new code replaced something rather than adding to it.
+>    **That rule silently assumes the previous implementation is RECOVERABLE** — the same
+>    dependency the collision above teaches, so read the two together. My M2' was RETYPED from
+>    the removed code's description, not `git show`n; it happened to be right, but reconstructing
+>    a revert is a weaker act than reverting, and the rule as first written did not distinguish
+>    them.
+> 3. **`mutate-probe.sh` guard 3 does NOT cover this class, and claiming kinship with it hid the
+>    real finding.** Guard 3 checks that the mutant still IMPORTS. The `"0xg"` mutant imports
+>    perfectly and crashes at RUNTIME, on one input, mid-run — guard 3 passes it and the trap
+>    springs anyway. What caught it was checking the driver's RETURNCODE for the whole run.
+>    **The actionable item: guard 3 should assert the mutant RUNS TO COMPLETION, not merely that
+>    it imports.** Asserting that existing tooling already covers a class it does not is worse
+>    than reporting the gap, because it stops anyone looking for the gap.
 >
 > **AND I HAD NOT RUN EITHER MUTATION — I re-narrated a background agent's three as two.** That
 > is the laundering shape retracted one commit earlier, repeated while writing the retraction's
