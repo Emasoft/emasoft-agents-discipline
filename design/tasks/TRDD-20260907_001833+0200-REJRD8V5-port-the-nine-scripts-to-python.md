@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T06:14:00+0200
+updated: 2026-09-07T06:48:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -24,6 +24,16 @@ this project — the recurring defect all session has been an assertion satisfie
 other than the property it names. Mutate the implementation, confirm the intended row reddens,
 revert. If no mutation isolates a row, that row does not earn its place.
 
+> **AN AD-HOC CONTROL LOOP MUST DISTINGUISH A CRASH FROM A DIVERGENCE, or it scores the
+> session's original sin again.** `mutate-probe.sh` has guard 3 (`a .py mutant must still
+> IMPORT`) precisely because a syntax-error mutant once counted as nine catches. Every ad-hoc
+> control loop written this session branched on the differential's EXIT CODE — under which a
+> mutant that fails to import exits non-zero and reads as REDDENS. Re-verified 2026-09-07 with
+> an explicit import check: the three `path-api` controls (`js_dirname`'s `//`-root arm,
+> `_normalize_string`'s `.` case, `js_relative`'s separator test) all import cleanly and reddened
+> genuinely, so those counts stand. **But copy the guard, not just the loop:** check the mutant
+> imports before believing a non-zero exit, and count per-case rather than trusting the status.
+>
 > **A CONTROL PROVES REACHABILITY. THE CORPUS DECIDES CORRECTNESS.** The digest serializer
 > computed the right JS float spelling with `_js_number` and then threw it away —
 > `json.loads(...)` back to a Python float, re-rendered by `json.dumps`. Wrong for exactly the
