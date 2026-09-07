@@ -66,6 +66,31 @@ if [ $# -lt 1 ]; then echo "$label -> PROBE FAILED (no runner given)" >&2; exit 
 # `printf 'DIVERGE  %-42s'` in four, `echo "DIVERGE <label>"` in three). The summary banners
 # `--- DIVERGENCES ABOVE ---` and `--- DIVERGENCE SET CHANGED` do not match: they start with
 # `---`, and `DIVERGENCES` puts an N where the separator must be.
+#
+# TWO KNOWN LIMITS, RECORDED AND DELIBERATELY NOT FIXED. This file has taken eight corrections
+# in one session, several fixing the previous correction, while the actual task (a JS->Python
+# port) advanced once. It is a manually-invoked diagnostic with no caller in the repo, and a
+# wrong verdict costs a human one line and a re-run. Neither limit below can produce a wrong
+# verdict on the PORT today, so they are limits, not defects:
+#
+#   1. SHAPE CANNOT SEPARATE AN EMISSION FROM PROSE THAT BEGINS WITH THE TOKEN. Measured:
+#      `    DIVERGE lines are printed at column 0` MATCHES; `      # DIVERGE LINES START AT
+#      COLUMN 0` does not, because the `#` intervenes. The first control written for this used
+#      `DIVERGE_LINES`, whose UNDERSCORE fails the separator test for a reason having nothing to
+#      do with indentation -- it PASSED FOR THE WRONG REASON. Realized risk is nil today: the
+#      hazard needs a mutant raising inside a Python file whose source carries `DIVERGE ` in a
+#      comment, and none does; the *-diff.sh runners are shell, which Python tracebacks do not
+#      quote. Mitigation is a convention: do not start a comment line with the bare token.
+#      (The mechanical fix, if this ever bites, is to require TWO spaces -- four runners already
+#      emit `printf 'DIVERGE  %-42s'` -- and convert lease-diff.sh's three single-space echoes.)
+#
+#   2. THE CONTRACT IS TIGHT, AND A NEW RUNNER CAN FAIL IT SILENTLY. `DIVERGE` bare and
+#      `DIVERGE:label` score zero -- the false-negative direction. Guard -1 cannot see it: it
+#      greps the SOURCE for the token at any position, so such a runner is admitted and then
+#      scores zero forever. That gap is structural, not lexical.
+# The contract is therefore PINNED IN THE SELFTEST rather than in another guard (cases 8-10):
+# an indented emission with a separator is counted, a quoted comment line is not, and a bare
+# DIVERGE scores zero. A future runner's format is verified against those, not assumed.
 DIVERGE_RE='^[[:space:]]*DIVERGE[[:space:]]'
 backup=$(mktemp)
 cp "$target" "$backup"

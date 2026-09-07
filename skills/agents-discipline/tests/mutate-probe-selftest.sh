@@ -120,5 +120,35 @@ printf '#!/bin/bash\nn=$(cat %s/m 2>/dev/null || echo 0); echo $((n+1)) > %s/m\n
 out=$(bash "$PROBE" t "$target" 'original' 'mutated' "$swap" 2>&1 | tail -1)
 check "a compensating change is not netted to zero" \
   "t -> REDDENS (1 NEWLY diverging variant(s), 1 healed)" "$out"
+
+# 8-10. THE EMISSION CONTRACT, pinned rather than assumed. $DIVERGE_RE is
+# `^[[:space:]]*DIVERGE[[:space:]]` -- leading whitespace tolerated, a trailing separator
+# REQUIRED. Both halves are load-bearing and both were got wrong once:
+#   - anchored at column 0, gate-args-diff.sh's indented emissions were invisible and every
+#     probe against it reported NOTHING REDDENED whatever was mutated;
+#   - with no separator, an indented line merely CONTAINING the token matched, and a Python
+#     traceback quotes source lines -- this repo's test files carry the word in dozens of
+#     comments. That direction is the dangerous one: a false REDDENS is the DESIRED outcome of
+#     a probe and nothing in the harness questions it.
+# So a NEW runner must emit `DIVERGE<space><label>`. A bare `DIVERGE` or `DIVERGE:label` scores
+# zero SILENTLY, which is exactly the failure these cases exist to make loud.
+printf 'MARKER = "original"\n' > "$target"
+emit() {   # emit <file> <line-printed-after-mutation>
+  printf '#!/bin/bash\nn=$(cat %s/e 2>/dev/null||echo 0);echo $((n+1))>%s/e\n[ "$n" = 0 ] || printf "%%s\\n" "%s"\necho "DIVERGE seed"\necho "--- x ---"\nexit 0\n' \
+    "$tmpdir" "$tmpdir" "$2" > "$1"; chmod +x "$1"; rm -f "$tmpdir/e"
+}
+emit "$tmpdir/sep-ok.sh" "  DIVERGE  indented emission"
+out=$(bash "$PROBE" t "$target" 'original' 'mutated' "$tmpdir/sep-ok.sh" 2>&1 | tail -1)
+check "an INDENTED emission with a separator is counted" \
+  "t -> REDDENS (1 NEWLY diverging variant(s))" "$out"
+
+emit "$tmpdir/prose.sh" "      # DIVERGE-shaped prose in a quoted source line"
+out=$(bash "$PROBE" t "$target" 'original' 'mutated' "$tmpdir/prose.sh" 2>&1 | tail -1)
+check "a quoted comment line is NOT counted as a divergence" "t -> NOTHING REDDENED" "$out"
+
+emit "$tmpdir/bare.sh" "DIVERGE"
+out=$(bash "$PROBE" t "$target" 'original' 'mutated' "$tmpdir/bare.sh" 2>&1 | tail -1)
+check "a BARE DIVERGE scores zero -- the contract needs a separator" \
+  "t -> NOTHING REDDENED" "$out"
 echo "--- $( [ $fail = 0 ] && echo 'all identical' || echo 'SELF-TEST FAILURES ABOVE' ) ---"
 exit $fail
