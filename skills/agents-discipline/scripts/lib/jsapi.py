@@ -711,10 +711,17 @@ def normalize_argv():
     same one node uses. VERIFIED to reproduce node's code points exactly for the argv above.
 
     THE TWO DECODERS AGREE ON MORE THAN THE ONE CASE ABOVE, checked because a maximal-subpart
-    disagreement would make this fix wrong in a way every differential row still passes. node vs
-    this expression over the shapes where UTF-8 decoders classically differ -- overlong `C0 80`,
-    a surrogate encoded in UTF-8 `ED A0 80`, a 5-byte sequence, a lead byte above F4, `E0 80 A0`,
-    and four truncations -- agree on the code points AND on the COUNT in all ten.
+    disagreement would make this fix wrong in a way every differential row still passes. 24
+    shapes, node vs this expression, agreeing on the code points AND on the COUNT in every one.
+    TWO AXES, because the first pass varied only the first and a corpus that varies one axis is
+    the shape this port has already been burned by:
+      CONTENT   overlong `C0 80`, a surrogate encoded in UTF-8 `ED A0 80`, a 5-byte sequence, a
+                lead byte above F4, `E0 80 A0`, a bare continuation byte `80`, four truncations
+      POSITION  bad bytes at index 0, at end-of-string with nothing after, two truncated
+                sequences back to back, and -- the one that actually discriminates a resync
+                rule -- a truncated sequence followed IMMEDIATELY by a valid multi-byte
+                character (`E2 82` + `C3 A9` -> U+FFFD U+00E9 in both, NOT one replacement
+                swallowing the following lead byte). Every shape run bare AND ASCII-wrapped.
 
     THIS IS WHY IT MUST HAPPEN AT THE ARGV BOUNDARY rather than at each write. The value flows
     into files, digests and stdout, and each destination has a DIFFERENT correct handling of a

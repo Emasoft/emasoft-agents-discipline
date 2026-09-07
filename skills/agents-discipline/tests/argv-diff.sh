@@ -19,20 +19,35 @@
 # truncated three-byte sequence is ONE replacement to the oracle and TWO to a port that maps
 # each surrogate to U+FFFD. Case 1 alone passes under that wrong fix. Case 2 does not.
 #
-# WHAT THIS FILE DOES NOT COVER, said here so four normalize_argv() call sites do not read as
-# four covered surfaces. Only cases 1-2 discriminate the fix, and both drive ONE CLI. That is a
-# property of the surfaces, not an omission:
-#   * On a PRINTED value the fix is unobservable. The port's stream handler substitutes U+FFFD on
-#     the way out, so a differently-decoded argument prints node's bytes either way. MEASURED:
-#     with normalize_argv() neutered, cases 3-4 stay green.
-#   * On macOS a PATH carrying invalid UTF-8 cannot be created at all -- the filesystem answers
-#     "Illegal byte sequence" -- so the path-argument vector has nothing to open. MEASURED, and
-#     it is also why `gate-check --cwd <bad byte>` reports identically in both runtimes with or
-#     without the fix.
-# So the one argv value that both carries free text AND reaches a FILE is dispatch-check's
-# `--reason`, and that is what cases 1-2 are. On the other three CLIs the call is PROPHYLAXIS.
-# Stated rather than implied, because "the call is in all four" is exactly the shape of claim
-# this port has already had to retract twice.
+# WHICH FIXTURE A ROW USES IS LOAD-BEARING, and getting it wrong cost this file real coverage
+# for one commit. The first version gave every path row BAD_ONE and concluded from their staying
+# green under a neutered normalize_argv() that a printed value can never discriminate the fix --
+# the stream handler substitutes U+FFFD on the way out, so one surrogate prints as node's one
+# replacement either way. TRUE OF BAD_ONE ONLY. Under BAD_SEQ the port holds TWO surrogates
+# where node has ONE character, so the handler emits SIX bytes against node's THREE. MEASURED on
+# the gate-lint row with the fix neutered:
+#     node  ... nope-x <3 bytes> y.md ...
+#     port  ... nope-x <6 bytes> y.md ...
+# So the honest rule is the opposite of what was written here: a printed row discriminates the
+# fix whenever its fixture makes the two decoders disagree on the COUNT, and BAD_ONE is exactly
+# the fixture where they cannot. Every path row therefore uses BAD_SEQ, which takes the fix from
+# one covered CLI to three. This is the same "measured one shape, stated it universally" move the
+# rest of this file exists to catch, committed inside the comment that was correcting it.
+#
+# STILL NOT COVERED, and it is a property of the surface rather than an omission: gate-check.
+# Its argv values are charset-closed ids and PATHS, and on macOS a path carrying invalid UTF-8
+# cannot be created at all -- the filesystem answers "Illegal byte sequence" -- so `--cwd <bad
+# byte>` reports identically with or without the fix. MEASURED. The call there is PROPHYLAXIS,
+# said out loud because "the call is in all four" is the shape of claim this port has retracted
+# twice. NOTE THE PLATFORM DEPENDENCE rather than inheriting it silently: ext4 and xfs accept
+# arbitrary bytes in a filename, so on a Linux runner that vector IS constructible and the call
+# stops being prophylactic. Unmeasured here; the claim above is macOS-scoped on purpose.
+#
+# AND `--reason` IS NOT THE ONLY FREE-TEXT ARGV VALUE -- the first version of this block said it
+# was, which is dispatch.py:429's own false premise restated one commit after correcting it.
+# `--handle` is guarded by str.isprintable() alone; case 3 covers it. The lesson that generalises:
+# "charset-closed" is a claim about a SPECIFIC validator, so it has to be checked per option
+# rather than inferred from the ones that happen to share a command line.
 #
 # DIVERGE LINES START AT COLUMN 0 (see gate-args-diff.sh's note); every other verdict word keeps
 # a 2-space indent so mutate-probe.sh's anchored `^DIVERGE` grep stays the only trigger.
@@ -71,11 +86,29 @@ done
 # AND ASSERTED TO BE INVALID UTF-8. A valid non-ASCII fixture would still pass the check above
 # while testing encoding-diff.sh's subject instead of this file's: both runtimes decode valid
 # UTF-8 to the same string, so no boundary difference could arise for the cases to catch.
+#
+# THROUGH python3, NOT iconv, and the difference is the guard's failure mode. `printf | iconv
+# >/dev/null 2>&1` inside an `if` reads a MISSING iconv (exit 127) as "the conversion failed",
+# i.e. as the good answer -- so on a machine without it the guard passes and protects nothing,
+# with the 2>&1 swallowing the message that would have shown it. That is verbatim the `grep -qP`
+# defect removed from encoding-diff.sh's ASCII guard two commits ago, and it was reintroduced
+# here. python3 is already a hard requirement of this suite ($PY_ABS), so this removes the
+# dependency instead of guarding it, and the exit status distinguishes 0/1 from a crash.
 for probe in "$BAD_ONE" "$BAD_SEQ"; do
-  if printf '%s' "$probe" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; then
-    echo "DIVERGE  fixture argv is valid UTF-8; this file's whole subject is absent" >&2
-    exit 1
-  fi
+  "$PY_ABS" -c 'import sys
+raw = sys.argv[1].encode("utf-8", "surrogateescape")
+try:
+    raw.decode("utf-8")
+except UnicodeDecodeError:
+    sys.exit(1)
+sys.exit(0)' "$probe"
+  case "$?" in
+    1) : ;;  # invalid, which is what this file needs
+    0) echo "DIVERGE  fixture argv is valid UTF-8; this file's whole subject is absent" >&2
+       exit 1 ;;
+    *) echo "the UTF-8 validity guard could not run; refusing to proceed unchecked" >&2
+       exit 2 ;;
+  esac
 done
 
 # THIS FILE'S OWN SOURCE MUST BE PURE ASCII -- same rule, same reason as encoding-diff.sh.
@@ -94,7 +127,8 @@ fi
 # mapping both spellings to one token would hide a real lexical-vs-realpath divergence.
 _scrub() {
   sed -e 's|/private/var/|/var/|g' -e "s|$1|<ROOT>|g" \
-      -e 's/"\(openedAt\|abandonedAt\|startedAt\|sealedAt\|completedAt\|at\)": "[^"]*"/"\1": "<TS>"/g'
+      -e 's/"\(openedAt\|abandonedAt\|startedAt\|sealedAt\|completedAt\|at\)": "[^"]*"/"\1": "<TS>"/g' \
+      -e 's/^[0-9-]\{10\}T[0-9:.]*Z /<TS> /'
 }
 
 # --- CASES 1 and 2: an abandon reason, which reaches BOTH stdout and dispatch.json ----------
@@ -114,6 +148,13 @@ _abandon() {  # exe script root reason -> "<stdout>\n--stderr--\n<stderr>\n--jso
   _scrub "$root" < "$WORK/.e"
   printf -- '--json--\n'
   _scrub "$root" < "$root/.agents-discipline/s/dispatch.json" 2>/dev/null || echo "(no state file)"
+  # THE STATUS LOG IS A SECOND FILE THE SAME VALUE REACHES, through a DIFFERENT writer:
+  # append_status(root, scope, iso + " " + event["text"]), where the event text interpolates the
+  # reason. Compared because a per-writer divergence there would otherwise pass unseen -- the
+  # first version of this helper captured stdout, stderr and dispatch.json only, on the strength
+  # of a comment claiming the reason "reaches a FILE", singular. It reaches two.
+  printf -- '--status--\n'
+  _scrub "$root" < "$root/.agents-discipline/s/status.log" 2>/dev/null || echo "(no status log)"
 }
 
 _argv_case() {  # label reason
@@ -141,7 +182,50 @@ _argv_case() {  # label reason
 _argv_case "abandon reason, one bad byte" "$BAD_ONE"
 _argv_case "abandon reason, truncated seq" "$BAD_SEQ"
 
-# --- CASES 3 and 4: a bad byte in a PATH argument ------------------------------------------
+# --- CASE 3: `--handle`, the OTHER free-text argv value, and an INPUT GATE the fix moved -----
+# `--reason` is not the only one, and saying it was repeated the exact error this commit set out
+# to correct: dispatch.py:429's exemption reasoned that every string in `state` is charset-closed,
+# which is false for `reason` AND for `handle`. `--scope`/`--wave`/`--leaf` really are closed
+# (`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`); `handle` is guarded only by str.isprintable().
+#
+# WHICH MAKES THIS ROW AN ACCEPTANCE TEST, not just a byte comparison. isprintable() is False for
+# every surrogate and True for U+FFFD, so the fix MOVED THE GATE: pre-fix the port REFUSED a
+# handle the oracle accepts, post-fix it accepts and records the same value. A behaviour change
+# to a validation gate is exactly the kind that should not ride along unrowed. MEASURED, both
+# runtimes, after the fix: exit 0 and `"handle": "h<U+FFFD>nd"` in dispatch.json.
+_handle_start() {  # exe script root -> "<exit>\n<stdout>\n--stderr--\n<stderr>\n--json--\n<file>"
+  local exe="$1" script="$2" root="$3"
+  mkdir -p "$root"
+  "$exe" "$script" open --root "$root" --scope s --wave w1 --leaf a >/dev/null 2>&1
+  "$exe" "$script" start --root "$root" --scope s --wave w1 --leaf a --handle "$BAD_SEQ" \
+    > "$WORK/.o" 2> "$WORK/.e"
+  printf 'exit=%s\n' "$?"
+  _scrub "$root" < "$WORK/.o"
+  printf -- '--stderr--\n'
+  _scrub "$root" < "$WORK/.e"
+  printf -- '--json--\n'
+  _scrub "$root" < "$root/.agents-discipline/s/dispatch.json" 2>/dev/null || echo "(no state file)"
+}
+o_handle="$(_handle_start "$NODE_ABS" "$HERE/../scripts/dispatch-check.mjs" "$WORK/handle-o")"
+p_handle="$(_handle_start "$PY_ABS" "$HERE/../scripts/dispatch_check.py" "$WORK/handle-p")"
+# NON-VACUITY: the oracle must have ACCEPTED it. If a future guard closes this charset, both
+# runtimes would refuse identically and the row would report agreement about a gate that no
+# longer admits the input -- true, but no longer evidence about the decode.
+if ! printf '%s' "$o_handle" | grep -q '^exit=0$' || ! printf '%s' "$o_handle" | grep -q '"handle"'; then
+  printf 'DIVERGE  %-38s oracle refused the handle; fixture reached nothing\n' \
+    "start handle, truncated seq"
+  printf '%s\n' "$o_handle" | sed 's/^/    | /'
+  fail=$((fail + 1)); FAILED+=("start handle, truncated seq")
+elif [ "$o_handle" = "$p_handle" ]; then
+  printf '  OK      %-38s accepted and recorded identically\n' "start handle, truncated seq"
+  pass=$((pass + 1))
+else
+  printf 'DIVERGE  %-38s\n' "start handle, truncated seq"
+  diff <(printf '%s\n' "$o_handle") <(printf '%s\n' "$p_handle")
+  fail=$((fail + 1)); FAILED+=("start handle, truncated seq")
+fi
+
+# --- CASES 4 and 5: a bad byte in a PATH argument ------------------------------------------
 # THESE TWO DO NOT GUARD THE ARGV FIX, and the first draft of this comment claimed they did.
 # MEASURED by neutering normalize_argv(): cases 1-2 go red, these two stay GREEN. The reason is
 # worth keeping, because it bounds what any print-only differential in this project can prove --
@@ -157,7 +241,7 @@ _argv_case "abandon reason, truncated seq" "$BAD_SEQ"
 # had reached. Both rows are proven to discriminate it -- replacing either CLI's
 # `_node_fs_message(...) if errno else str(...)` with a bare `str(...)` reddens that row alone.
 _lint_missing() {  # exe script
-  "$1" "$2" "$WORK/nope-$BAD_ONE.md" > "$WORK/.o" 2> "$WORK/.e"
+  "$1" "$2" "$WORK/nope-$BAD_SEQ.md" > "$WORK/.o" 2> "$WORK/.e"
   printf 'exit=%s\n' "$?"
   _scrub "$WORK" < "$WORK/.o"
   printf -- '--stderr--\n'
@@ -179,11 +263,11 @@ else
   fail=$((fail + 1)); FAILED+=("gate-lint path argument")
 fi
 
-# --- CASE 4: the same message, through the OTHER path-taking CLI ---------------------------
+# --- CASE 5: the same message, through the OTHER path-taking CLI ---------------------------
 # Two CLIs rather than one because the errno fix is per-call-site and the first one shipped
-# without a sweep. See the block above cases 3-4 for what these rows do and do not prove.
+# without a sweep. See the block above cases 4-5 for what these rows do and do not prove.
 _ledger_missing() {  # exe script
-  "$1" "$2" "$WORK/nope-$BAD_ONE.md" > "$WORK/.o" 2> "$WORK/.e"
+  "$1" "$2" "$WORK/nope-$BAD_SEQ.md" > "$WORK/.o" 2> "$WORK/.e"
   printf 'exit=%s\n' "$?"
   _scrub "$WORK" < "$WORK/.o"
   printf -- '--stderr--\n'
