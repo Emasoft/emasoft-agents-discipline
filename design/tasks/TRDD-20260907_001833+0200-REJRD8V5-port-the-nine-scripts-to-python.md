@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T16:29:25+0200
+updated: 2026-09-07T16:39:25+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -28,20 +28,97 @@ and three `reject` strings each pin ONE requirement. Two mutations killed disjoi
 (routing → handoff/terminal/not-listed-as-unverified; counting → the count line and the no-`other:`
 check), and neither killed the other's, so no assertion rides on a sibling.
 
+**CORRECTED (c94de7e) — the first version of this fix replaced one over-claim with another.**
+The three-way branch let `abandoned` outrank every other incomplete reason, so a ledger with one
+abandoned row among four PENDING ones printed TERMINAL and never printed INCOMPLETE: asserting
+nobody is coming back while four units were being worked. Same defect, sign flipped. Two things
+made it survive to a commit:
+  — **I wrote "mirrors the gate half" four times** (code comment, commit message, doc, this file)
+    while implementing the one structure the gate half specifically avoids. `gate-check.mjs:934-948`
+    prints HANDOFF REQUIRED and UNMET as INDEPENDENT lines because the facts are independent; an
+    `else if` makes them exclusive. Repeating a claim in four places is not four checks of it.
+  — **The fixture could not see it.** verified/abandoned/done has an empty `unverified`, so both
+    shapes print identically. The missing row was `pending` — the one status that distinguishes
+    "terminal" from "still coming", absent from a fixture written to test exactly that distinction.
+Now `abandoned.length && !unverified.length`, with a second fixture that carries a pending row.
+
+**ALSO CORRECTED: `expect: ["- #2 finance"]` was VACUOUS**, and my own mutation output had already
+said so. The broken build prints `- #2 finance [abandoned]` under "unverified rows" — the plain
+substring is a subset of it, so the assertion passed in both. It was ABSENT from mutation 1's FAIL
+list while its three neighbours failed; I read the FAIL list for what failed and not for what
+should have. Then wrote in the commit that it pinned "naming the row". Now `- #2 finance [`.
+**Generalizes: a substring assertion must be checked against the BROKEN output, not only the
+correct one.** A `reject` is the same trap in reverse — it is satisfied by absence for any reason,
+including a reworded label, so it carries weight only when paired with a positive that pins the
+label.
+
+**AND: b8bc1c1's mutation evidence covered only the PORT.** Both mutations edited `ledger_check.py`
+and ran under `AD_RUNTIME=python`, so no assertion had been shown capable of failing against the
+ORACLE — which inverts this TRDD's own convention, since the oracle is the side that must bite.
+Three mutations against `ledger-check.mjs` in c94de7e, each killing a disjoint set. **Standing rule
+from here: a mutation run under `AD_RUNTIME=python` proves nothing about the oracle. Mutate the
+side whose behaviour the assertion is supposed to constrain.**
+
 **A second divergence fell out of the same expression, and the PORT was the correct side.**
 `counts[r.status] === undefined` is FALSE for a status cell reading `constructor`/`toString` —
 prototype lookup finds a function — so `counts[...]++` stored NaN and `other` never incremented;
 the row vanished from every printed total. A Python dict inherits no such keys, so `ledger_check.py`
 already counted those rows as `other` while the ORACLE lost them. Fixed the oracle to
 `Object.prototype.hasOwnProperty.call` (the form `scripts/lib/dispatch.mjs:53` already established,
-and safe on the `>=16` engines floor unlike `Object.hasOwn`). **Worth recording as a pattern: the
-oracle is fixed, not sacred. "Any divergence is a porting defect" governs TESTS being re-specified
-to match the port; it does not mean the JS is right when the JS is measurably wrong.**
+and safe on the `>=16` engines floor unlike `Object.hasOwn`).
+
+**This was a JUDGMENT CALL, and the first version of this paragraph dressed it up as a rule.** It
+read "the oracle is fixed, not sacred — the convention governs TESTS only", which is the flattering
+reading and would be quoted back later as settled precedent. The honest statement is narrower:
+*I found a case where matching the oracle would propagate a latent bug, and chose to change both
+rather than propagate it.* The case against, which is strong: the convention's whole value is that
+it is unfalsifiable from the port's side — the port author cannot appeal to correctness, so every
+disagreement is the port's fault by fiat. Adding "unless the oracle is measurably wrong" hands the
+port author the discretion the convention exists to remove, and I exercised it on the first
+occasion it would have cost me anything. Nothing measured that node's behaviour was WRONG; what I
+measured is that it was SURPRISING and that Python differed. A stricter reading says the vanishing
+row WAS the specification.
+**What actually carries the change is an argument I did not make: it is prototype-pollution-shaped.**
+A ledger cell is attacker-influenced text reaching a property lookup on an object literal. That is
+a hazard class, not a taste preference, and it justifies fixing both sides without needing the
+convention bent. Use that argument, not the general one.
+**The narrow rule that survives:** propagating a hazard class to keep parity is not parity worth
+having — but say WHICH hazard, and expect to defend it. It is not a licence to fix the oracle
+whenever the port looks nicer.
 
 **Still open on this item, and stated rather than papered over:** nothing requires an abandoned row
 to carry a reason. The template asks; `references/ledger-discipline.md` now asks; no code checks.
 
-**NEXT:** plan item 2 — C4 half 2, descendant reaping in the re-run loop. Smaller than it was
+**NEW, UNFIXED, AND IT OUTRANKS THE REST: `trim()` and `strip()` disagree on U+FEFF, and the
+divergence is an EXIT CODE on a forgeable status cell.** Surfaced by review of the `abandoned`
+work — pre-existing, not introduced by it, but the status path is what made it load-bearing.
+Measured first-hand, not taken from the report:
+
+    node   -e '"﻿verified".trim().toLowerCase()'  -> "verified"     (U+FEFF IS whitespace)
+    python -c '"﻿verified".strip().lower()'       -> "﻿verified"
+
+Run end to end on a 2-row ledger whose second status cell is `﻿verified`:
+
+    node   scripts/ledger-check.mjs  -> verified: 2, "-> ledger complete: every unit verified.", EXIT 0
+    python scripts/ledger_check.py   -> verified: 1, other: 1, "-> ledger INCOMPLETE.",           EXIT 1
+
+**This is a forgery surface, which is why it outranks a resource-leak item.** A status cell
+carrying an invisible character renders as `verified` in every editor and diff, does not literally
+read `verified`, and node accepts it as complete. In a tool whose stated purpose is making
+completion honest, the lax side is the wrong side — and the lax side is the ORACLE. Note the shape
+repeating from the `hasOwnProperty` case: twice now the port has been the safer runtime and the JS
+the one accepting hostile input. That is a pattern about `trim()`/`strip()`-class primitives, not a
+coincidence, and the rest of the port should be swept for it rather than waiting for review to find
+them one at a time.
+
+**No differential suite can currently see it**: none of the twelve diffs ledger-check's stdout on a
+hostile status cell, and the two runtimes agree on exit code for every fixture that exists. Whoever
+takes this writes the suite row FIRST — it must go red before the fix.
+Other zero-width and space characters (U+200B, U+0085, U+00A0, U+1680) and the İ/ẞ/K case mappings
+were reported to AGREE across runtimes; that half is REPORTED, not measured here — re-measure
+before relying on it.
+
+**THEN:** plan item 2 — C4 half 2, descendant reaping in the re-run loop. Smaller than it was
 ranked: `process_tree.py` already exposes `terminate_process_tree()`, `kill_group(-pid, SIGKILL)`,
 `_child_kill()`, `start_new_session=True` and `windows_taskkill_path()`, so the Python half is
 "call the existing helper", not "implement process-group semantics".
