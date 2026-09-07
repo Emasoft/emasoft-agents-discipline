@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T02:26:00+0200
+updated: 2026-09-07T02:47:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -384,25 +384,84 @@ difference — but every call site has to drop the await). One item left:
      the assertion to the Python spelling, or mark it JS-only. Do NOT leave them silently
      green.
 
-   **`lib/regex_worker.py` ALREADY EXISTED (`85a6c50`) and had NEVER BEEN RUN against the
-   oracle. `tests/regex-worker-diff.sh` (21 rows, new 2026-09-07) is the first thing that
-   executed it, and it surfaced the port's WIDEST divergence surface. Read this before
-   touching `EXPECT`.**
+   **`EXPECT` is the port's WIDEST divergence surface: `RegExp` and `re` are different ENGINES,
+   so a pattern compiles in both and MEANS different things. `tests/regex-worker-diff.sh`
+   (22 rows, new 2026-09-07) measures it. Read this before touching `EXPECT`.**
+   `lib/regex_worker.py` itself is UNCHANGED from `85a6c50` — see the two corrections below.
 
-   Recorded because it is the more useful fact: a first draft of this note said "STARTED
-   2026-09-07", written after a `Write` overwrote the committed file without checking whether
-   one was there. `git status` showed ` M` (tracked-modified) rather than `??`, which is what
-   caught it. The file was committed, so nothing was lost — but "I wrote this today" was
-   false, and the shim `regex-worker-drive.mjs` was edited on the strength of it (its comment
-   correctly described the OLD port and was "corrected" to match the new one; now restored
-   with the actual history). **The lesson is the general one: an untested file and a
-   nonexistent file look identical from the TRDD, and only one of them is a gap you created.**
+   **CORRECTION 1 — it was NOT "never run", and this note said so for one commit.**
+   `tests/python-lib-checks.py` has driven both sides since `85a6c50` via `regex_case`
+   (`:119-137`) — and it compares PARSED JSON, with `{error: true}` collapsing the message
+   text, because the two engines' diagnostics can never match. It had **2 rows**
+   (`an invalid pattern`, `an ASCII-only \d`). So the gap was CORPUS SIZE, not absence, and
+   the new file's contribution is 20 more rows, not first execution.
 
-   What actually changed in the port today, and why: the committed version duplicated the JS
-   flag map locally (now IMPORTS `_JS_FLAG_MAP` from `gates`, so the validator in
-   `parse_regex` and the matcher here cannot silently drift), used `json.dumps` default
-   separators (now compact — see the harness note below), and read `stdin.readline()` (now
-   `read()`, matching the oracle's `readFileSync(0)`).
+   **CORRECTION 2 — a production edit justified by that false premise, now reverted.** The
+   sequence is worth keeping because every step looked reasonable: a `Write` overwrote the
+   committed `regex_worker.py` without checking one existed (`git status` showing ` M` rather
+   than `??` is what caught it) → the new differential compared BYTES → all 21 rows "diverged"
+   on `json.dumps`' `", "` vs `JSON.stringify`'s `","` → so the PRODUCTION serialiser was
+   changed to satisfy the test. But the pre-existing differential had already solved that
+   correctly by parsing. **A production file was edited to accommodate a redundant test.**
+   `regex_worker.py` is now byte-identical to `85a6c50` and the new corpus adopts
+   `python-lib-checks.py`'s comparison policy instead of inventing a second one.
+
+   **The general lesson, which outlives both: an UNTESTED file and a NONEXISTENT file look
+   identical from the TRDD, and a WEAKLY-tested one looks identical to a well-tested one.**
+   Neither is visible without running something. Relatedly, `grep -rl <name> tests/` is NOT an
+   execution predicate — it matched `regex_worker` inside a COMMENT, and separately reported
+   `gate_lint.py` / `ledger_check.py` as never-executed when both are driven by `AD_RUNTIME`
+   with the interpreter and path built on SEPARATE lines. Measured after that false alarm:
+   `AD_RUNTIME=python node tests/lint-tests.mjs` → 29/29, `…/ledger-tests.mjs` → all pass.
+
+   **The 7 measured divergences** (of 22 rows; the error-TEXT row agrees once compared by
+   shape, which is the correct contract):
+
+   | row | JS | Python | severity |
+   |---|---|---|---|
+   | `ok$` vs `"ok\n"` | no match | **match** | **HIGHEST — production-reachable, see below** |
+   | `\A` / `\Z` | literal `A`/`Z`, no match | anchors, match | high |
+   | `(?<y>…)` JS named group | works | **error** | high |
+   | `(?P<y>…)` Python named group | **error** | works | high |
+   | `a[]b` empty class | no match | error | medium |
+   | `\p{L}` with `u` | match | error | medium |
+
+   **The `$` row's PRODUCTION reachability is measured, not assumed** — an earlier draft ranked
+   it HIGHEST on "CHECK output almost always ends with a newline", which is a claim about
+   `gate-check` sourced from an experiment on the worker. Now read:
+   `gate-check.mjs:615` is `stdout + (stdout && stderr ? "\n" : "") + stderr` — **no trim** —
+   and `:625` passes that raw string to `safeRegexMatch`. So `CHECK: echo ok` yields `"ok\n"`
+   and `EXPECT: /ok$/` FAILS in the oracle, PASSES in the port. Ordinary input, silent flip.
+
+   **DO NOT apply the obvious emulation recipe. `$` → `\Z` is WRONG, and it is measured.**
+   An earlier draft of this note recommended it parenthetically. With the `m` flag the engines
+   ALREADY AGREE (JS `$` and Python `MULTILINE` both match at every line end), so an
+   unconditional translation converts a passing row into a divergence. The corpus carries
+   `dollar with m flag agrees` as the trap row, and the swap control below fires on exactly
+   this. Second-order, if emulation is ever attempted: `\A`/`\Z` must be LITERALISED (JS reads
+   them as `A`/`Z`) while an injected `\Z` must SURVIVE that pass — the two rules are
+   order-sensitive. **Treat this whole paragraph as a hazard list, not a recipe; the
+   emulate-vs-document decision is still open.**
+
+   **It must land in TWO places.** `parse_regex` in `gates.py` already chose `re.compile` for
+   VALIDATION, so `(?<y>…)` is rejected at parse time in Python and accepted in JS — one layer
+   EARLIER than the worker. **And `parse-gates-drive.mjs` has ZERO regex EXPECT rows**
+   (measured), so that path has no differential coverage at all today.
+
+   **The pin is a SET of labels, not a count.** The first version compared `$differed` to `8`
+   and printed "none new" — which under a SWAP (one row stops discriminating while a new
+   defect appears) stays green and prints a sentence false by construction, in the one case it
+   exists to catch. That is this project's own `reddens 9` failure shape rebuilt inside the
+   check meant to prevent it, and a swap is the EXPECTED next edit since any emulation pass
+   fixes some rows and breaks others in the same commit. **SWAP CONTROL, run 2026-09-07:** the
+   `$`→`\Z` recipe applied to the port → **7 divergent before AND after**, count identical,
+   and the set pin named it exactly (`dollar before trailing newline` out, `dollar with m flag
+   agrees` in). The count pin would have said "none new". Restored after; tree clean.
+
+   One row was RELABELLED rather than kept: `lazy quantifier` → `a.*?b matches at all`. The
+   worker contract is `{matched: bool}` and lazy-vs-greedy changes WHAT is captured, never
+   WHETHER a match exists, so that row was architecturally incapable of failing for the
+   property its name claimed.
 
    A SUBPROCESS where the oracle uses a worker THREAD, and that is forced, not chosen: the
    worker exists so the parent can abandon a catastrophically backtracking match, and CPython
@@ -435,11 +494,8 @@ difference — but every call site has to drop the await). One item left:
    at parse time in Python and accepted in JS, inside code sitting under an OLD-STANDARD
    bullet. Whatever is chosen must be applied at BOTH sites or they disagree.
 
-   Harness note, because it nearly hid all of the above: the first run reported **21/21
-   divergent**. Twenty were `json.dump`'s default `", "`/`": "` separators against
-   `JSON.stringify`'s compact ones. The eight real rows were invisible in that noise. Fixed in
-   the port (`separators=(",", ":")`), and the corpus carries labelled CONTROL rows plus a
-   `rows < 15` vacuity gate for the same reason `lease-diff.sh` does.
+   The corpus carries labelled CONTROL rows plus a `rows < 15` vacuity gate, for the same
+   reason `lease-diff.sh` does.
 
    **ALSO: `mutate-probe.sh` does NOT work as the verdict reader for this route.** Its verdict
    greps `^DIVERGE` (`:140`), which only the hand-written differential drivers print. The

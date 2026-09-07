@@ -22,18 +22,30 @@ row() {                     # row <label> <source> <flags> <output>
   # row then reports a divergence that is the harness's, not the port's.
   msg=$(jq -cn --arg s "$src" --arg f "$flags" --arg o "$out" \
     '{source: $s, flags: $f, output: $o}')
-  # `; printf X` is a SENTINEL: $( ) strips ALL trailing newlines, so a reply written with and
-  # without one compare EQUAL without it. Same reason dispatch-cli-drive.sh carries it.
-  o1=$(printf '%s' "$msg" | node tests/regex-worker-drive.mjs 2>/tmp/rw-e1; rc=$?; printf X; exit $rc); e1=$?
-  o2=$(printf '%s' "$msg" | python3 scripts/lib/regex_worker.py 2>/tmp/rw-e2; rc=$?; printf X; exit $rc); e2=$?
+  # PARSED, not byte-compared -- the SAME policy python-lib-checks.py:131-136 already
+  # established, and adopting it here rather than inventing a second one is the point. Two
+  # differences are contractual, not defects: the serialisers disagree on whitespace
+  # (`{"matched":true}` vs `{"matched": true}`), and on an invalid pattern the message text is
+  # the ENGINE'S own, so demanding equality would demand the port reimplement V8's diagnostics.
+  # `{error: true}` collapses the second to its shape. A first version of this file compared
+  # BYTES, reported 21/21 divergent on whitespace, and led to "fixing" the PRODUCTION
+  # serialiser to satisfy a test -- a redundant test, since these two files both drive the same
+  # pair. The contract is: same keys, and equal `matched` when there is no error.
+  o1=$(printf '%s' "$msg" | node tests/regex-worker-drive.mjs 2>/tmp/rw-e1 \
+       | jq -cS 'if has("error") then {error:true} else . end'; exit ${PIPESTATUS[0]}); e1=$?
+  o2=$(printf '%s' "$msg" | python3 scripts/lib/regex_worker.py 2>/tmp/rw-e2 \
+       | jq -cS 'if has("error") then {error:true} else . end'; exit ${PIPESTATUS[0]}); e2=$?
   if [ "$o1" = "$o2" ] && [ "$e1" = "$e2" ]; then
     printf 'ok       %s\n' "$label"
   else
-    differed=$((differed + 1)); fail=1
+    differed=$((differed + 1))
+    DIVERGENT_LABELS="$DIVERGENT_LABELS$label
+"
     printf 'DIVERGE  %s\n         js(%s): %s\n         py(%s): %s\n' \
-      "$label" "$e1" "${o1%X}" "$e2" "${o2%X}"
+      "$label" "$e1" "$o1" "$e2" "$o2"
   fi
 }
+DIVERGENT_LABELS=""
 
 # --- the engine-difference corpus -------------------------------------------------------
 # Each row names the property under test. A row that cannot distinguish the engines is a
@@ -59,7 +71,16 @@ row 'backslash-A anchor'             '\Aok'        ''  'ok'
 row 'backslash-Z anchor'             'ok\Z'        ''  'ok'
 row 'empty character class'          'a[]b'        ''  'ab'
 row 'lookbehind'                     '(?<=v)\d'    ''  'v7'
-row 'lazy quantifier'                'a.*?b'       ''  'axxbxxb'
+# NOT "lazy quantifier". The worker contract is `{matched: bool}`, and lazy-vs-greedy changes
+# WHAT is captured, never WHETHER a match exists -- so a boolean harness is architecturally
+# blind to laziness and this row could never fail for the property its old name claimed.
+row 'a.*?b matches at all'           'a.*?b'       ''  'axxbxxb'
+# THE TRAP ROW. `$` and `m` AGREE (JS `$` with `m` matches at every line end, and so does
+# Python's with MULTILINE) -- so the obvious emulation recipe "translate `$` -> `\Z`" would
+# convert this PASSING row into a divergence. Without this row the harness would see only a
+# count move, which is exactly why the pin below is a SET and not a count.
+row 'dollar with m flag agrees'      'b$'          'm' 'b
+c'
 row 'i flag'                         'OK'          'i' 'ok'
 row 'unmatched paren is an error'    'a('          ''  'a'
 row 'octal-looking escape'           '\101'        ''  'A'
@@ -73,18 +94,35 @@ if [ "$rows" -lt 15 ]; then
   echo "VACUOUS: only $rows rows executed"; exit 1
 fi
 echo "$rows rows, $differed divergent"
-# PINNED, not zero. `RegExp` and `re` genuinely disagree on 8 of these rows and the fix is an
-# undecided design question (emulate JS semantics, or document the divergence -- see the TRDD).
-# A check that stays RED forever gets ignored, and the next person "fixes" it by weakening it;
-# a check pinned to the KNOWN set stays green while still failing the moment the set CHANGES,
-# in either direction. EQUALITY, not a floor: a floor here would hide a regression that adds a
-# divergence, which is the only thing this file can still catch.
-EXPECTED_DIVERGENT=8
-if [ "$differed" != "$EXPECTED_DIVERGENT" ]; then
-  echo "--- DIVERGENCE SET CHANGED: expected $EXPECTED_DIVERGENT, got $differed ---"
-  echo "    Re-read the rows above. Do NOT just update the number -- a NEW divergence is a"
-  echo "    port defect, and a VANISHED one means a row stopped discriminating."
+# PINNED TO THE SET OF LABELS, NOT THEIR COUNT. `RegExp` and `re` genuinely disagree on these
+# rows and the fix is an undecided design question (emulate JS semantics, or document the
+# divergence -- see the TRDD). A check that stays RED forever gets ignored and is then "fixed"
+# by weakening it, so a pin is right; but the FIRST version of this pin compared `$differed`
+# to a number and printed "none new". Under a SWAP -- one row stops discriminating while a new
+# port defect appears -- the count holds and the script prints that sentence, false by
+# construction in the one case it exists to catch. That is this project's own catalogued
+# failure shape (`reddens 9`: a label asserting more than the measurement), rebuilt inside the
+# check meant to prevent it.
+#
+# A swap is not hypothetical here: the pending work is an emulation pass, which fixes some rows
+# and can break others in the SAME commit. A set pin fails on any single change in either
+# direction, so it needs no separate swap control -- which is fortunate, because a swap control
+# is genuinely hard to construct and that is likely why the count version shipped.
+EXPECTED_DIVERGENT_SET='JS named group (?<n>)
+Python named group (?P<n>)
+backslash-A anchor
+backslash-Z anchor
+dollar before trailing newline
+empty character class
+unicode property escape'
+actual=$(printf '%s' "$DIVERGENT_LABELS" | LC_ALL=C sort)
+expected=$(printf '%s' "$EXPECTED_DIVERGENT_SET" | LC_ALL=C sort)
+if [ "$actual" != "$expected" ]; then
+  echo "--- DIVERGENCE SET CHANGED ---"
+  echo "    Do NOT just update the list. A row that APPEARED is a port defect; a row that"
+  echo "    VANISHED means it stopped discriminating. Diff (expected < / actual >):"
+  diff <(printf '%s\n' "$expected") <(printf '%s\n' "$actual") | sed 's/^/    /'
   exit 1
 fi
-echo "--- $EXPECTED_DIVERGENT known engine divergences, none new ---"
+echo "--- known engine divergences only, set unchanged ---"
 exit 0

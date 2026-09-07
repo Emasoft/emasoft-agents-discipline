@@ -15,15 +15,8 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Reads ALL of stdin, and so does the port (`sys.stdin.read()`), so both sides are one-shot
-// and there is no two-message divergence to look for.
-//
-// This comment used to read "the port reads ONE line", and it was CORRECT when written: the
-// port did `sys.stdin.readline()` from 85a6c50 until 2026-09-07. It became wrong because the
-// port changed, and the note was then briefly "corrected" on the assumption it had always been
-// a stale guess about unwritten code -- rewriting history in the safer-sounding direction.
-// Recorded as it happened, since a comment that tracks the other file is only trustworthy if
-// its updates say which way the change actually went.
+// Reads ALL of stdin; the port reads ONE line. Identical while a caller sends one message
+// (JSON.stringify escapes newlines), and the first divergence the moment anyone sends two.
 // Never exit before the write callback fires. stdout and stderr are both pipes here and both
 // writes are async, so an immediate process.exit() can truncate either one. The reply path
 // needs no exit at all (the pending write keeps the process alive); the error path does exit,
