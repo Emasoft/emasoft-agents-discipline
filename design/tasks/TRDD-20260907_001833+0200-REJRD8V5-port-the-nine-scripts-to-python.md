@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T06:05:31+0200
+updated: 2026-09-07T06:09:30+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -102,8 +102,14 @@ program. What IS true and narrower: the EXIT CODE is non-discriminating (90 in b
 approval file simply does not appear, so anything reading only the exit status sees nothing wrong.
 
 **`js_resolve` IS LEXICAL, `os.path.realpath` IS NOT — and one comment's correctness turns on it
-(2026-09-07).** Measured: on a symlink `link -> real`, `js_resolve` returns `.../link` while
-`os.path.realpath` returns `/private/.../real`. This is node's `path.resolve` semantics (purely
+(2026-09-07).** Measured: with the base directory ALREADY CANONICAL, on a symlink `link -> real`,
+`js_resolve` returns `.../link` while `os.path.realpath` returns `.../real`.
+**The first version of this measurement did not discriminate** — it ran under `mktemp -d`, whose
+`/var/...` path is itself reached through the `/var -> /private/var` symlink on macOS, so the two
+outputs differed by BOTH the `/private` prefix and `link -> real`. Two variables, one conclusion:
+exactly the non-discriminating control this file keeps catching elsewhere. Re-run on a
+`realpath`-ed base so only the symlink varies, the answer is the same and now it is earned.
+This is node's `path.resolve` semantics (purely
 lexical, never touches the filesystem) faithfully ported, and it is why `gate_check.py:597`
 building `approval_dir` with `js_resolve` leaves it NON-canonical. That in turn is what makes
 the `:845` re-call's `lstat(approval_dir)` non-vacuous: it inspects the ORIGINAL entry path,
@@ -150,19 +156,42 @@ than the first:
   and missed that THE CODE UNDER TEST creates it: `record_approval` calls
   `validated_approval_dir(create=True)` → `os.makedirs`. So the arm is dead from the second
   invocation against any given directory onward, whatever the runner does.
-- Measured properly: the runner uses FIVE distinct approval dirs — `APPR_O`/`APPR_P` (`:110`),
-  `APPR_CTRL` (`:150`), `APPR_SG_O`/`APPR_SG_P` (`:232`). The arm fires on the FIRST invocation
-  against each fresh one (`:112`, `:151`, `:235`) and is dead on the re-run at `:188`, which
-  reuses `APPR_O`.
+- I then published a firing map — "fires at `:112`, `:151`, `:235`, dead at `:188`" — built from
+  a grep of variable assignments and call lines. **I never identified which line belongs to which
+  CASE, and the map is wrong in a way that matters: those three are the ORACLE invocations.**
+  `:151` runs `gate_check.mjs` only (CASE 2's control is oracle-vs-oracle) and never executes
+  `gate_check.py` at all, so it cannot exercise a Python branch.
+- Read properly, by CASE boundary rather than by grep hit:
 
-So the arm executes several times, **incidentally, and nothing ASSERTS on it.** That is the
-honest statement, and it is why the `:845` cast stays graded UNFALSIFIED rather than verified:
-executing a branch is not testing it.
+  | case | approval dir | port invocation | `:627` arm |
+  |---|---|---|---|
+  | 1 (`:107`) | `APPR_P` fresh at `:110` | `:113` | **fires** |
+  | 2 (`:147`) | `APPR_CTRL` fresh at `:150` | none — oracle only | n/a |
+  | 3 (`:173`) | reuses CASE 1's artifacts | none — no `_run_approve` | n/a |
+  | 4 (`:184`) | `APPR_P` now exists | `:189` | dead |
+  | 5 (`:209`) | `APPR_SG_P` fresh at `:232` | `:237` | **fires** |
 
-**The generalisable error:** I named a hazard ("does the runner pre-create the dir?"), checked
-exactly that, and reported the check as settling the question. The hazard I did not name — the
-program under test creating its own state — was the one that decided it. Checking the hazard you
-thought of proves only that you thought of it.
+  So the PORT's `:627` arm fires exactly **twice**, at `:113` and `:237`.
+
+**"Nothing ASSERTS on it" was also too strong.** No case TARGETS the arm, but CASE 1 and CASE 5
+compare the written approval FILES, so a port that returned `None` where the oracle did not would
+surface as a missing-file divergence. The arm is therefore covered INDIRECTLY, by consequence,
+not by an assertion naming it. That is still why the `:845` cast stays graded UNFALSIFIED:
+executing a branch, or catching it only through a downstream effect, is not testing it.
+
+**The generalisable error — SUB-SHAPE (b) of the predicate lesson above, deliberately NOT filed
+as a third separate rule.** A near-duplicate lesson makes both unfindable, so the two live
+together:
+- **(a) the instrument is broken** — the predicate does not match what it claims to count
+  (`grep -cE 'case |CASES'` counting shell `case` statements, not test cases).
+- **(b) the instrument works and is aimed at the wrong target** — I named a hazard ("does the
+  RUNNER pre-create the dir?"), checked exactly that, correctly, and reported it as settling the
+  question. The hazard I had not named — the program under test creating its own state — decided
+  it. *Checking the hazard you thought of proves only that you thought of it.*
+
+Both fail the same way: a check that returns a clean result nobody re-examines. The tell for (a)
+is a number that does not move when it should; the tell for (b) is a check whose scope is
+narrower than the claim it is offered as settling.
 
 **A FALSE CLAIM ABOUT MY OWN PROCESS, corrected.** I told the user the `row`-indentation coverage
 question was "asked of the replacement BEFORE relying on it rather than after". The real ordering
