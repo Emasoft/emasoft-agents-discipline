@@ -39,7 +39,33 @@ declare -a FAILED=()
 # layer between here and the file has already turned an escape into a raw character once in this
 # project, and a fixture that silently loses its non-ASCII tests nothing while still passing.
 NON_ASCII="$(printf 'caf\xc3\xa9')"
+# AND ASSERTED TO BE NON-ASCII, because the per-case gates below CANNOT check this. They grep
+# the oracle's output for "$NON_ASCII" -- the same variable -- so if the printf ever yielded the
+# literal text backslash-x-c-3 instead of the byte, both runtimes would handle it as plain ASCII,
+# agree, and the gate would match the literal and pass. A whole file testing nothing, with three
+# green rows. That is a control validating itself, the exact shape this suite exists to distrust,
+# so the check is made against the BYTES and not against the variable's provenance.
+# MEASURED today: 5 bytes under both bash and zsh (c, a, f, and the two UTF-8 bytes of U+00E9).
+if ! printf '%s' "$NON_ASCII" | LC_ALL=C grep -q '[^ -~]'; then
+  echo "DIVERGE  fixture text is pure ASCII; every case below would be vacuous" >&2
+  exit 1
+fi
 
+# DIFFERENT ROOTS PER RUNTIME ARE SAFE HERE, and that needs saying because stale-diff.sh
+# documents the opposite for ITS cases: there, both runtimes must share one directory because
+# the approval token and the EVIDENCE line bind to the resolved path, so separate roots
+# manufacture a diff the port did not cause. Neither surface below has that binding. `--claim`
+# writes {scope, leaf, globs, pid} -- no path at all -- and `--status` never approves and never
+# writes EVIDENCE. The only path that reaches either transcript is the ledger's own, which the
+# scrub normalizes; MEASURED by reading a real DIVERGE line, where the warning appears as
+# `<ROOT>/.agents-discipline/s/gates/leaf.md`. Separate roots are in fact REQUIRED for case 1:
+# a lease records a pid, so replaying the same claim into one root would make the second
+# runtime collide with the first's live lease (lease-diff.sh's own note).
+#
+# The two substitutions are not equally load-bearing, and the honest split is: <ROOT> does the
+# work in case 2 and NOTHING in case 1 (that file's content carries no path); <PID> is the
+# reverse. Both are applied to both because a scrub that is inert is free, and one that is
+# missing where it was needed is a false divergence.
 _scrub() { sed -e "s|$1|<ROOT>|g" -e 's/"pid": [0-9]*/"pid": <PID>/'; }
 
 # --- CASE 1: the lease file's BYTES -------------------------------------------------------
@@ -79,15 +105,28 @@ fi
 # fixture had only the wrapping pair, produced NO warning from either runtime, and that empty
 # result was nearly recorded as agreement -- it was a fixture that reached nothing. Hence the
 # non-vacuity check below, which is not decoration.
-_expect_warning() {
+# STREAMS CAPTURED SEPARATELY, never merged with 2>&1. stale-diff.sh documents the loud half --
+# node and python interleave differently, so a merge diffs flush order rather than content. The
+# SILENT half is worse and is the reason this matters for a WARNING specifically: if the oracle
+# wrote it to stderr and the port to stdout, the merged text would be byte-identical and a real
+# stream-routing divergence (console.warn vs console.log vs print(file=sys.stderr) is exactly
+# the kind a port gets wrong) would pass unseen. The merge shipped here once already, three
+# commits after being repudiated elsewhere in this same suite.
+_expect_warning() {  # exe script root outvar errvar
   local exe="$1" script="$2" root="$3"
   mkdir -p "$root/.agents-discipline/s/gates"
   printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: true\n  EXPECT: /src/%s/out.txt/\n' \
     "$NON_ASCII" > "$root/.agents-discipline/s/gates/leaf.md"
-  "$exe" "$script" --root "$root" --scope s --status 2>&1 | _scrub "$root"
+  "$exe" "$script" --root "$root" --scope s --status > "$WORK/.o" 2> "$WORK/.e"
+  printf -v "$4" '%s' "$(_scrub "$root" < "$WORK/.o")"
+  printf -v "$5" '%s' "$(_scrub "$root" < "$WORK/.e")"
 }
-o_warn="$(_expect_warning "$NODE_ABS" "$ORACLE" "$WORK/wo")"
-p_warn="$(_expect_warning "$PY_ABS" "$PORT" "$WORK/wp")"
+_expect_warning "$NODE_ABS" "$ORACLE" "$WORK/wo" o_warn o_warn_err
+_expect_warning "$PY_ABS" "$PORT" "$WORK/wp" p_warn p_warn_err
+# The warning's STREAM is part of what is compared: concatenating with a marker keeps one
+# equality test while making a routing difference visible in the diff rather than cancelling out.
+o_warn="$(printf '%s\n--stderr--\n%s' "$o_warn" "$o_warn_err")"
+p_warn="$(printf '%s\n--stderr--\n%s' "$p_warn" "$p_warn_err")"
 if ! printf '%s' "$o_warn" | grep -q 'read as a regular expression'; then
   printf 'DIVERGE  %-38s oracle printed no pathLike warning; fixture reached nothing\n' \
     "EXPECT warning text"
