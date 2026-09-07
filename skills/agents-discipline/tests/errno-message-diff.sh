@@ -32,10 +32,18 @@
 #     ABSENCE. Run per site: each reddens exactly its own row(s) and nothing else.
 #   PASSING THE WRONG SYSCALL (node_fs_message(error, "stat")) also reddens it -- and THAT is the
 #     failure this sweep actually risks, a one-word difference inside an otherwise perfect
-#     message. The delete-mutation produces a maximally different string that any needle would
-#     notice, so it is consistent with a row that would MISS a wrong constant. Measured on
-#     gate_lint.py:248: both its rows go red, so the scrubs leave the syscall word intact and the
-#     comparison is byte-exact.
+#     message. Three clauses, because an earlier version of this note overstated the gap:
+#       (1) the comparison is `[ "$o" = "$p" ]` over full output, so ANY unscrubbed difference
+#           reddens the row -- a one-word change included;
+#       (2) the delete-mutation proves the output reaches that comparison at all;
+#       (3) the wrong-syscall mutation adds ONE thing: that no SCRUB erases the syscall token
+#           before the comparison sees it. That is the only way (1) could fail.
+#     So it is a test of the SCRUBS, run once per scrub rather than once per site:
+#         gate_lint.py:248 under _scrub       -> both its rows red
+#         gate_check.py:1357 under _scrub_tmp -> that row red
+#     The second is the one that mattered, _scrub_tmp rewriting the tail of the very path the
+#     syscall word introduces. THE PROPERTY A NEW SCRUB MUST PRESERVE, stated so it can be
+#     checked rather than inherited: no scrub's pattern may overlap the syscall token.
 #
 # DIVERGE LINES START AT COLUMN 0 (see gate-args-diff.sh's note); every other verdict word keeps
 # a 2-space indent so mutate-probe.sh's anchored `^DIVERGE` grep stays the only trigger.
@@ -104,6 +112,27 @@ _scrub_tmp() {
   _scrub "$1" | sed -e 's/\.[0-9][0-9]*\.[0-9a-f][0-9a-f]*\.tmp/.<TMP>/g'
 }
 
+# ROW 8's ALONE, for the same reason and a different name shape: a lock file is
+# `<24 hex>.filelock`, and the hex is a digest of the RESOLVED scope path -- so two per-runtime
+# roots give two different names, guaranteed, with no bearing on either implementation. Scoped
+# rather than folded into _scrub, per the finding that a scrub added for one row and applied to
+# all of them is how the /private rule came to hide a real divergence class.
+_scrub_lock() {
+  _scrub "$1" | sed -e 's|/[0-9a-f][0-9a-f]*\.filelock|/<LOCK>.filelock|g'
+}
+
+# ROW 9's ALONE, and it needs TWO substitutions the others do not. The approval directory cannot
+# live inside the root -- gate-check refuses that, measured -- so the two runtimes use sibling
+# dirs whose names differ, and the file inside is named by a digest that BINDS THE RESOLVED
+# LEDGER PATH, which differs for the same reason. Both are per-runtime by construction and say
+# nothing about either implementation. The `.lock` suffix is write_atomic's, handled here rather
+# than by chaining _scrub_tmp so this row's scrub reads as one thing.
+_scrub_approval() {
+  _scrub "$1" \
+    | sed -e 's|/appr-dir-[op]/|/<APPRDIR>/|g' \
+          -e 's|/[0-9a-f]\{64\}\.json|/<DIGEST>.json|g'
+}
+
 _row() {  # label  oracle-root  port-root  required-substring  [scrub-fn]
   local label="$1" o p needle="$4" scrub="${5:-_scrub}"
   # THE SCRUB NAME IS CHECKED BEFORE IT IS CALLED, because a misspelled one degrades into a
@@ -113,6 +142,12 @@ _row() {  # label  oracle-root  port-root  required-substring  [scrub-fn]
   # sending the reader to look at the FIXTURE when the fault is in the caller's fifth argument.
   # This parameter was added in the same commit that scoped the temp scrub; a new indirection is
   # exactly when to ask what its typo looks like.
+  # PER ROW, AFTER the fixtures, ON PURPOSE: this guards an AUTHORING error, hit on the first run
+  # after the typo at a cost of milliseconds. Hoisting it would mean restructuring the rows into
+  # a data table they are not. It also covers the DEFAULT path -- `${5:-_scrub}` substitutes the
+  # literal name, so a renamed _scrub is caught too, which is the likelier accident.
+  # WHAT IT CANNOT CATCH, and no cheap check can: passing _scrub where _scrub_tmp was meant, or
+  # the reverse. Both names resolve; the comparison silently changes. That is the live residual.
   # `declare -F`, not `command -v`: the question is "is this a shell FUNCTION", and command -v
   # would also accept an external program that happens to share the name -- which would then be
   # invoked with a root as argv and the stream on stdin, producing plausible garbage instead of
@@ -239,6 +274,65 @@ AGENTS_DISCIPLINE_APPROVAL_DIR="$WORK/approvals-p" \
   > /dev/null 2> "$WORK/.p"
 chmod 700 "$WORK/wr-o/.agents-discipline/s/gates" "$WORK/wr-p/.agents-discipline/s/gates"
 _row "gate-check unwritable ledger dir" "$WORK/wr-o" "$WORK/wr-p" "cannot update" _scrub_tmp
+
+# --- ROW 7: the status append, written BEFORE its site was touched ---------------------------
+# ROW FIRST, FIX SECOND, and the reason is evidential rather than stylistic: a row written before
+# the fix is verified against a defect that ACTUALLY EXISTS, so its red-then-green transition
+# proves it detects the real shape. A row written after the fix and then mutation-tested proves
+# only that it detects a shape I planted -- and this suite has already had one commit where the
+# planted shape was cruder than the real risk.
+# An unwritable scope directory is the vector: append_status opens the log for appending inside
+# it, so the open fails while every earlier step succeeds.
+for rt in o p; do
+  R="$WORK/log-$rt"; mkdir -p "$R/.agents-discipline/s"
+  chmod 500 "$R/.agents-discipline/s"
+done
+"$NODE_ABS" "$HERE/../scripts/gate-check.mjs" --root "$WORK/log-o" --scope s --log 'note' \
+  > /dev/null 2> "$WORK/.o"
+"$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/log-p" --scope s --log 'note' \
+  > /dev/null 2> "$WORK/.p"
+chmod 700 "$WORK/log-o/.agents-discipline/s" "$WORK/log-p/.agents-discipline/s"
+_row "gate-check unwritable status log" "$WORK/log-o" "$WORK/log-p" "cannot append status"
+
+# --- ROW 8: claim leases, also written before its site was touched ----------------------------
+# An unwritable LOCK directory: claim_leases writes a .lease file into it, so the open fails
+# after the ledger has been read and parsed. A different helper from every row above.
+for rt in o p; do
+  R="$WORK/lease-$rt"; mkdir -p "$R/.agents-discipline/s/gates" "$R/.agents-discipline/locks"
+  printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: echo ok\n  EXPECT: ok\n' \
+    > "$R/.agents-discipline/s/gates/leaf.md"
+  # `locks/`, NOT `<scope>/leases/`. The first draft guessed the latter, the claim SUCCEEDED,
+  # and the non-vacuity gate caught it -- "fixture reached nothing" on an empty oracle stderr,
+  # which is the gate doing its job on a row that would otherwise have compared two successes.
+  chmod 500 "$R/.agents-discipline/locks"
+done
+"$NODE_ABS" "$HERE/../scripts/gate-check.mjs" --root "$WORK/lease-o" --scope s --claim \
+  > /dev/null 2> "$WORK/.o"
+"$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/lease-p" --scope s --claim \
+  > /dev/null 2> "$WORK/.p"
+chmod 700 "$WORK/lease-o/.agents-discipline/locks" "$WORK/lease-p/.agents-discipline/locks"
+_row "gate-check unwritable lease dir" "$WORK/lease-o" "$WORK/lease-p" "cannot claim leases" \
+  _scrub_lock
+
+# --- ROW 9: recording an approval, the last pair of sites in this sweep ----------------------
+# An unwritable APPROVAL directory. Both approval sites (validate at :928, record at :987) catch
+# around helpers that open a file under it, so one fixture reaches the second and the first is
+# fixed as its structural twin.
+for rt in o p; do
+  R="$WORK/appr-$rt"; mkdir -p "$R/.agents-discipline/s/gates" "$WORK/appr-dir-$rt"
+  printf '# Gates\n\nOWNS: src/**\n\n- [ ] G1: x\n  CHECK: echo ok\n  EXPECT: ok\n' \
+    > "$R/.agents-discipline/s/gates/leaf.md"
+  chmod 500 "$WORK/appr-dir-$rt"
+done
+AGENTS_DISCIPLINE_APPROVAL_DIR="$WORK/appr-dir-o" \
+  "$NODE_ABS" "$HERE/../scripts/gate-check.mjs" --root "$WORK/appr-o" --scope s --approve \
+  > /dev/null 2> "$WORK/.o"
+AGENTS_DISCIPLINE_APPROVAL_DIR="$WORK/appr-dir-p" \
+  "$PY_ABS" "$HERE/../scripts/gate_check.py" --root "$WORK/appr-p" --scope s --approve \
+  > /dev/null 2> "$WORK/.p"
+chmod 700 "$WORK/appr-dir-o" "$WORK/appr-dir-p"
+_row "gate-check unwritable approval dir" "$WORK/appr-o" "$WORK/appr-p" \
+  "could not record approval" _scrub_approval
 
 echo
 if [ "$fail" = 0 ]; then

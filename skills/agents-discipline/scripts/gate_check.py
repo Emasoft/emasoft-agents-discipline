@@ -445,7 +445,18 @@ def main(argv):
             log("appended to " + path)
             sys.exit(0)
         except OSError as exc:
-            error("gate-check: cannot append status: " + str(exc))
+            # gate-check.mjs:211 interpolates `error.message`. THE SEVENTH SITE, and the first
+            # one whose ROW WAS WRITTEN FIRST: it went red on an unwritable scope directory
+            # before this line was touched, then green after. That ordering is worth keeping --
+            # a row verified against a defect that ACTUALLY EXISTS proves it detects the real
+            # shape, where a row written after the fix can only be mutation-tested against a
+            # shape I planted.
+            #     oracle  ... : EACCES: permission denied, open '<root>/.../status.log'
+            #     port    ... : [Errno 13] Permission denied: '<root>/.../status.log'
+            # `open` measured, not assumed: append_status opens the log to append, and that open
+            # is what fails when the directory is unwritable.
+            error("gate-check: cannot append status: "
+                  + (node_fs_message(exc, "open") if exc.errno is not None else str(exc)))
             sys.exit(2)
 
     if target.get("discoveryErrors") and action != "--release":
@@ -526,7 +537,14 @@ def main(argv):
                     + (("/" + opt["leaf"]) if opt.get("leaf") else ""))
                 sys.exit(0)
             except OSError as exc:
-                error("gate-check: cannot release leases: " + str(exc))
+                # gate-check.mjs:265. Fixed alongside the --claim site below on the structural
+                # identity the :472/:478 pair established: both wrap a lease helper whose failing
+                # syscall is the open of the same `<hex>.filelock`. Only --claim has a row (an
+                # unwritable locks/ directory); --release reaches its own line only when a lease
+                # already exists in a directory that has since become unwritable, which no static
+                # fixture builds. UNGUARDED and said so, rather than left to look covered.
+                error("gate-check: cannot release leases: "
+                      + (node_fs_message(exc, "open") if exc.errno is not None else str(exc)))
                 sys.exit(2)
 
         leaf = opt.get("leaf") or (stems[0] if len(stems) == 1 else None)
@@ -543,7 +561,14 @@ def main(argv):
             result = claim_leases(
                 root, {"scope": scope, "leaf": leaf, "globs": selected["doc"]["owns"]})
         except OSError as exc:
-            error("gate-check: cannot claim leases: " + str(exc))
+            # gate-check.mjs:278. THE EIGHTH SITE, row written first and red before this line
+            # was touched:
+            #     oracle  ... : EACCES: permission denied, open '<root>/.../<hex>.filelock'
+            #     port    ... : [Errno 13] Permission denied: '<root>/.../<hex>.filelock'
+            # The row needed its own scrub: a lock name is a digest of the RESOLVED scope path,
+            # so two per-runtime roots produce two different names by construction.
+            error("gate-check: cannot claim leases: "
+                  + (node_fs_message(exc, "open") if exc.errno is not None else str(exc)))
             sys.exit(2)
         if not result.get("ok"):
             if result.get("error"):
@@ -903,8 +928,16 @@ def main(argv):
         try:
             approved = approval_exists(task["file"], task["gate"])
         except Exception as exc:  # noqa: BLE001 -- mirrors the oracle's catch-everything here
+            # gate-check.mjs:748, the twin of the record site below -- both catch around a helper
+            # that opens a file under the approval directory. Row 9 reaches the RECORD site; this
+            # one needs approval_exists to fail while the record path is never entered, which no
+            # static fixture builds. UNGUARDED, and fixed as a structural twin rather than an
+            # analogy: same directory, same open, same errno surface.
+            # `Exception`, not OSError, so getattr -- the oracle's catch is equally wide.
             error("gate-check: could not validate approval for "
-                  + qualify(task["file"], task["gate"]["id"]) + ": " + str(exc))
+                  + qualify(task["file"], task["gate"]["id"]) + ": "
+                  + (node_fs_message(exc, "open")
+                     if getattr(exc, "errno", None) is not None else str(exc)))
             approval_infrastructure_failures += 1
             not_run.append(task)
             continue
@@ -960,8 +993,17 @@ def main(argv):
                     task["file"], task["gate"],
                     typing.cast(dict, validated_approval_dir())["path"]))
             except Exception as exc:  # noqa: BLE001
+                # gate-check.mjs:764. THE NINTH SITE and the last of this sweep, row written
+                # first and red before this line was touched:
+                #     oracle  ... : EACCES: permission denied, open '<dir>/<digest>.json.lock'
+                #     port    ... : [Errno 13] Permission denied: '<dir>/<digest>.json.lock'
+                # The row needs two scrubs of its own: the approval dir cannot live inside the
+                # root (gate-check refuses that), so the runtimes use sibling dirs, and the file
+                # is named by a digest that BINDS the resolved ledger path.
                 error("gate-check: could not record approval for "
-                      + qualify(task["file"], task["gate"]["id"]) + ": " + str(exc))
+                      + qualify(task["file"], task["gate"]["id"]) + ": "
+                      + (node_fs_message(exc, "open")
+                         if getattr(exc, "errno", None) is not None else str(exc)))
                 approval_infrastructure_failures += 1
                 not_run.append(task)
                 continue
@@ -1354,12 +1396,12 @@ def main(argv):
             # not "open for every write failure" -- the same distinction that went wrong when
             # gate_lint's argument was reused at read_state.
             #
-            # AND THAT PRE-FLIGHT IS GATE-CHECK'S, NOT write_atomic's. The ELOOP probe behind
-            # this note showed only that GATE-CHECK never reaches the write with a looped target;
-            # write_atomic's own behaviour there is untested, and its other callers -- dispatch's
-            # state write, the lease writer, append_status -- do not sit behind that pre-flight.
-            # A loop at the target would not affect the temp open at all (that path does not
-            # exist yet); it would surface at the rename, which is the step nothing measures.
+            # ELOOP cannot reach node_fs_message from ANY caller: write_atomic, called directly
+            # on a symlink-loop target, answers `refusing to replace symlink <path>` in both
+            # runtimes -- an authored error with no errno, so it takes the str() branch.
+            # Three earlier versions of this note scoped that at one CALLER or another and each
+            # added a fresh unmeasured mechanism claim while fixing the previous one's scope. One
+            # measurement of the CALLEE answers every caller and was available throughout.
             #     oracle  ... : EACCES: permission denied, open '<file>.<pid>.<hex>.tmp'
             #     port    ... : [Errno 13] Permission denied: '<file>.<pid>.<hex>.tmp'
             # THE PATH IS THE TEMP FILE, NOT `result["file"]`, and that is the durable finding: a
