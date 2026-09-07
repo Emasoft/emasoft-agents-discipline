@@ -285,9 +285,13 @@ else:
                 # whether the cleanup below is sound: getpgid(-1) raises ProcessLookupError,
                 # meaning the group is ALREADY GONE. The case this clause is named for is EPERM
                 # from killpg -- the group is ALIVE and unkillable. Both are OSError so this
-                # clause catches them alike, but under EPERM the `finally` re-attempts the same
-                # killpg (raises again, swallowed) and then waits on a child nothing signalled,
-                # costing the bounded 10s and leaving a live supervisor. Control flow verified;
+                # clause catches them alike, but the states differ where cleanup depends on them.
+                # TRACED FROM THE CODE, NOT RUN (said plainly, because reasoning presented as
+                # observation is this file's recurring defect): under EPERM the `finally`
+                # re-attempts the same killpg, which raises EPERM again and is swallowed by its
+                # `except OSError: pass`; proc.wait(timeout=10) then waits on the SUPERVISOR
+                # itself, which will not exit while its CHECK sleeps, so the bounded 10s elapses
+                # and a live supervisor is left behind. Control flow verified by injection;
                 # cleanup under a live-but-unkillable group is NOT.
                 kill_infra_error = f"{type(exc).__name__}: {exc}"
                 break

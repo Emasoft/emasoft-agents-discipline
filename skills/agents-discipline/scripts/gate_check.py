@@ -1053,6 +1053,15 @@ def main(argv):
         def capture(stream_name, handle):
             # gate-check.mjs:662-671 (`capture`). Enforces MAX_OUTPUT_BYTES as data arrives,
             # not after the process exits -- a runaway CHECK is cut off mid-stream.
+            #
+            # WHAT THIS READS FROM, because the distinction decides the read/read1 argument
+            # below and an earlier version of that comment got it one layer wrong: `handle` is
+            # the SUPERVISOR's pipe, not the CHECK's. lib/check_supervisor.py sits between,
+            # doing its own read1/write/flush, so the chunk sizes arriving here are shaped by
+            # the SUPERVISOR's write sizes -- not by how the CHECK writes. Measured on ~469 KB:
+            # 8 appends, i.e. 7 full 65536 reads plus a 10142 remainder, so the buffer does fill
+            # on this path (an average of ~58 KB across the 8 is just what 7-full-plus-1-short
+            # arithmetic gives, not evidence of a smaller quantum).
             while True:
                 try:
                     # read(), not read1(), and that is DELIBERATE after being wrong about it.

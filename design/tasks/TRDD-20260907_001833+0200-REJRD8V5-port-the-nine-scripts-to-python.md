@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T06:29:04+0200
+updated: 2026-09-07T06:56:58+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -65,6 +65,33 @@ varies. Any divergence is a porting defect, never a re-specified test. `AD_RUNTI
 switches `dispatch-tests.mjs`, `lint-tests.mjs` and `ledger-tests.mjs` to the port. Paired
 drivers (`X-drive.mjs` / `X_drive.py`) dump every observable effect as JSON; the diff is the
 test.
+
+**CAPTURE IS COMPLETE, NOT MERELY MUTUALLY CONSISTENT — and one claim beside it was too broad
+(2026-09-07).** `seq 1 80000` piped to `wc -c` gives **468894**, matching both the independent
+arithmetic (`sum(len(str(i))+1 for i in 1..80000)`) and the `bytes=` both runtimes report. Three
+sources, so the fingerprint agreement is not a shared-upstream-loss artefact: a differential alone
+could only show the two captures AGREE, and the absolute reference is what makes it completeness.
+`stderr` is empty here, so the port's `stdout + sep + stderr` join contributes no separator and
+`output` is the raw stream — the arithmetic models what is actually measured.
+**SCOPE, named rather than left implicit: complete FOR ASCII OUTPUT BELOW THE CAP.** `bytes=`
+comes from `output_fingerprint` over the DECODED str, so it coincides with the raw byte count
+only because `seq`'s output is pure ASCII; a non-ASCII fixture could make both runtimes report a
+`bytes=` that agrees with each other and not with the raw stream, and this arithmetic would then
+be measuring the wrong quantity while still matching. `normalizedOverflow` never fires at 469 KB
+(under the 1 MiB cap), so no normalization is in play either.
+
+The discriminating control, and its arithmetic checks out: dropping one byte per chunk moves the
+port to `bytes=468886`. 468894 / 65536 = 7 full chunks + 10142, i.e. **8 chunks**, so 8 bytes lost
+— exactly the observed delta, and consistent with `read(65536)` rather than evidence of some other
+chunk size.
+
+**TOO BROAD, corrected:** I wrote that this shows "the VERDICT is blind to a capture defect of
+this size, and only the fingerprint catches it". The mutated port did still report
+`EXPECT=matched`, but that follows from WHERE the dropped bytes fell, not from their COUNT — the
+verdict tests whether the EXPECT substring is present, so it is blind to any capture defect that
+does not intersect that substring, and would notice a much smaller one that did. Generalising from
+a single fixture whose EXPECT happened to survive is the same shape as the other over-broad claims
+in this file.
 
 **CHECK EXECUTION — THE FAILURE PATHS, MEASURED (2026-09-07, after `9bec74a`).** That commit's
 verification line led with the 8 differentials, which is the WEAKEST evidence for it: only
