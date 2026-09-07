@@ -335,18 +335,25 @@ def as_directory(path, label):
         # and the oracle's statSync catch names `stat` too. Row 10 of errno-message-diff.sh was
         # added BEFORE the change, for a site with no defect, purely to guard the edit.
         #
-        # THE `errno is not None` GUARD IS NOT DECORATION HERE, and the first version of this
-        # refactor dropped it because the hand-rolled code carried its own UNKNOWN fallback.
-        # MEASURED, old expression against the helper on the same exception:
-        #     errno=None       old `UNKNOWN: , stat '/p'`
-        #                      new `[Errno None] None: '/p': [Errno None] None: '/p', stat '/p'`
-        #     unknown errno    old `UNKNOWN: weird failure, stat '/p'`
-        #                      new `Weird Failure: unknown error: 99999, stat '/p'`
-        # Row 10 exercises EACCES, where the two agree exactly, so it stayed green through a
-        # change that was NOT the pure refactor its commit called it. Neither case is reachable
-        # -- os.stat always sets an errno -- but replacing a sane fallback with garbage on the
-        # argument that nothing reaches it is how the next defect gets in, and the guard makes
-        # this site's shape identical to every other one in the sweep.
+        # THE `errno is not None` BRANCH IS DEAD HERE, and the guard is for UNIFORMITY, not
+        # fidelity -- a distinction worth drawing because at every OTHER site in this sweep the
+        # fallback is genuinely correct. There, an errno-less error is one the port AUTHORED
+        # (`OSError("<label> must be one unchanged regular single-link file: <path>")`) and str()
+        # round-trips exactly the text the oracle throws. Here the try wraps a bare os.stat: no
+        # authored error is raised inside it, os.stat always sets an errno, and node's statSync
+        # always carries a code. So no oracle behaviour exists for this branch to match, the old
+        # `UNKNOWN: , stat '<path>'` was an invention too, and the only real criterion left is
+        # that a reader should not have to wonder why this site's shape differs from the nine
+        # others.
+        # WHAT IT IS NOT is a reason to drop the guard, which the first version of this refactor
+        # did on the argument that the helper does the same job. MEASURED on the port's real
+        # authored shape (one arg, no filename -- an earlier transcript set .filename by hand and
+        # published a string the port cannot produce):
+        #     str(exc)  gate ledger must be one unchanged regular single-link file: /p
+        #     helper    gate ledger must be ...: /p: gate ledger must be ...: /p, stat
+        # The helper doubles the message and appends a bare `, stat` with no path. Row 10
+        # exercises EACCES, where helper and hand-rolled agree exactly, so it stayed green
+        # through a change that was not the pure refactor its commit called it.
         fail_usage("cannot inspect " + label + " " + path + ": "
                    + (node_fs_message(exc, "stat") if exc.errno is not None else str(exc)))
     if not _stat.S_ISDIR(stat_result.st_mode):

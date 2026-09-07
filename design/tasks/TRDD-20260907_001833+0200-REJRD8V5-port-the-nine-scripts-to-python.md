@@ -71,11 +71,18 @@ grep -nE 'except .* as [a-z_]+:' <file>          # 1. the binders
 grep -nE '\b(exc|error|err)\b' <file> | grep -vE '^\s*[0-9]+:\s*#'   # 2. every use, comments out
 ```
 
-Step 2 must NOT filter `error\(`. The port's own logging function is named `error`, so a filter
-on it drops exactly the lines that EMIT these messages — `error("...: " + str(exc))` — which is
-most of the sites in every module. That filter was in the `gate_check.py` pass and hid nothing
-only because an unfiltered grep had been read first in the same turn. The spelling grep's
-blindness was found by widening; the shape grep's own filter would have reintroduced it.
+**Step 2's output is meant to be READ, not filtered**, and that sentence is the whole method. The
+`gate_check.py` pass filtered it twice instead — once on `error\(` (which drops the lines that
+EMIT these messages, since the port's logging function is named `error`) and once on a widened
+spelling pattern (`str(|strerror|repr(|{exc|format(`). The second is the spelling grep again
+wearing the shape grep's name: it still misses `exc.args[0]`, `_fmt(exc)`, `"%s"%exc`, and any
+binder named something else. Only after reading all 71 lines by hand was "no site was missed"
+actually established for that module.
+
+Volumes measured, so the reading step is known to be affordable: gate_check.py 71 lines,
+gates.py 69, dispatch.py 18, process_tree.py 17, check_supervisor.py 3. If a file ever is too
+long, **narrow by BINDER NAME** (`\bexc\b` alone) — never by message spelling. Narrowing by
+binder keeps the method's guarantee; narrowing by spelling discards it.
 
 Then each site needs its errno checked: the `node_fs_message(...) if errno is not None else
 str(...)` guard degrades correctly by construction, but applying it blindly would claim
@@ -83,8 +90,15 @@ node-shaped fidelity for messages node never produced. `gate_check.py:1063` carr
 example — the oracle wraps `new Worker(...)` (V8, no errno) where the port wraps
 `subprocess.Popen` (ENOENT/EACCES), so the two diverge by construction and neither spelling
 fixes it. **And never drop the `errno is not None` guard even where the old code carried its own
-fallback**: measured, the helper on an errno-less OSError returns
-`[Errno None] None: '/p': [Errno None] None: '/p', stat '/p'`, not a sane sentinel.
+fallback**: measured on the port's real authored shape, the helper doubles the message and
+appends a bare `, stat` with no path, where `str()` round-trips the text the oracle throws.
+
+**`gate_check.py` is DONE** — 10 sites guarded, 10 rows, every row proven per-site, the
+enumeration closed by reading. Order for what remains: **`dispatch.py`** (7 uses, `read_state`
+done) is the right next module — same helper, rows slot into `errno-message-diff.sh` unchanged.
+Expect **`gates.py`** to be the hard one and leave it for last: it does its own
+`stat`/`lstat`/`realpath`, so it likely carries non-`open` syscalls, and it is the module where
+a wrong constant is least likely to be caught by a row.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
 
