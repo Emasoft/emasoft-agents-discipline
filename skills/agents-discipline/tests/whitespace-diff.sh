@@ -384,6 +384,41 @@ _write_ledger_head() {
   } > "$dest"
 }
 
+# The `is_strong_evidence` surface: whitespace INSIDE a code span. A different position from every
+# writer above, and the span content is chosen rather than arbitrary.
+#
+# THE SPAN IS A RUNNER WORD (`pytest`), and that is what makes the row testable instead of merely
+# tidy. With a runner word the UNPADDED ledger is COMPLETE -- the span matches RUNNER_WORDS -- so
+# the `X` pad breaks the word and MOVES the oracle, which is exactly what `_control` asserts with
+# NON_WS_PAD. Split the span as `a<pad>b` instead and the unpadded case is ALREADY not-strong, `X`
+# changes nothing, the control cannot arm, and six vacuous OKs sit behind a green control. That is
+# the defect this file has shipped twice; the fixture shape is the fix.
+#
+# It also decides the POLARITY. Measured at both shapes: with `a<pad>b` the oracle moves for
+# U+FEFF and NOT for the other five -- inverted from CASE_ORACLE_EFFECT, so the shared array would
+# assert backwards on every row. With the runner word the shared array applies unchanged.
+#
+# INTERIOR ONLY, and that is a real coverage limit rather than an oversight. U+FEFF is in the JS
+# trim set, so `.trim()`/`.strip(JS_TRIM)` removes it at the span edges and it can ONLY diverge
+# from inside; the other five survive at every position. Interior is therefore the one shape all
+# six share, and the only one a single writer can cover.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
+_write_ledger_span() {
+  local dest="$1" ws="$2" pad
+  pad="$(printf '%b' "$ws")"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n\n'
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '\n## Evidence\n\n'
+    # shellcheck disable=SC2016  # the backticks are LITERAL -- a markdown code span is the whole
+    # point of this fixture, and single quotes are what keep the shell from substituting them.
+    printf '**Unit 1 —** ran `pyt%sest` by hand\n' "$pad"
+  } > "$dest"
+}
+
 # Runs one runtime against its OWN COPY. Separate copies are load-bearing, not hygiene: the
 # checker APPENDS a receipt to the ledger it reads, so a shared file would hand the second
 # runtime a document the first had already modified, and the comparison would be of two
@@ -802,13 +837,35 @@ for i in "${!CASE_NAME[@]}"; do
         "${CASE_ORACLE_EFFECT[$i]}" '-> ledger complete'
 done
 
+# `[^e][^e]*` between `pyt` and `est`, so the anchor holds only when a NON-`e` byte landed INSIDE
+# the word -- the position this writer exists to exercise. The mandatory first class is written
+# out rather than folded into the `*`, because `[^e]*est` alone matches the UNPADDED `pytest` and
+# the anchor would then accept a pad that never arrived.
+#   `pytXest` -> MATCH (intended)        `pytest`  -> reject (pad dropped)
+#   `Xpytest` -> reject (pad before the word; `.pyt` then faces `Xpy`)
+# A pad moved off the line entirely never reaches the anchor: `_control` compares verdicts first,
+# finds the padded one unchanged, and fires "pad had no effect" instead.
+_control _write_ledger_span "control: strong-span writer" '\*\*Unit 1 .*ran .pyt[^e][^e]*est. by hand$'
+
+# THE MARKER IS INVERTED HERE RELATIVE TO EVERY WRITER ABOVE, AND IT IS A RULE, NOT A STRING:
+# the marker is always the verdict the `differ` rows move TO. The writers above start INCOMPLETE
+# and a breaking pad makes them complete, so their marker is `-> ledger complete`. This writer
+# starts COMPLETE (the unpadded span is the runner word `pytest`) and a Python-only whitespace pad
+# makes it incomplete -- so its marker is `-> ledger INCOMPLETE.`. Copying `-> ledger complete`
+# down from the loop above would invert both assertions; it happens to fail loudly in both
+# directions here, but that is luck, so write the rule down rather than trusting the accident.
+for i in "${!CASE_NAME[@]}"; do
+  _case "strong-span ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_span \
+        "${CASE_ORACLE_EFFECT[$i]}" '-> ledger INCOMPLETE.'
+done
+
 echo
 if [ "$fail" = 0 ]; then
   # "check(s) passed", not "trim vector(s) identical": `$pass` has always also counted the
   # controls, and a control does not assert identity -- it asserts a count, and now also that the
   # padded verdict DIFFERS from the unpadded one. A summary line that calls every check an
   # identity is the kind of over-claim this suite exists to catch.
-  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + rules-heading + heading-finder surfaces) ---"
+  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + rules-heading + heading-finder + strong-span surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"

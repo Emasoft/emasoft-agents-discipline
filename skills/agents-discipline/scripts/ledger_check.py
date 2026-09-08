@@ -341,7 +341,31 @@ def is_strong_evidence(l):
     "`done`" do not pass."""
     for s in CODE_SPAN.findall(l):
         inner = s[1:-1].strip(JS_TRIM)
-        if re.search(r"\s", inner) or re.search(r"[/.]", inner):
+        # `\s` -> JS_WS_CLASS. The two divergence directions do NOT have the same reach, and the
+        # first draft of this comment claimed they did -- MEASURED after a review caught it:
+        #   U+FEFF IS in the JS trim set, so the `strip(JS_TRIM)` above removes it at the EDGES.
+        #     It reaches this test only from INSIDE the span: `pyt<U+FEFF>est` bears whitespace
+        #     to node and is a runner-word miss to the port.
+        #   U+001C..U+001F and U+0085 are NOT in that set, so they survive at EVERY position --
+        #     leading, trailing, and as the whole span (`pytest<U+0085>`.strip(JS_TRIM) is still
+        #     7 characters). Each is whitespace to Python and an ordinary character to node.
+        # So "the strip leaves only interior pads" is true of ONE code point and false of five.
+        # Both directions reach the VERDICT, not merely the predicate: `evidence: present` vs
+        # `MISSING`, hence `-> ledger complete` against `-> ledger INCOMPLETE.` on the same bytes.
+        #
+        # GATED AT THE INTERIOR POSITION ONLY -- that is the one shape where all six code points
+        # diverge, so it is the only shape a single writer can cover. The edge positions are fixed
+        # by this same expression and are NOT separately gated; a future writer that pads the span
+        # edge would gate them, and would red for the five and pass for U+FEFF.
+        #
+        # `[/.]` NEEDS NO CONVERSION -- two literal ASCII characters, no shorthand class.
+        #
+        # The sibling `\s` in `acceptance_command` is deliberately NOT fixed with it. A command
+        # returned from there is what makes the re-run EXECUTE it, and the differential ships only
+        # non-runnable acceptances by design -- so no row in that suite can gate that site, and a
+        # fix landing there would ship ungated. It is the more consequential of the two (it decides
+        # whether a command RUNS), so it gets its own harness rather than a ride. TRDD-REJRD8V5.
+        if re.search(JS_WS_CLASS, inner) or re.search(r"[/.]", inner):
             return True
         # A runner word counts only when it IS the span -- `pytest`, `make`. The scan this
         # replaced read the whole LINE and split on non-alphanumerics, so "I will go to the
