@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T11:04:12+0200
+updated: 2026-09-08T11:22:47+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -888,6 +888,20 @@ copy: `tests/fixtures/unit-header-fold.md` + its ledger-tests case. Owed for eve
 landed here and closes 3 of the 6. Red/green: reverting only `JS_WS_CLASS`→`\s` reds exactly the
 6 new rows, 36 pre-existing green, control passes, U+FEFF opposite to the other five. `npm test`
 0, `test:diff` 0 across all 14.
+**TWO INSTRUMENT DEFECTS FOUND WHILE VERIFYING THIS, both mine, both the same shape — an
+instrument blind to the signal it was pointed at.** (1) My regression failure-scan grepped
+`FAIL|not ok|Traceback`. **These suites print `DIVERGE`.** Re-run unanchored it finds one hit:
+`DIVERGE unicode property escape` in `regex-worker-diff.sh`, which that suite itself reports as
+`1 KNOWN PORT DIVERGENCES, UNRESOLVED (see TRDD) — set unchanged, no regression`, exit 0. The
+conclusion held, but the scan that "confirmed" it could not have seen a real failure. **Scan for
+`DIVERGE|DIVERGENCE`, UNANCHORED** — these suites indent status rows two spaces, so `^FAIL`
+cannot match them either. (2) I compared mypy against HEAD via `git stash push -- <one file>` on
+a CLEAN tree: nothing was stashed, so the "baseline" run re-measured the SAME working copy and
+`diff` said IDENTICAL trivially. The paired `stash pop` then popped a PRE-EXISTING 2026-09-06
+auto-backup and left three files `UU` (recovered: stash intact, copies in
+`scripts_dev/stash-pop-conflict-20260908/`, `git checkout HEAD --` on the three).
+**Correct method:** `git show <pre-change-rev>:<path> > <SAME dir>/_tmp.py`, mypy both, strip
+`path:LINE:`, sort, `diff`. Result: **8 messages, identical sets** — this change adds none.
 
 **⚠ THE `/m` HALF OF `CREATED` IS STILL OPEN, AND IT IS A NAMED ITEM, NOT "OWED".** JS `/m` makes
 `^` match after ANY LineTerminator (LF, CR, U+2028, U+2029); Python's `re.M` recognizes LF alone,
@@ -943,6 +957,13 @@ pressure reads the number and skips the caveat, which is this stretch's own fail
   acceptance-command path. **These are invisible to any `re.compile`-shaped search** and were
   missed by the first enumeration. That note is the only part of this list a grep cannot
   regenerate; everything else above is `grep -an '\\s' scripts/ledger_check.py` away.
+- **NINTH SITE, ADDED 2026-09-08 — `CREATED`'s `/m` LineTerminator half.** NOT a bare-`\s` site,
+  which is exactly why it must be listed here: the sweep counts eight, site 2 is ticked, and
+  without this entry the sweep reaches "complete" with `CREATED` still divergent on `\r`,
+  U+2028 and U+2029. **The comment at `CREATED` will then read as satisfied history rather than
+  open work.** Fix and gate are specified in the SITE 2 entry above. **The fix's source text
+  exists in NO commit** — it was backed out before `b876c49` — so it must be re-typed from the
+  four LineTerminators named there, not recovered by `git log -S`.
 
 **CORRECTION — I ranked the receipt defect above `:144`, and that was wrong.** The commit report
 called the receipt rewrite "the more serious find". It is the more INSIDIOUS one (it mutates the
