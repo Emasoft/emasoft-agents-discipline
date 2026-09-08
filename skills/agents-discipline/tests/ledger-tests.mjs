@@ -224,7 +224,7 @@ const cases = [
     // fold skips the whole section, so it reports `evidence: MISSING`, cites nothing, and lands
     // row 1 in UNBACKED. `re.I | re.A` at the match closes it.
     //
-    // The weak `**Unit 1 <em dash>** see the section below` line sits OUTSIDE the section so the only
+    // The weak `**Unit 1 <U+2014>** see the section below` line sits OUTSIDE the section so the only
     // strong evidence, and the only citation, is behind the folded heading: both the exit and
     // the `evidence:` line then discriminate, instead of the substring alone.
     //
@@ -243,6 +243,37 @@ const cases = [
     artifacts: ["reports/unit-1-output.txt"],
     expect: ["evidence:    present", "artifacts:   1 cited, all present", "ledger complete"],
     reject: ["evidence:    MISSING", "UNBACKED verified rows"],
+  },
+  {
+    // Guards `EXIT_CODE`'s `re.A` (TRDD-REJRD8V5 item 5). The fold fix at ledger_check.py:149
+    // landed without a vector: MEASURED on the tree before this case, dropping that flag left
+    // the port suite 147 green and the whitespace suite 70 green. Bare `re.I` folds U+0131 onto
+    // `i`, so `ex<U+0131>t 0` satisfies `exit\s+\d+` in the port and not in node, and the port
+    // scores strong a line the oracle calls MISSING. The line carries NO backticks, NO dot and
+    // NO runner word (the exit-code writer's invariant in whitespace-diff.sh), so `EXIT_CODE`
+    // is the sole route to strong evidence and the fold is the only thing this case can see.
+    //
+    // THE GATE IS THE `evidence:` SUBSTRING; the exit corroborates it. On the skip path evidence
+    // is the only thing that can fail, so exit and `evidence:` are one fact read twice -- not
+    // the two independent axes of the rules-heading case above (where a citation moved the
+    // exit on its own). NO `rerun: true`: measured on this fixture, that path exits 1 / 1 / 1
+    // with UNBACKED in every state, so the exit would be silent there and only `evidence:`
+    // would differ.
+    //
+    // U+0131 for the reason the unit-header case gives: stable under all four normalization
+    // forms, and its plausible corruption to ASCII `i` makes the line strong in BOTH runtimes
+    // (both exit 0, both `present`), so this case reds loudly instead of disarming. One vector,
+    // U+0131; not U+0130, which decomposes under NFD (see the unit-header case). The port
+    // comment's `EX<U+0130>T 0` probe is what bare `re.I` did, not the gated set. The guard at
+    // the bottom of this file pins the code point in the line.
+    //
+    // MEASURED oracle / port / port with `re.A` removed at EXIT_CODE: exit 1 / 1 / 0,
+    // `evidence:` MISSING / MISSING / present.
+    name: "an exit code spelled with U+0131 is not an exit code, in either runtime",
+    file: "tests/fixtures/exit-code-fold.md",
+    want: 1,
+    expect: ["evidence:    MISSING"],
+    reject: ["evidence:    present", "ledger complete"],
   },
   {
     // Every one of these exits 0 UNCONDITIONALLY, which is the actual bar. #4 is the one
@@ -831,6 +862,12 @@ const rulesFoldFixture = readFileSync(resolve(root, "tests/fixtures/rules-headin
 report(
   rulesFoldFixture.includes("## Rule" + String.fromCharCode(0x17f) + " of this ledger"),
   "fold fixture: U+017F rules-heading vector intact (not normalized, deleted, or substituted)"
+);
+// And for the exit-code fold vector: pins the whole token, digit included, spelled as an escape.
+const exitFoldFixture = readFileSync(resolve(root, "tests/fixtures/exit-code-fold.md"), "utf8");
+report(
+  exitFoldFixture.includes("ex" + String.fromCharCode(0x131) + "t 0"),
+  "fold fixture: U+0131 exit-code vector intact (not normalized, deleted, or substituted)"
 );
 
 // ARMING CHECK for the three ALWAYS_TRUE pad vectors, load-bearing for the same reason as the

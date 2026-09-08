@@ -146,6 +146,10 @@ MEASURED_RESULT = re.compile(
 # Order per :101-127: BODY first, FLAGS second. `re.A` is safe here by the precondition stated
 # at :117-124 -- every case-bearing element is ASCII (`exit`), so the ASCII-folding restriction
 # `re.A` adds has no non-ASCII literal to act on.
+# GATED: the fold half by `tests/fixtures/exit-code-fold.md` and its ledger-tests case (one
+# vector, U+0131 -- the probe list above is what bare `re.I` did, not the gated set); the
+# whitespace half by whitespace-diff.sh's `exit-code` surface. Before that fixture, dropping
+# `re.A` here reddened nothing (measured, 147 + 70 green).
 EXIT_CODE = re.compile(r"exit" + JS_WS_CLASS + r"+[0-9]+", re.I | re.A)
 # NO WHITESPACE in the span: `node test/run-tests.mjs` is a COMMAND that happens to name a
 # path, and demanding that string exist as a file is nonsense. Only a bare path is a citation.
