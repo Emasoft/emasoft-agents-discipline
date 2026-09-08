@@ -3,10 +3,11 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T12:40:35+0200
+updated: 2026-09-08T13:40:49+0200
 current-owner: main
 task-type: refactor
 scope: project
+implementation-commits: [a118202]
 ---
 
 # Port all nine scripts to Python
@@ -1250,7 +1251,29 @@ the observation alone.
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
 positions are fixed but ungated. Do not read the site count as coverage.
 
-1. **no-op detector — the `ALWAYS_TRUE` pattern (`ledger_check.py:616`, oracle
+1. **✅ DONE — `a118202` (2026-09-08).** All three `\s` → `JS_WS_CLASS` in ONE commit, with
+   `tests/fixtures/noop-pad-divergence.md` and its `ledger-tests.mjs` case. Evidence is TWO kinds
+   proving DIFFERENT things: set equality (`_JS_TRIM_CODEPOINTS` == node's `\s` == node's trim set,
+   25 code points, compared elementwise) and per-occurrence attribution (three mutations, each
+   reverting one occurrence, each reddening only its own vector, against a baseline asserted to
+   discriminate BEFORE any mutation). Red-then-green: py 134/4 → 138/0, node 138/0 throughout.
+   The mutation vectors are U+001C only — one of the five Python-only code points, and nothing
+   exercises the U+FEFF direction; set equality covers those, the mutations do not.
+   **Two corrections to that commit, recorded here because a commit message is permanent:**
+   — Its gate line reads "npm test exit 0 on node **and python**". That run's output carries NO
+     runtime labels, so the line asserts an attribution it never printed. The claim is TRUE, and
+     what establishes it is the red-then-green asymmetry plus the three attributions — **not** the
+     gate line. Do not cite the gate line as evidence the port was covered.
+   — The fixture's `&& echo x` suffix is LOAD-BEARING and unreachable at runtime: it exists so
+     `acceptance_command`'s own still-unconverted `\s` matches in BOTH runtimes. Item 7 removes
+     the need for it; deleting it before then silently stops the case discriminating.
+   **`re.I`/U+017F at this SAME site is still open — that is item 4, not part of this.** The class
+   itself is fold-inert (25 in, 25 out; control `[sk]` widens by 004B 0053 017F 212A).
+   **`implementation-commits:` starts at `a118202`** — the earlier commits that landed this TRDD
+   are named in the prose above and were never collected into the field.
+   The original entry follows, kept as the record of what the site was.
+
+   **no-op detector — the `ALWAYS_TRUE` pattern (`ledger_check.py:616`, oracle
    `ledger-check.mjs:382`)** — **×3 `\s`, NOT ×2.** This entry said two and named
    `(?:\s+[^&|;]*)?` and `command\s+true`. It MISSED **`exit\s+0`**. Counted on the pattern line:
    three. The two runtimes are byte-parallel here apart from `$` vs `\Z` (deliberate, documented
@@ -1292,6 +1315,32 @@ positions are fixed but ungated. Do not read the site count as coverage.
    larger n and a second budget value before it is called a defect or dismissed. I first filed it
    as a dead end on the strength of the 3 agreements; see the DEAD END paragraph below for why
    that was the wrong read of a one-directional sample.
+9. **`JS_TRIM` coupling note — NEXT, before item 2, as its own two-line commit.** `JS_WS_CLASS` is
+   built ~500 lines away from every use of it, so an edit to `_JS_TRIM_CODEPOINTS` silently widens
+   every converted regex. The note goes at the DEFINITION. Do NOT defer it to item 6 — item 6 is
+   last, so the note would arrive after the window it covers and for the reader least likely to
+   need it.
+10. **`test-matrix.yml` may enumerate the differential suites BY NAME.** The glob matches 14 files;
+    if CI lists fewer, the extras have never run in CI. One grep of the workflow answers it.
+11. **Two suite failures that were never classified.** A killed fork attributed four of six to its
+    own cwd bug and never classified the remaining two. Nothing has re-run them.
+12. **`hardening-tests.mjs:1336` fails intermittently. OBSERVATION ONLY — cause NOT known, and it
+    is NOT mine.** Failed once at `:1357` `waitForPath(pipe-holder.pid)`, budget 5000 ms. The
+    `elapsed < 7000` bound PASSED, as did `result.code === 1` and the `timed out after 1s` text.
+    So the pid file was absent for the whole 5 s window. **Do not read a cause into that** — the
+    file may have been written and unlinked before the first poll, written to a different path, or
+    never written. Two candidates are gone, and they are NOT the same grade of evidence:
+    — **ELIMINATED BY OBSERVATION:** the `elapsed < 7000` bound. It provably passed; I had inferred
+      it from the test's NAME.
+    — **NOT INDUCED (weaker):** node startup latency eating the 1 s window. 8 workers × 4000
+      `node -e ""` while the suite ran, 51/51 passed. Non-induction under a load I invented does
+      not eliminate a mechanism that fired once under a load I never characterized.
+    — **UNTESTED:** `s.cleanup()` racing the write, so `writeFileSync` throws into a stderr nobody
+      reads. The "reaped between `spawn` and `writeFileSync`" story is the same mechanism minus a
+      timing claim far narrower than the evidence supports — a refinement, not a fourth candidate.
+    **Not mine:** `ledger[-_]check` refs in that file = 0, against a control of 93 `gateRun` refs
+    proving the counter works. Caveat on my own controls: they ran the suite standalone while the
+    failure came from the `npm test` chain, so their green is weaker than a matched control.
 
 ### `acceptance_command` — the harness spec is WITHDRAWN; it is a normal row
 
