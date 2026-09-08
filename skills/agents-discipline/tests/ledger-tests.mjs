@@ -224,7 +224,7 @@ const cases = [
     // fold skips the whole section, so it reports `evidence: MISSING`, cites nothing, and lands
     // row 1 in UNBACKED. `re.I | re.A` at the match closes it.
     //
-    // The weak `**Unit 1 --** see the section below` line sits OUTSIDE the section so the only
+    // The weak `**Unit 1 <em dash>** see the section below` line sits OUTSIDE the section so the only
     // strong evidence, and the only citation, is behind the folded heading: both the exit and
     // the `evidence:` line then discriminate, instead of the substring alone.
     //
