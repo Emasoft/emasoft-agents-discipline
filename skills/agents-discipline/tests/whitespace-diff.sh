@@ -303,6 +303,40 @@ _write_ledger_created() {
   } > "$dest"
 }
 
+# The ANCHOR axis of the same regex -- the `/m` half `_write_ledger_created` leaves alone. Oracle
+# `^` under `/m` fires after LF, CR, U+2028 and U+2029; the port must too, and must NOT fire after
+# anything else. The pad goes at the START of the `Created:` line, so an empty pad is line-start
+# (matches in both), `X` is mid-line (`XCreated:` -- refuses in both, so the verdict moves STALE ->
+# clean and `_control` arms), and a terminator pad puts `Created:` right after a terminator that
+# is NOT LF inside an LF line. The `same` rows gate NARROWING: node's `^` fires after each, so the
+# oracle must read the date and stay STALE, and before the fix the port read no date after CR,
+# U+2028 or U+2029 and certified the stale artifact clean. The NEL row gates WIDENING: U+0085
+# breaks lines to Python (`\s`, `str.splitlines`) and not to ECMAScript, so a port anchor written
+# as `(?<=\s)` matches there while the oracle refuses -- a shape the `same` rows cannot see,
+# because a wider port still agrees with the oracle on every terminator the oracle honours.
+# Own arrays, not CASE_*: those are the `\s` boundary; this is the LineTerminator set.
+# NO `pad="$(printf '%b' …)"` HERE, unlike every writer above: a command substitution strips
+# TRAILING NEWLINES, so an LF pad becomes no pad and a CRLF pad becomes a bare CR. MEASURED: the
+# first version of this writer did exactly that, and its "LF" row compared unpadded to unpadded
+# while its "CRLF" row reddened as CR. `%b` is expanded in the format call itself instead.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
+_write_ledger_created_lt() {
+  local dest="$1" ws="$2"
+  mkdir -p "$(dirname "$dest")/art"
+  printf 'ran it\n' > "$(dirname "$dest")/art/created.md"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n'
+    printf '%bCreated: 2099-01-01T00:00:00+0000\n\n' "$ws"
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '\n## Evidence\n\n'
+    # shellcheck disable=SC2016  # the backticks are a literal markdown code span, not a command
+    printf '**Unit 1 —** ran the suite by hand; wrote `art/created.md`.\n'
+  } > "$dest"
+}
+
 # SEVENTH AND EIGHTH SURFACES: the two `##` heading expressions (oracle `:181-182`, port
 # `ledger_check.py:376-377`). They are ONE two-line construct in the source and TWO writers here,
 # and the split is the point -- a single writer would leave one of the two lines revertible with
@@ -786,6 +820,27 @@ for i in "${!CASE_NAME[@]}"; do
         "${CASE_ORACLE_EFFECT[$i]}"
 done
 
+# `[^ ]Created: 2099`: the pad must sit IMMEDIATELY before the token. `Created: 2099` (pad
+# dropped) and `Created: X2099` (pad moved into the `\s` position) both fail it.
+_control _write_ledger_created_lt "control: created line-terminator writer" '[^ ]Created: 2099'
+
+# LF and CRLF are HARNESS controls, not anchor rows: Python's `re.M` already fired after LF, so
+# neither can red on any anchor mutation -- they prove the pad position is one where a terminator
+# reads as line-start, nothing more. CR, U+2028 and U+2029 are the narrowing rows (each reds when
+# the port anchor drops it -- measured against the `re.M` port: exactly those three). U+0085 is
+# the widening row (`differ`: the oracle refuses NEL as a terminator, so its verdict moves STALE
+# -> clean, and a port that honours NEL diverges). No marker: `same` already requires the padded
+# oracle output to EQUAL the baseline, stronger than any substring; the created surface above sets
+# the precedent for a markerless `differ` on this ledger shape.
+# CEILING, recorded rather than hidden: dropping the `^` alternative (position 0) survives every
+# row here and every fixture in the tree, because each starts with `# Delegation plan`.
+declare -a LT_NAME=("LF" "CRLF" "CR" "U+2028 (LINE SEPARATOR)" "U+2029 (PARAGRAPH SEPARATOR)" "U+0085 (NEL, not a terminator)")
+declare -a LT_BYTES=('\n' '\r\n' '\r' '\xe2\x80\xa8' '\xe2\x80\xa9' '\xc2\x85')
+declare -a LT_EFFECT=(same same same same same differ)
+for i in "${!LT_NAME[@]}"; do
+  _case "created-lt ${LT_NAME[$i]}" "${LT_BYTES[$i]}" _write_ledger_created_lt "${LT_EFFECT[$i]}"
+done
+
 # Position-anchored, same forced choice the exit-code and created controls document: a correctly
 # placed pad DESTROYS the token it sits in front of, so anchoring on the surviving token would
 # fail in the red and green states alike. `Rules` is the token the pad precedes.
@@ -865,7 +920,7 @@ if [ "$fail" = 0 ]; then
   # controls, and a control does not assert identity -- it asserts a count, and now also that the
   # padded verdict DIFFERS from the unpadded one. A summary line that calls every check an
   # identity is the kind of over-claim this suite exists to catch.
-  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + rules-heading + heading-finder + strong-span surfaces) ---"
+  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + created-lt + rules-heading + heading-finder + strong-span surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"

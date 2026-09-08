@@ -190,27 +190,20 @@ TRAILING_PIPE = re.compile(r"(^|[^\\])\|$")
 SEPARATOR_CELL = re.compile(r"^:?-+:?$")
 RECEIPT_RE = re.compile(r"\n?<!-- agents-discipline-check: [^>]*-->\n?")
 PRIOR_RECEIPT = re.compile(r"<!-- agents-discipline-check: ([^ ]+) sha256:([0-9a-f]+) -->")
-# TWO INDEPENDENT DIVERGENCES ON ONE REGEX, and THIS COMMIT FIXES ONLY THE FIRST. MEASURED
-# against oracle `:303` over 13 probes -- port before: 6 disagreements; `\s`-fix only: 3; both: 0.
-#   Created:<U+001C>…, Created:<U+0085>…   port matched, node did NOT   (`\s` axis -- FIXED here)
-#   Created:<U+FEFF>…                      node matched, port did NOT   (`\s`, other direction)
-#   x<CR>Created: …, x<U+2028>…, x<U+2029>…  node matched, port does NOT (`/m` axis -- STILL OPEN)
-#
-# THE `/m` AXIS IS DELIBERATELY LEFT FOR ITS OWN COMMIT, not overlooked. ECMAScript's `^` under
-# `/m` matches after ANY LineTerminator -- LF, CR, U+2028, U+2029 -- while Python's `re.M`
-# recognizes LF alone, so the three probes above still disagree after this change. The fix is an
-# explicit lookbehind that makes `re.M` unnecessary; it is a SEPARATE revert from the whitespace
-# class, and its gate is a separate surface (`whitespace-diff.sh` emits LF only, so the six rows
-# that red this commit attribute entirely to `\s` and say nothing about line terminators).
-# Bundling the two would put the subtler half on the ungated side.
-#
-# Controls that had to NOT move, and did not: `Created: …` at string start and after LF (both
-# match in both runtimes); `Created:<NBSP>…` (NBSP is in both whitespace sets); Arabic-Indic
-# digits (both REFUSE -- `\d` was already `[0-9]`); and `xCreated: …` MID-LINE, which both REFUSE.
+# TWO AXES ON ONE REGEX, both converted: the whitespace class (`\s` -> JS_WS_CLASS) and the LINE
+# ANCHOR. The oracle is `/^Created:?\s+.../m`, and ECMAScript's `^` under `/m` fires after ANY
+# LineTerminator -- LF, CR, U+2028, U+2029 -- while Python's `re.M` fires after LF alone. So
+# `re.M` is NOT the port of `/m`: on `x<CR>Created: 2099-...` the oracle reads a Created date and
+# the port reads none, the staleness rule is silently skipped, and a stale artifact passes. The
+# alternative below spells the four terminators and drops `re.M`; `^` without it is
+# start-of-string, the fifth position `/m` fires at. The two non-ASCII terminators are `\N{...}`
+# escapes, never literal characters, so they survive an editor, a paste and a normalizing diff.
+# Gated by whitespace-diff.sh's `created` surface (the `\s` axis) and `created-lt` surface (the
+# anchor axis, in BOTH directions: one `same` row per terminator against a narrowed anchor, and
+# a NEL row against a widened one -- U+0085 breaks lines to Python and not to ECMAScript).
 CREATED = re.compile(
-    r"^Created:?" + JS_WS_CLASS
-    + r"+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:[+-][0-9]{2}:?[0-9]{2})?)",
-    re.M,
+    r"(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]))Created:?" + JS_WS_CLASS
+    + r"+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:[+-][0-9]{2}:?[0-9]{2})?)"
 )
 
 path = sys.argv[1] if len(sys.argv) > 1 else "DELEGATION.md"
