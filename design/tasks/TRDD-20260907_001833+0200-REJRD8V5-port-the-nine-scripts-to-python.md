@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T21:06:55+0200
+updated: 2026-09-08T21:10:46+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1440,11 +1440,13 @@ than commits that landed code.
    The first draft (no citation) moved only `evidence:` — both runtimes exited 1 on UNBACKED —
    which would have left a substring-only gate. **MEASURED, oracle / port / port with `re.A`
    removed:** exit 0 / 0 / 1, `evidence:` present / present / MISSING. **Mutants:** dropping `re.A`
-   reds exactly this case (six assertions), no other case, and the whitespace suite stays 70 green
-   (the `rules-heading` rows pad with whitespace only, which has no case for `re.A` to act on);
-   normalizing the fixture's ſ to `s` reds the case AND the guard in both runtimes — a
-   disarmed fixture fails loudly instead of passing. Suites: `npm test` 256 PASS, port suite 147
-   PASS, 14 diff suites exit 0. **Why U+017F:** the heading has three `s` and its `i` is inside
+   reds exactly this case (six assertions), no other case — 141 PASS + 6 FAIL = the suite's 147,
+   so no case threw either (the post-write review asked for the subtraction) — and the whitespace
+   suite stays 70 green (reasoned why: the `rules-heading` rows pad with whitespace only, which
+   has no case for `re.A` to act on); normalizing the fixture's ſ to `s` reds the case AND the
+   guard in both runtimes, 140 PASS + 7 FAIL each — a disarmed fixture fails loudly instead of
+   passing. Suites: `npm test` 256 PASS, port suite 147 PASS (was 140: six assertions plus the
+   guard), 14 diff suites exit 0. **Why U+017F:** the heading has three `s` and its `i` is inside
    `this`; U+017F survives NFC/NFD (only NFKC maps it to `s`). **Scope:** this one site. The
    FLAG CLASS section's other `re.I` sites keep their own items; item 5 is the adjacent debt.
    **Ceiling, reasoned not measured:** the fixture exercises U+017F only; U+0131/U+0130/U+212A are
