@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T12:35:32+0200
+updated: 2026-09-08T12:40:35+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1193,10 +1193,20 @@ also be `INCOMPLETE` (which would make every row vacuous), reasoning from the pl
 `complete.md` result — that fixture is confounded, it ALSO had no citations and went `unbacked`.
 Measured here with citations present: `complete`.
 
-**THE MARKER IS THE RE-RUN ENTRY, NOT THE MESSAGE TEXT.** The entry exists iff `acceptance_command`
-returned non-`None`; every wording downstream of it (`no-op acceptance`, `exit 1`, `budget
-exhausted`) belongs to a DIFFERENT function, and a marker keyed on one of those reds when that
-other function changes. This is the per-case attribution discipline `_case` already enforces.
+**THE MARKER IS THE RE-RUN ENTRY, NOT THE MESSAGE TEXT** — every wording downstream of it (`no-op
+acceptance`, `exit 1`, `budget exhausted`) belongs to a DIFFERENT function, and a marker keyed on
+one of those reds when that other function changes.
+
+**⚠ BUT "THE ENTRY EXISTS IFF `acceptance_command` RETURNED NON-`None`" IS FALSE AS WRITTEN, AND
+IT IS THE SAME FIXTURE-PRECONDITION-AS-CODE-FACT SHAPE RETRACTED ABOVE.** Four paths append to
+`repro_failed` and two of them short-circuit BEFORE this site: `:757` chained and `:765` no-op.
+The true statement carries its precondition — **given a fixture that is not-chained and not-no-op
+in BOTH runtimes**, the entry exists iff `acceptance_command` returned non-`None`. A second
+invariant is just as load-bearing and was unstated: exit 0 appends to `reran`, not `repro_failed`,
+and yields `complete` — the SAME verdict as the unrecognized arm. My two arms discriminate only
+because `false x` exits NON-ZERO. Anchor on the entry LINE (`- #N $ <cmd> ->`) against the
+`unreproducible:` line, never on complete/INCOMPLETE alone, or a zero-exit command makes every row
+vacuous while looking green.
 
 **AND THE HONEST COST: the recognized arm EXECUTES the command.** "Nothing executes" was true only
 of the no-op fixture, which is the one that cannot reach this site. Keep the command PROVABLY INERT
@@ -1209,9 +1219,15 @@ not zero and must not be written as zero.
 looks like a free no-execution observable. It is a RACE, in BOTH runtimes. Five trials: both
 `exhausted`, both `exit 1`, both `exit 1`, then node `exhausted` / py `exit 1` twice. The
 node/python disagreement is `Date.now()` integer-ms against `time.monotonic()` sub-ms resolution at
-a 1 ms budget — **not a porting defect, and not a usable mechanism.** It was 3-of-5 disagreement on
-first contact, which is exactly what a real divergence looks like; the determinism check is what
-separated them.
+a 1 ms budget. **NOT A USABLE MECHANISM — that part is settled. "NOT A PORTING DEFECT" IS
+WITHDRAWN, and calling it one was me dismissing a one-directional signal as symmetric noise.**
+Both disagreements ran the SAME WAY (node exhausted / py ran) and ZERO ran the other; the
+mechanism is one-directional by construction, since node's integer-ms `deadline - now` hits
+exactly 0 at every millisecond boundary while Python's float only fires after a full elapsed
+millisecond. That is a resolution-induced BIAS on a legal input (`>= 1` validates), not noise, and
+n=5 cannot close it. **Reclassified as queue item 8, unclassified** — needs a larger n and a
+second budget value. Filing it under a DEAD END heading is how a real divergence gets buried under
+a sign telling future readers not to look.
 **Its guard nesting IS established, and was not before:** `if not rerun_skipped:` sits at column
 0 (`:719`), the call at column 8 (`:744`), and NO column-0 line lies between them — so nothing
 closes the block first. The earlier form of this claim rested on `744 > 719`, which is only file
@@ -1234,8 +1250,24 @@ the observation alone.
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
 positions are fixed but ungated. Do not read the site count as coverage.
 
-1. **no-op detector `:565`** — ×2 `\s` in the `\Z` alternation (`(?:\s+[^&|;]*)?`, `command\s+true`).
-   TWO occurrences ⇒ **TWO separate mutations**, per the precedent correction above.
+1. **no-op detector — the `ALWAYS_TRUE` pattern (`ledger_check.py:616`, oracle
+   `ledger-check.mjs:382`)** — **×3 `\s`, NOT ×2.** This entry said two and named
+   `(?:\s+[^&|;]*)?` and `command\s+true`. It MISSED **`exit\s+0`**. Counted on the pattern line:
+   three. The two runtimes are byte-parallel here apart from `$` vs `\Z` (deliberate, documented
+   at `:613`). **THREE occurrences ⇒ THREE separate mutations** — the precedent correction that
+   raised this from one revert to two would still have under-proved the site by one line. The old
+   `:565` was also a stale line number, which is why the site is now named by SYMBOL.
+
+   **⚠ ITEM 7 PARTICIPATES IN SOME VECTORS, so the vector design is not mechanical — MEASURE IT.**
+   Traced, not yet run: `` `echo<PAD>ok` `` moves the verdict through BOTH predicates (py calls it
+   a no-op; node does not, then `acceptance_command`'s own unconverted `\s` refuses to recognize
+   it), so that row would still be RED after item 1 is fixed and would read as a failed fix.
+   `` `echo<PAD>ok now` `` isolates item 1: the ordinary space makes `acceptance_command` agree in
+   both runtimes, so only the no-op predicate can move the verdict. `` `command<PAD>true` `` has
+   NO room for an ordinary space (`command\s+true` must match to `\Z`), so it cannot be isolated
+   that way — a second code span in the same cell is the candidate, and that is the part to
+   measure first. Do NOT write three vectors by analogy with site 4; two of the three shapes
+   behave differently.
 2. **`in_rules_section` sticky-TRUE** — nothing exercises a divergence that leaves the flag true
    across several following lines. **The shape a real BOM-prefixed ledger would actually hit**,
    which is concrete, checkable, and enough on its own to justify the position. It read "largest
@@ -1252,8 +1284,14 @@ positions are fixed but ungated. Do not read the site count as coverage.
 6. **`CITATION` `:150`** — ×2 inside a NEGATED class, so it needs `JS_WS_CLASS_BODY` (the existing
    `JS_WS_CLASS` is bracketed and closes the class early). **LAST**, and the constant must land IN
    that commit or it is a dead symbol.
-7. **`acceptance_command`** — an ordinary row in this suite, NOT its own harness. Spec below, and
-   it is ORDERED AFTER item 1 for a reason item 1 must not be finished without reading.
+7. **`acceptance_command`** — an ordinary row in this suite, NOT its own harness. Spec below. The
+   ordering dependency on item 1 that this line used to assert is RETRACTED there.
+8. **Re-run deadline resolution — `Date.now()` ms vs `time.monotonic()` sub-ms.** NOT a `\s` site.
+   At `AGENTS_DISCIPLINE_RERUN_BUDGET_MS=1` the `remaining <= 0` branch fires in node and not in
+   the port, one-directionally in 2 of 2 disagreements over 5 trials. **UNCLASSIFIED** — needs a
+   larger n and a second budget value before it is called a defect or dismissed. I first filed it
+   as a dead end on the strength of the 3 agreements; see the DEAD END paragraph below for why
+   that was the wrong read of a one-directional sample.
 
 ### `acceptance_command` — the harness spec is WITHDRAWN; it is a normal row
 
@@ -1285,9 +1323,20 @@ sites confound each other, so item 1 had to land first. That is a property of th
 FIXTURE — where item 1's `(?:\s+[^&|;]*)?` and this site's `re.search(\s)` read the same pad — not
 of the two SITES. A `false`-shaped command matches no `ALWAYS_TRUE` alternative whatever the pad,
 so `is_noop_acceptance` returns False in both runtimes and item 1's predicate does not participate.
-**The sites are separable and item 1 need not precede item 7.** Recording a universal dependency
-between two sites, inferred from one fixture, and labelling it "load-bearing" is the same
-over-generalization this TRDD already records twice.
+**These sites are separable GIVEN A NON-NO-OP FIXTURE, so item 1 need not precede item 7.**
+
+**Precisely half of the retracted claim was true, and flattening both halves to "FALSE" was an
+over-correction in the other direction.** "The two sites confound each other on `` `echo<PAD>ok` ``"
+is TRUE and still live — an `echo`-shaped acceptance is the natural thing to write. What is false
+is only the INFERENCE from it to a universal ordering dependency. Retract the inference, keep the
+observation, and name the separating fixture as the reason the dependency dissolves.
+
+**THE THREE-POSITION ANALYSIS IS DERIVABLE NOW, not a prediction** (a fork pointed out I had
+deferred something already decidable): LEADING is dead for all six — `^[A-Za-z0-9_./-]+` anchors at
+position 0, so a surviving pad fails the prefix in BOTH runtimes, and U+FEFF is stripped there
+anyway. TRAILING-as-the-only-whitespace works for the five but not U+FEFF (stripped at the edge).
+INTERIOR is the only position covering all six, with the polarity inverting exactly as at site 4.
+Same conclusion site 4 reached, and it cost nothing to state.
 
 **The trade that replaces it, stated as a trade:** the no-op fixture executes nothing but cannot
 reach this site; the inert fixture reaches it and runs one `false`. Take the inert fixture.
@@ -1295,11 +1344,17 @@ reach this site; the inert fixture reaches it and runs one `false`. Take the ine
 **MUST BE MEASURED BEFORE THE WRITER IS WRITTEN** (do not reason it from `ALWAYS_TRUE`'s
 alternatives, which is how the no-op inversion above got in): that `false<PAD>x` is genuinely
 not-a-no-op in BOTH runtimes at every pad position, and the three-position analysis below.
-**AND RE-TAKE THE TWO-ARM MEASUREMENT INSIDE A REAL GIT REPO.** Both probes above ran in a scratch
-dir with no `.git` ancestor, so they took `run_cwd`'s not-found fallback — the plan file already
-warns about exactly this and says to re-run the rerun-path measurements in a repo. It cannot affect
-the unrecognized arm (nothing executes there), so the discriminating result stands; it can affect
-the recognized arm's exit code, which is the arm the writer depends on.
+**AND RE-TAKE THE RECOGNIZED ARM INSIDE A REAL GIT REPO.** Both probes ran in a scratch dir with no
+`.git` ancestor, taking `run_cwd`'s not-found fallback; the plan file warns about exactly this.
+**Which arm is at risk was settled by reading, because I had given the right answer for the wrong
+reason and a fork then inverted it.** I wrote "the unrecognized arm cannot be affected, nothing
+executes there" — execution is irrelevant to the hazard. A fork inferred from that that the
+unrecognized arm IS the exposed one, since its bucket (`unbacked` vs `unreproducible`, opposite
+verdicts) is decided by `existing_artifacts_in(..., bases)`. **Both readings are wrong: `bases` is
+built at `:508-515` from the LEDGER's own ancestor chain plus `os.getcwd()`, never from `run_cwd`,
+and it is constructed at `:508` — BEFORE the `.git` walk at `:592` even runs.** So the fallback
+cannot move that bucket, and the unrecognized arm stands as measured. `run_cwd` IS the `.git` walk
+and IS `subprocess.run`'s cwd, so only the RECOGNIZED arm's exit code is exposed.
 
 **STILL UNMEASURED, and it must be measured BEFORE the writer is written** (a fork named it and it
 is the harder question than the control one): the predicate is `re.search(\s)` **AND**
