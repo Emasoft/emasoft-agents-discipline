@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T20:58:26+0200
+updated: 2026-09-08T21:06:55+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1164,11 +1164,12 @@ text, not just equal counts; temp-filename confirmed inert by a positive control
   non-matching path never executes.
 - The markers are the VERDICT line (`-> ledger complete`), not the column-aligned `evidence:` one.
 
-**STILL OPEN, one non-`\s` axis on an already-converted line** (the `CREATED` `/m` half closed in
-`6337497`, queue item 3): `:377`'s `re.I`/U+017F fold half — `re.A` is safe there
-(no `\s` remains for it to narrow, the `:111-117` precondition) but would ship ungated, and the
-fold axis already owes one vector at `EXIT_CODE`. A fold vector does not fit this harness: it
-needs its own writer and an effects array unrelated to `CASE_ORACLE_EFFECT`.
+**CLOSED 2026-09-08 — `aefb8ea`, queue item 4.** Was: **STILL OPEN, one non-`\s` axis on an
+already-converted line** (the `CREATED` `/m` half closed in `6337497`, queue item 3): `:377`'s
+`re.I`/U+017F fold half — `re.A` is safe there (no `\s` remains for it to narrow, the `:111-117`
+precondition) but would ship ungated, and the fold axis already owes one vector at `EXIT_CODE`.
+The fold vector did NOT go into this harness (as this paragraph predicted); it went where the
+`unit-header-fold` precedent lives — a fixture plus a ledger-tests case. Entry at item 4.
 
 **RESOLVED 2026-09-08 → queue item 2 (`3bb7e99`):** the PERSISTENCE half was already gated by the
 flipped-template case in `ledger-tests.mjs`, now named at both sites and armed; the DIVERGENCE
@@ -1297,7 +1298,7 @@ the observation alone.
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
 positions are fixed but ungated. Do not read the site count as coverage.
 
-**ORDER IS NOT NUMBER.** Items 1, 2, 3, 9 and 10 are done; the order is **13 → 4 → 5 → 7 → 6** (6 is
+**ORDER IS NOT NUMBER.** Items 1, 2, 3, 4, 9 and 10 are done; the order is **13 → 5 → 7 → 6** (6 is
 last by construction — it needs `JS_WS_CLASS_BODY` in its own commit). Renumbering would churn
 every cross-reference, so the order lives here instead. A reader who takes the lowest open number
 takes item 2, and item 9's note then lands after the window it covers — which is precisely the
@@ -1427,9 +1428,27 @@ than commits that landed code.
    `\N{...}` escapes, all gates re-run on the escape form. Was: **`CREATED`'s `/m` LineTerminator
    half** — ECMAScript `^` under `/m` matches after LF, CR, U+2028 and U+2029; Python `re.M`
    recognizes LF alone. Fix source already recorded above.
-4. **`re.I` / U+017F fold at the rules heading** — `## Ruleſ of thiſ ledger` is the rules heading
-   to the port and not to the oracle. Needs `re.A`, which is only safe now that no `\s` remains on
-   those two lines.
+4. **✅ DONE — `aefb8ea` (2026-09-08).** Was: **`re.I` / U+017F fold at the rules heading** —
+   a heading with U+017F in `Rules` is the rules heading to the port and not to the oracle. Needs
+   `re.A`, which is only safe now that no `\s` remains on those two lines.
+   **What landed:** `re.I | re.A` at the rules-heading match (the heading-finder line above it
+   carries no `re.I` and is untouched); the fixture `tests/fixtures/rules-heading-fold.md` and its
+   ledger-tests case; a guard pinning U+017F in the heading, spelled as an escape like the U+0131
+   one. **Fixture shape, chosen by measurement after the pre-write review asked:** the weak
+   `**Unit 1 —**` line sits outside the folded section, and the only strong line and the only
+   artifact citation sit inside it, so the port bug moves BOTH the exit and the `evidence:` line.
+   The first draft (no citation) moved only `evidence:` — both runtimes exited 1 on UNBACKED —
+   which would have left a substring-only gate. **MEASURED, oracle / port / port with `re.A`
+   removed:** exit 0 / 0 / 1, `evidence:` present / present / MISSING. **Mutants:** dropping `re.A`
+   reds exactly this case (six assertions), no other case, and the whitespace suite stays 70 green
+   (the `rules-heading` rows pad with whitespace only, which has no case for `re.A` to act on);
+   normalizing the fixture's ſ to `s` reds the case AND the guard in both runtimes — a
+   disarmed fixture fails loudly instead of passing. Suites: `npm test` 256 PASS, port suite 147
+   PASS, 14 diff suites exit 0. **Why U+017F:** the heading has three `s` and its `i` is inside
+   `this`; U+017F survives NFC/NFD (only NFKC maps it to `s`). **Scope:** this one site. The
+   FLAG CLASS section's other `re.I` sites keep their own items; item 5 is the adjacent debt.
+   **Ceiling, reasoned not measured:** the fixture exercises U+017F only; U+0131/U+0130/U+212A are
+   named in the port comment as examples of what bare `re.I` folds, not as gated vectors.
 5. **`EXIT_CODE` fold-axis test vector** — the fix landed; the gate never did. Undischarged debt.
 6. **`CITATION` `:150`** — ×2 inside a NEGATED class, so it needs `JS_WS_CLASS_BODY` (the existing
    `JS_WS_CLASS` is bracketed and closes the class early). **LAST**, and the constant must land IN
