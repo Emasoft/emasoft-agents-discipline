@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T11:01:43+0200
+updated: 2026-09-08T11:34:20+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1067,7 +1067,36 @@ and it is a staleness COMPARISON, so the pad moves nothing unless a cited artifa
 writer has to build a side file and date the ledger 2099. Ask what the pattern's value is
 actually USED for before assuming a pad on it will move a verdict.
 
-**NEXT: the `^##\s+` pair or `CREATED`'s `/m` half — not `CITATION`,** which needs the `JS_WS_CLASS_BODY`
+**⏵ SITE 3 OF 8 IS DONE — the `^##` heading pair, `50d8df7` (+ `8278d79`, review hardening).**
+Both `:376` (`^##\s+` — is this a HEADING) and `:377` (`^##\s+Rules of this ledger\s*$` — is it the
+section to SKIP) now spell `JS_WS_CLASS`. Reachable both ways: `##<U+001C>Notes` was a heading to
+the port alone, `##<U+FEFF>Notes` to node alone. `whitespace-diff.sh` 42 → 56 checks, TWO writers
+(`_write_ledger_rules`, `_write_ledger_head`), one per production line — PROVEN disjoint by
+mutation with a cmp-verified restore: reverting `:376` alone reds exactly the 6 heading-finder
+rows, reverting `:377` alone exactly the 6 rules-heading rows. `npm test` 0, `test:diff` 0,
+known-divergence set unchanged, ruff 6 and mypy 7 measured at BOTH endpoints (identical finding
+text, not just equal counts; temp-filename confirmed inert by a positive control).
+
+**THREE THINGS A FUTURE SESSION MUST NOT UNDO:**
+- `_case`'s marker greps are `grep -qF -- "$marker"`. WITHOUT the `--`, a marker starting with `-`
+  is parsed as OPTIONS and matches nothing — loud on a `differ` row, SILENT on a `same` row.
+- `_write_ledger_head`'s `## Evidence` line must stay ABOVE the padded line. `in_rules_section` is
+  sticky; when `^##\s+` fails to match the flag keeps its prior value, and only that line
+  guarantees it is False. No control can see this — the control runs an empty pad, where the
+  non-matching path never executes.
+- The markers are the VERDICT line (`-> ledger complete`), not the column-aligned `evidence:` one.
+
+**STILL OPEN, both non-`\s` axes on already-converted lines:** `CREATED`'s `/m` LineTerminator
+half (fix source recorded above), and NOW `:377`'s `re.I`/U+017F fold half — `re.A` is safe there
+(no `\s` remains for it to narrow, the `:111-117` precondition) but would ship ungated, and the
+fold axis already owes one vector at `EXIT_CODE`. A fold vector does not fit this harness: it
+needs its own writer and an effects array unrelated to `CASE_ORACLE_EFFECT`.
+
+**NAMED, NOT YET SCHEDULED:** nothing exercises a divergence that leaves `in_rules_section` TRUE
+across several following lines — the largest blast radius (every later line silently dropped from
+evidence), and the shape a real BOM-prefixed ledger would hit.
+
+**NEXT: the two inline `re.search(r"\s", inner)` sites, or the no-op detector — not `CITATION`,** which needs the `JS_WS_CLASS_BODY`
 factoring, and that must land IN the `CITATION` commit (a constant with no consumer is a
 dead-symbol commit). Its mechanics are settled and measured: the bracketed `JS_WS_CLASS` inside
 `[^...]` closes the class early, collapsing each path segment to ONE character — `app/stats.py`
