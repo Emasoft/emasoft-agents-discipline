@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T10:51:14+0200
+updated: 2026-09-08T10:57:21+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -916,15 +916,29 @@ since it is derived from a set the same run computed. `regex-worker-diff.sh:177`
 `EXPECTED_DIVERGENT_SET='\p{L}<u>'` as a HARDCODED literal and diffs the observed set against it
 at `:180`, so a NEW divergence and a VANISHED one both red it. Its `(see TRDD)` pointer was
 DANGLING until this entry — nothing in this TRDD named that row.
-**AND THE PINNED LITERAL IS ITSELF CALIBRATED — trading up to a better instrument does not
-calibrate it, and I nearly stopped one step short.** A literal is version-controlled and mutable,
-so a suite made green by WIDENING its own expected set prints exactly that same reassuring line;
-`regex-worker-diff.sh:133` records a cheat-shrink attempted on the sibling `EXPECTED_ROWS`
-constant, three lines above the one being trusted. Measured: `git log -S 'EXPECTED_DIVERGENT_SET'`
-returns ONE commit, `93fe3d0` (2026-09-07 02:23), and `git merge-base --is-ancestor 93fe3d0
-e24398c` succeeds — so the literal has been unchanged across the whole site-1/site-2 window and
-the claim is established. **The failure signal of a pinned-literal instrument is "the literal was
-edited"; check it, or the pinning attests to nothing.** (2) I compared mypy against HEAD via `git stash push -- <one file>` on
+**AND THE PINNED LITERAL NEEDS CALIBRATING TOO — trading up to a better instrument does not
+calibrate it.** A literal is version-controlled and MUTABLE, so a suite made green by WIDENING its
+own expected set prints exactly that same reassuring line; `regex-worker-diff.sh:133` narrates a
+cheat-shrink actually attempted on this corpus's own row-count floor (`EXPECTED_ROWS=22`), so the
+class is live, not hypothetical. **The failure signal of a pinned-literal instrument is "the
+literal was edited"; check it, or the pinning attests to nothing.**
+**AND MY FIRST CALIBRATION PROBE WAS BLIND TO EXACTLY THAT EDIT.** `git log -S <token>` is the
+PICKAXE: it lists commits where the NUMBER OF OCCURRENCES changed. The token appears twice here
+(`:177` assigns, `:179` consumes), so a commit that rewrites only the VALUE leaves the count at 2
+and `-S` never lists it — and a cheat-widening is precisely a value edit with the count preserved.
+Measured: `-S` returned ONE commit; **`git log -G 'EXPECTED_DIVERGENT_SET'` returns THREE** —
+`93fe3d0` (02:23), `6a186fd` (02:29, the only hit when pickaxing the VALUE `\p{L}<u>`), `03f2e84`
+(05:45), all 2026-09-07. `03f2e84` is the last value change and it SHRANK the set from
+`(?<y>\d{4})<>…` to `\p{L}<u>` — legitimately, alongside the fixes its subject names.
+**THE CONCLUSION SURVIVES AND IS STRONGER THAN THE BLIND PROBE COULD HAVE MADE IT**: all three
+predate site 1 (`c057c93`, 2026-09-08 10:15:08) and `e24398c` (10:15:35), so the literal is
+untouched across the entire site-1/site-2 window. `--follow` and plain `log` both return 10
+commits for the path, so no rename hides earlier history. **`-S` returning one was luck** — it
+happened to return a member of the same predates-the-window cluster; had `03f2e84` landed inside
+the window, `-S` would have missed it and I would have asserted a false calibration.
+**USE `-G` (or `-S` on the VALUE, or `git log -L`) TO ASK "was this constant edited". Never `-S`
+on its NAME.** This is the third instrument in three commits whose passing and broken states were
+indistinguishable, and this one was written in the commit whose whole subject was calibration. (2) I compared mypy against HEAD via `git stash push -- <one file>` on
 a CLEAN tree: nothing was stashed, so the "baseline" run re-measured the SAME working copy and
 `diff` said IDENTICAL trivially. The paired `stash pop` then popped a PRE-EXISTING 2026-09-06
 auto-backup and left three files `UU` (recovered: stash intact, copies in
@@ -948,12 +962,16 @@ ORDER, not ancestry — `0ee18b6` added that guard to the shipped scripts, the s
 a tree with it removed, and `c4a36d6` then committed that removal deliberately ("move the bytecode
 guard out of the shipped scripts and into the harness"; it now lives in nine `tests/*_drive.py`).
 The stash was a WIP snapshot of the change `c4a36d6` landed. **`git merge-base --is-ancestor
-0ee18b6 HEAD` proves nothing** — every commit reachable from HEAD is an ancestor of HEAD.
-**And the stash holds NINE files, not the three that conflicted** (`git stash show --stat`): three
-shipped scripts at −8 each, three `tests/*.mjs` at +8, three `*_drive.py` at −1. A pop applies the
+0ee18b6 HEAD` proves nothing about supersession** — every commit reachable from HEAD is an
+ancestor of HEAD, so it rules out only a stash based on an abandoned line.
+**And the stash holds NINE files, not the three that conflicted** — three shipped scripts at −8
+each, three `tests/*.mjs` at +8, three `*_drive.py` at −1, measured by `git stash show --stat`,
+which diffs the stash against its OWN base `0ee18b6`, not against HEAD. A pop applies the
 non-conflicting files SILENTLY, so `git checkout HEAD --` on only the conflicted three could have
-left six applied. It did not — and the thing that shows that is again the EMPTY `git status
---short`, not any argument about the stash's provenance.
+left six applied. **Nothing was left wrongly modified — the EMPTY `git status --short` covers all
+nine.** Whether those six were never applied or applied as a no-op is NOT distinguishable from
+that observation (the stash's base predates `c4a36d6`, which may already have made them equal to
+HEAD), and does not need to be.
 
 **A smaller record defect, deliberately NOT numbered alongside those two** — they were instruments
 returning a false GREEN; this is a data field nothing branched on, and calling it a third would
@@ -963,8 +981,12 @@ never read from `date`. `updated:` is what a later session reads to judge stalen
 fabricated one makes a stale block look fresh. **Run `date +%Y-%m-%dT%H:%M:%S%z` and paste it;
 never re-type or reuse a timestamp.** That rule cannot make the field exact — the pasted value is
 already stale by the time the commit lands, so the field now sits slightly in the PAST of its own
-commit. That is the safe direction (a slow field invites a re-read; a fast one licenses skipping
-it), and approximately-right-and-safely-wrong is all this field can be.
+commit. That is the safe direction **for the two readers known to exist** — a human (a
+stale-looking field invites a re-read) and a drift detector (it errs toward flagging). It is NOT
+verified safe for a tool that treats `updated:` as a HIGH-WATER MARK ("process everything newer
+than my last run" — a backwards move makes the edit invisible) or as a CONFLICT TIEBREAKER. The
+corollary is the durable one: the field is structurally unable to be exact and git already holds
+the authoritative timestamp, so **nothing should branch on `updated:` precisely.**
 
 **⚠ THE `/m` HALF OF `CREATED` IS STILL OPEN, AND IT IS A NAMED ITEM, NOT "OWED".** JS `/m` makes
 `^` match after ANY LineTerminator (LF, CR, U+2028, U+2029); Python's `re.M` recognizes LF alone,
