@@ -826,20 +826,22 @@ _control _write_ledger_created_lt "control: created line-terminator writer" '[^ 
 
 # LF and CRLF are HARNESS controls: they prove the pad position is one where a terminator reads
 # as line-start. They are not the LF gate -- an anchor that DROPS LF fails at the `created`
-# writer's CONTROL above, before any row here runs (that writer puts `Created:` after a bare LF,
-# as does every file in tests/fixtures and templates that carries one: 18 of 18, grep-verified).
+# writer's CONTROL above, before any row here runs. That writer prints `Units: 1\n` and then
+# `Created:` (read it above), and every file in tests/fixtures and templates that carries a
+# `Created:` puts it after a bare LF (18 of 18, grep-verified).
 # MEASURED, one mutant per terminator: dropping CR, U+2028 or U+2029 from the anchor reds exactly
 # that terminator's row and nothing else; dropping LF fails the created control. U+0085 is the
 # widening row (`differ`: the oracle refuses NEL as a terminator, so its verdict moves STALE ->
 # clean, and a port anchor written `(?<=\s)` diverges -- measured, exactly that row). No marker:
 # `same` already requires the padded oracle output to EQUAL the baseline, stronger than any
 # substring; the created surface above sets the precedent for a markerless `differ`.
-# CEILINGS (each mutant leaves all 70 checks green -- measured): dropping the `^` alternative
-# (position 0) -- no file in tests/fixtures or templates starts with `Created:`, each opens with
-# an H1 line (44 of 44, grep-verified); and widening the class to VT/FF without NEL -- the green
-# run shows only that the suite cannot see it. That the oracle refuses VT/FF is the ECMAScript
-# `/m` spec (`^` matches after LF, CR, U+2028, U+2029 only), not a measurement: no VT/FF fixture
-# exists, so the oracle was never asked.
+# CEILINGS, each measured. Dropping the `^` alternative (position 0): 70 green here AND the port
+# `ledger-tests` all green under the same mutant, so neither the writers (each prints
+# `# Delegation plan` first), the 44 files on disk (each opens with an H1, grep-verified), nor a
+# `ledger-tests.mjs` mutate() put `Created:` at offset 0 where an assertion sees it. Widening the
+# class to VT/FF without NEL: 70 green, which shows only that the suite cannot see it. That the
+# oracle refuses VT/FF is the ECMAScript `/m` spec (`^` fires at input start and after LF, CR,
+# U+2028, U+2029 only), not a measurement: no VT/FF fixture exists, so the oracle was never asked.
 declare -a LT_NAME=("LF" "CRLF" "CR" "U+2028 (LINE SEPARATOR)" "U+2029 (PARAGRAPH SEPARATOR)" "U+0085 (NEL, not a terminator)")
 declare -a LT_BYTES=('\n' '\r\n' '\r' '\xe2\x80\xa8' '\xe2\x80\xa9' '\xc2\x85')
 declare -a LT_EFFECT=(same same same same same differ)
