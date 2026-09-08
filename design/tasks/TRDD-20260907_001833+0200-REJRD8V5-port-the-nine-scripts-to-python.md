@@ -919,44 +919,85 @@ measured divergences" gets quoted as nine defects.
 - **the compromised positive control in `tests/fixtures/abandoned-unreasoned.md` — the defect is
   REAL, the "blocks all nine sites" claim was never measured and is FALSE, and the residue blocks
   ONE pair of sites.** Measured 2026-09-07:
-  1. **0 of 29 files in `tests/fixtures/` carry any of the six `\s`-divergent codepoints**
-     (`U+001C U+001D U+001E U+001F U+0085` python-only, `U+FEFF` node-only); the same detector
-     reports both on a synthetic control, so the zero can fail. **Claim only what that measures:
-     no static fixture holds an input on which node's `\s` and Python's `\s` disagree, so none can
-     exercise a `\s` DIVERGENCE at any of the nine sites.** NOT "produces byte-identical output" —
-     that is a claim about the whole checker, and this session already found the runtimes
-     differing on pure ASCII for an unrelated reason (the oracle's `counts[r.status]` prototype
-     lookup).
-  2. **No injection path makes a static fixture divergence-capable:** `ledger-tests.mjs` has
-     exactly one `mutate` (pure-ASCII `| pending |` → `| verified |`), and `whitespace-diff.sh`
-     builds every ledger from scratch in `mktemp -d`, reading nothing under `tests/fixtures/`.
+  1. **0 of the 31 inputs `ledger-tests.mjs` actually drives carry any of the six `\s`-divergent
+     codepoints** (`U+001C U+001D U+001E U+001F U+0085` python-only, `U+FEFF` node-only); the same
+     detector reports two on a synthetic control, so the zero can fail. **Claim only that: no
+     input to that suite holds bytes on which node's `\s` and Python's `\s` disagree, so no case
+     in it can exercise a `\s` DIVERGENCE at any of the nine sites.**
+     **⚠ THE FIRST VERSION OF THIS READING SAID "0 of 29 files in `tests/fixtures/`" AND IT WAS
+     FALSE THREE WAYS — landed in `65922fc`, corrected here.** The glob was `fixtures/*.md`:
+     NON-RECURSIVE, so it missed the nine files under `tests/fixtures/port/`; the real recursive
+     count is 38, not 29. It was also fixture-ONLY, while the suite drives two inputs from
+     outside that directory (`templates/DELEGATION.md`, twice, and `SECURITY.md`). And the flat
+     conclusion "no static fixture holds one" is REFUTED: `tests/fixtures/port/js-trim.md`
+     carries U+FEFF deliberately, with its own arming check at `python-lib-checks.py:871`. A
+     non-recursive glob fails toward zero, and a zero from a scan whose ROOT is wrong is
+     indistinguishable from a zero that means something — the same shape as the broken scan two
+     paragraphs down. **Scope a scan by what the SUITE READS, never by a directory you assume it
+     reads.**
+     Do NOT restate this as "produces byte-identical output" either — that is a claim about the
+     whole checker, and this session already found the runtimes differing on pure ASCII for an
+     unrelated reason (the oracle's `counts[r.status]` prototype lookup).
+  2. **The two injection paths I checked are clean** — stated as what it is, a two-sample check
+     and not a universal: `ledger-tests.mjs` has exactly one `mutate` (pure-ASCII `| pending |` →
+     `| verified |`), and `whitespace-diff.sh` builds every ledger from scratch in `mktemp -d`,
+     reading no file under `tests/fixtures/`.
   3. **BUT IT SITS IN THE BLAST RADIUS OF THE `^##\s+` HEADING FINDER.** It carries a
      `## Evidence` heading and its blocks are produced by the scanner that drops those lines. It
      still cannot produce a DIFFERING reading (1 stands) — it can produce a MEANINGLESS GREEN,
      because unit 3 passes on the ~28 trailing prose lines rather than on its reason sentence, so
-     nearly any block content passes it. **GATE: at that site, mutate the converted regex and check
-     whether this case reddens. If it does not, repair the control before landing the site.**
-     Everywhere else it gates nothing, and the repair itself belongs to the `abandoned` feature.
-- **CORRECTED IN FLIGHT — there are TWO divergence instruments, not one.** Scanning all fourteen
-  `*-diff.sh` for literal divergent characters AND for the escape spellings that build them:
-  `whitespace-diff.sh` (the regex `\s` surfaces) and `receipt-diff.sh` (all six, against
-  `trimEnd()` vs `rstrip()`) carry them; the other twelve carry none. A draft of this entry called
-  `whitespace-diff.sh` "the only instrument" on the strength of having grepped only
-  `whitespace-diff.sh` — the measured-one-thing-claimed-about-all shape this block already records
-  twice, caught by review before it landed rather than after.
-- **PER-SITE PROTOCOL — both halves, neither substitutes.** `npm test` green is evidence about
-  ORDINARY-INPUT regressions and NO evidence about runtime divergence (reading 1). The two
-  instruments above are evidence about divergence and say nothing about ordinary input. Run BOTH
-  per site. And a `same` from a divergence suite means nothing until a writer provably REACHES the
-  site — a fixture that never reaches its site also prints `same`, which is why three sites above
-  are UNDETERMINED.
-- **WRITER → SURFACE MAP, from reading all four writers, so the per-site cost is inspectable
-  rather than guessed:** `_write_ledger` pads around the Status cell value → cell trim;
-  `_write_ledger_find` pads between the leading `|` and the `#` → the header FINDER;
-  `_write_ledger_hdr` pads the header row's trailing position → `column_count`; `_write_ledger_ev`
-  pads inside `**Unit %s2 —**` → `UNIT_HEADER`. **None of the four reaches any of the eight
-  remaining sites.** So a writer is part of each site's cost, as `:144` already demonstrated. That
-  sentence is a PLAN, not a finding.
+     nearly any block content passes it.
+     **THE GATE AS FIRST WRITTEN WAS PRE-DECIDED, and saying so is the point.** It read "mutate
+     the converted regex and check whether this case reddens" without naming the mutation CLASS.
+     A crude mutation (`^##` → `^@@`) reddens it — no heading dropped, every block changes — and
+     would license "the control is fine" for a reason unrelated to the risk. The mutation that
+     matters is a WHITESPACE-SET error, and on `## Evidence` (an ordinary ASCII space) it changes
+     nothing; reading 1 already says no input to this suite carries a divergent codepoint, so
+     **that mutation cannot redden the case and I knew the answer when I wrote the gate.** An open
+     gate whose outcome is already determined is a decision disguised as a question.
+     **What is actually true:** the weak control is an ORDINARY-INPUT problem, and it is not
+     confined to `^##\s+` — it degrades any change to block boundaries (the blank-line drop, the
+     `**Unit N —**` slicing, the join). Repairing it makes the case a meaningful ordinary-input
+     assertion; it does NOT make it a divergence instrument, and conflating those was the original
+     error. The repair belongs to the `abandoned` feature and blocks no site.
+- **CORRECTED TWICE — the count went one → two → FOUR, and each correction came from widening the
+  scan, never from new code.** Files carrying the divergent set, by a recursive scan of
+  `skills/agents-discipline/` (127 text files, 4 carrying): `whitespace-diff.sh` (regex `\s`
+  surfaces), `receipt-diff.sh` (`trimEnd()` vs `rstrip()`), `python-lib-checks.py` and
+  `jsapi_drive.py` (the `js_trim` corpus, which compares against node over ALL 30 disagreeing code
+  points — strictly more than a fixture can show), plus the fixture `port/js-trim.md` they drive.
+  A draft said "the ONLY instrument is `whitespace-diff.sh`" on the strength of having grepped
+  only `whitespace-diff.sh`; the fix for that said TWO, from a scan restricted to `*-diff.sh`.
+  **Both were the same error at different radii, and the second was committed while correcting the
+  first.** A negative is only as wide as the scan's root — say the root, or do not say the
+  negative.
+- **PER-SITE PROTOCOL — both halves, neither substitutes, and BOTH carry the reachability
+  caveat.** `npm test` green is evidence about ORDINARY-INPUT regressions **at sites some input
+  actually reaches**, and NO evidence about **`\s` divergence** (reading 1). **An earlier draft
+  put the reachability caveat on the divergence instrument ONLY and withheld it from `npm test`
+  — the same caveat, the same force, applied to one instrument.** Nothing has checked that any
+  input reaches `EXIT_CODE`, `CREATED`, the no-op detector, or either inline `re.search`; at a
+  site no input reaches, an `npm test` green is exactly as vacuous as a divergence suite's
+  `same`. Since this bullet IS the protocol the remaining commits follow, the asymmetry would
+  have handed each of them a green that means nothing while saying it means something. **The narrow
+  wording is load-bearing: an earlier draft here wrote "no evidence about RUNTIME DIVERGENCE",
+  which is flatly false** — `ledger-tests.mjs` re-runs the whole suite under `AD_RUNTIME=python`
+  (`:27`) and IS the port's primary parity gate; it is how the `counts[r.status]` prototype bug
+  was caught. A session reading the broad version would stop treating a suite red as a parity
+  signal. The divergence suites are the mirror: evidence about divergence, silent about ordinary
+  input. Run BOTH per site. And a `same` from a divergence suite means nothing until a writer
+  provably REACHES the site — a fixture that never reaches its site also prints `same`, which is
+  why three sites above are UNDETERMINED.
+- **WRITER → SURFACE MAP, from reading all four writers:** `_write_ledger` pads around the Status
+  cell value → cell trim; `_write_ledger_find` pads between the leading `|` and the `#` → the
+  header FINDER; `_write_ledger_hdr` pads the header row's trailing position → `column_count`;
+  `_write_ledger_ev` pads inside `**Unit %s2 —**` → `UNIT_HEADER`.
+  **⚠ THE HEDGE BELONGS ON THE REACHABILITY SENTENCE, NOT THE COST ONE.** "None of the four
+  reaches any of the eight remaining sites" is a COVERAGE claim derived from READING the writers,
+  and this block's own rule is that **a coverage claim is a mutation result, not a grep**. It is
+  UNVERIFIED until a site's conversion is mutated and the suite stays green. The cost sentence
+  that follows from it — a writer per site — is a plan resting on an unverified premise, which is
+  weaker than "a plan".
 - **A COVERAGE CLAIM IS A MUTATION RESULT, NOT A GREP.** Recorded because I got it wrong twice in
   one turn on the same sentence. "No suite reaches the receipt path" was first argued from two
   named suites, then re-argued from `grep -l ledger.check tests/*-diff.sh` and labelled
