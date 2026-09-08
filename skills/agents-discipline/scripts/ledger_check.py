@@ -408,17 +408,22 @@ for i in range(header_idx + 1, len(lines)):
     # `text.split("\n")`, so `l` contains no newline and Python's match-before-a-final-newline
     # case has nothing to fire on. Here `$` is end-of-string in both runtimes.
     #
-    # STILL DIVERGENT, DELIBERATELY, and it is not this commit's axis: `re.I` below folds
-    # non-ASCII onto ASCII where JS `/i` without `/u` refuses, so `## Ruleſ of thiſ ledger`
-    # (U+017F -> `s`) is the rules heading to the port and not to the oracle. `re.A` would close
-    # it -- after this substitution no `\s` remains on either line for `re.A` to narrow, which is
-    # exactly the precondition `:111-117` names -- but it would ship with no test vector, and the
-    # fold axis already carries one undischarged debt at `EXIT_CODE`. Fixed with its gate or not
-    # at all; doubling ungated debt to save a commit is the wrong trade.
+    # `re.I | re.A`, not bare `re.I`: Python's `re.I` folds U+017F (and U+0131/U+0130/U+212A)
+    # onto ASCII where JS `/i` without `/u` refuses, so a heading with U+017F in `Rules` was the
+    # boilerplate heading to the port alone -- the port skipped a section the oracle scored as
+    # evidence (MEASURED: `evidence: MISSING` here, `present` in node, on the fixture below).
+    # `re.A` is safe HERE by the `:111-117` precondition: no `\s`/`\w`/`\b`/`\d` remains for it
+    # to narrow (the whitespace is `JS_WS_CLASS`, an explicit class), and its ASCII-only folding
+    # has nothing to refuse -- every case-bearing element is ASCII, and the class members are
+    # whitespace, which has no case. Gated by `tests/fixtures/rules-heading-fold.md` and its
+    # ledger-tests case under `AD_RUNTIME=python node tests/ledger-tests.mjs`; only U+017F is
+    # exercised there, the other three fold characters are named as examples, not as gated.
     if re.match(r"^##" + JS_WS_CLASS + r"+", l):
         in_rules_section = bool(
             re.match(
-                r"^##" + JS_WS_CLASS + r"+Rules of this ledger" + JS_WS_CLASS + r"*$", l, re.I
+                r"^##" + JS_WS_CLASS + r"+Rules of this ledger" + JS_WS_CLASS + r"*$",
+                l,
+                re.I | re.A,
             )
         )
         continue

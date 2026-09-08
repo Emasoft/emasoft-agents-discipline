@@ -216,6 +216,35 @@ const cases = [
     reject: ["ledger complete"],
   },
   {
+    // Guards the rules-heading fold (TRDD-REJRD8V5 item 4): Python's bare `re.I` folds U+017F
+    // onto `s`, while JS `/i` without `u` refuses every non-ASCII->ASCII fold -- so a heading
+    // with U+017F in `Rules` is the skipped boilerplate section to the port and NOT to the
+    // oracle. The oracle scans the bullet under it: a code span with `/` and `.` scores strong,
+    // and its backticked bare path cites the one artifact that backs row 1. The port with the
+    // fold skips the whole section, so it reports `evidence: MISSING`, cites nothing, and lands
+    // row 1 in UNBACKED. `re.I | re.A` at the match closes it.
+    //
+    // The weak `**Unit 1 --** see the section below` line sits OUTSIDE the section so the only
+    // strong evidence, and the only citation, is behind the folded heading: both the exit and
+    // the `evidence:` line then discriminate, instead of the substring alone.
+    //
+    // U+017F rather than U+0131: the heading carries `s` three times and its `i` is inside
+    // `this`. U+017F has no canonical decomposition (NFC/NFD leave it alone); only NFKC maps it
+    // to `s`, and a fixture so "fixed" makes the heading match in BOTH runtimes -- both skip,
+    // both MISSING, both exit 1 -- so this case reds loudly rather than disarming. The guard at
+    // the bottom of this file pins the code point in the heading itself.
+    //
+    // MEASURED in three states -- oracle / port / port with `re.A` removed at the rules-heading
+    // match -- exit 0 / 0 / 1, `evidence:` present / present / MISSING.
+    name: "a rules heading holding U+017F is boilerplate to nobody, the bullet under it is evidence",
+    file: "tests/fixtures/rules-heading-fold.md",
+    want: 0,
+    rerun: true,
+    artifacts: ["reports/unit-1-output.txt"],
+    expect: ["evidence:    present", "artifacts:   1 cited, all present", "ledger complete"],
+    reject: ["evidence:    MISSING", "UNBACKED verified rows"],
+  },
+  {
     // Every one of these exits 0 UNCONDITIONALLY, which is the actual bar. #4 is the one
     // that matters most: `pytest -q || true` is the canonical always-pass idiom, it has a
     // real left half, and no whole-command regex can see it because the cheat lives in the
@@ -794,6 +823,14 @@ const foldFixture = readFileSync(resolve(root, "tests/fixtures/unit-header-fold.
 report(
   foldFixture.includes("**Un" + String.fromCharCode(0x131) + "t 1"),
   "fold fixture: U+0131 header vector intact (not normalized, deleted, or substituted)"
+);
+// Same guard, same blind spot, for the rules-heading fold vector: pins the HEADING, spelled as
+// an escape, because a normalized fixture reads `## Rules of this ledger` in both runtimes and
+// its case then fails on the wrong axis (both skip the section) instead of testing the fold.
+const rulesFoldFixture = readFileSync(resolve(root, "tests/fixtures/rules-heading-fold.md"), "utf8");
+report(
+  rulesFoldFixture.includes("## Rule" + String.fromCharCode(0x17f) + " of this ledger"),
+  "fold fixture: U+017F rules-heading vector intact (not normalized, deleted, or substituted)"
 );
 
 // ARMING CHECK for the three ALWAYS_TRUE pad vectors, load-bearing for the same reason as the
