@@ -242,6 +242,66 @@ _write_ledger_exit() {
     printf '**Unit 1 —** the runner ended with exit %s3\n' "$pad"
   } > "$dest"
 }
+# THIRD INVARIANT OF THE LINE ABOVE, and it is the one a future editor is most likely to break
+# because breaking it looks like an improvement: NO BACKTICKS. `is_strong_evidence` has a
+# code-span branch that runs BEFORE the two blockers named above, so backticking a path or a
+# command here would satisfy the evidence check by that route instead, `EXIT_CODE` would stop
+# being the sole path, and all six rows would go green while testing nothing.
+
+# SIXTH SURFACE: `CREATED` (oracle `:303`). Unlike the exit-code surface this one IS reached by
+# ordinary inputs -- 16 of the 31 `ledger-tests.mjs` drives carry a `Created:` line -- so `npm
+# test` is already a real gate for its ORDINARY-INPUT behaviour. What no test reached is its
+# whitespace class: not one writer in this file emitted a `Created:` line before this one, so the
+# divergence axis was unwatched in both runtimes.
+#
+# THIS WRITER IS THE ONLY ONE THAT HAS TO BUILD A SIDE FILE, because `CREATED` has exactly one
+# consumer and it is a comparison, not a parse. `createdMs` is used at `:321` for ONE thing:
+# `st.mtimeMs < createdMs` -> the cited artifact is STALE. So the pad can only move the verdict
+# when a cited artifact EXISTS -- otherwise it lands in `missingArtifacts` and the staleness
+# branch is never reached, the verdict is the same either way, and all six cases report a vacuous
+# `same`. Hence `art/created.md`, created next to the ledger (`bases[0]` is the ledger's own
+# directory, so a relative citation resolves there), and a Created date in 2099 so a file written
+# *now* is unambiguously older than it. No `touch` needed: the future date does that work.
+#
+# The polarity is therefore INVERTED from what "the regex stopped matching" suggests, and it is
+# worth stating because it is what makes the vectors discriminate. A pad the oracle's `\s+`
+# swallows (U+FEFF) leaves the match intact -> `createdMs` finite -> STALE. A pad it does not
+# swallow kills the match -> `createdMs` NaN -> the staleness rule is SKIPPED and the ledger
+# reads clean. Same/differ split as every surface above, so `CASE_ORACLE_EFFECT` still applies --
+# and it applies for the same PRECONDITION, not merely to avoid a copy: the split is a property
+# of the codepoint under JS `\s`, and the pad here sits where JS `\s` governs.
+#
+# The pad goes after the colon and AFTER the existing space, same convention as every writer
+# above: with an empty pad this must emit `Created: <date>`, which the oracle matches.
+#
+# TWO INVARIANTS, and the first is the INVERSE of the NO-BACKTICKS rule on the exit-code writer
+# two functions up -- do not cargo-cult that note onto this one.
+#   1. The citation must stay a BARE backticked PATH. Turn it into a command
+#      (`` `cat art/created.md` ``) and the citation regex yields nothing, `artifactPaths` is
+#      empty, the staleness branch is unreachable, and all six rows go vacuously `same`.
+#   2. The side file must stay NON-EMPTY. `if (st.size === 0) emptyArtifacts.push(p); else if
+#      (...createdMs...)` -- an empty artifact takes the FIRST branch and `createdMs` is never
+#      consulted, so a `touch` or `: >` in place of the `printf` kills the surface.
+# Both fail LOUD rather than silent: `_control`'s pad-had-no-effect check fires. They are
+# comments because they are already asserted, not because they are unasserted.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
+_write_ledger_created() {
+  local dest="$1" ws="$2" pad
+  pad="$(printf '%b' "$ws")"
+  mkdir -p "$(dirname "$dest")/art"
+  printf 'ran it\n' > "$(dirname "$dest")/art/created.md"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n'
+    printf 'Created: %s2099-01-01T00:00:00+0000\n\n' "$pad"
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '\n## Evidence\n\n'
+    # shellcheck disable=SC2016  # the backticks are a literal markdown code span, not a command
+    printf '**Unit 1 —** ran the suite by hand; wrote `art/created.md`.\n'
+  } > "$dest"
+}
 
 # Runs one runtime against its OWN COPY. Separate copies are load-bearing, not hygiene: the
 # checker APPENDS a receipt to the ledger it reads, so a shared file would hand the second
@@ -557,7 +617,22 @@ done
 # i.e. the pad is exactly between the space and the `3`. It rejects both misplacements: a pad
 # moved BEFORE `exit` leaves `exit 3` (a digit follows the space), and a pad moved to the line's
 # TAIL leaves `exit 3X` (likewise). Only the intended placement matches.
-_control _write_ledger_exit "control: exit-code writer" '\*\*Unit 1 .*exit [^ 0-9]'
+#
+# The trailing `[^ 0-9]*[0-9]` is not decoration: the bare `exit [^ 0-9]` above also accepts a
+# writer that DROPS the digit entirely (`exit X`), because it pins the pad's position relative to
+# `exit ` and says nothing about `3` surviving. The surface is `exit <ws><digit>`, so the anchor
+# names both parts.
+#
+# THE FIRST `[^ 0-9]` IS LOAD-BEARING AND MUST NOT BE FOLDED INTO THE `*`. Written as
+# `exit [^ 0-9]*[0-9]` -- which is how a review suggestion first landed here, applied without
+# being traced -- the `*` matches ZERO characters and `exit 3` satisfies it: the anchor then
+# accepts both misplacements it exists to reject, and stays green while doing so. Requiring one
+# mandatory pad character AND a surviving digit is what rejects all three wrong shapes:
+#   exit X3   -> [^ 0-9]=X, [^ 0-9]*=empty, [0-9]=3   MATCH   (the intended placement)
+#   exit 3    -> [^ 0-9] vs `3`                       reject  (pad moved before `exit`)
+#   exit 3X   -> [^ 0-9] vs `3`                       reject  (pad moved to the tail)
+#   exit X    -> X, then no digit                     reject  (digit dropped)
+_control _write_ledger_exit "control: exit-code writer" '\*\*Unit 1 .*exit [^ 0-9][^ 0-9]*[0-9]'
 
 # THE SIXTH CODE POINT DIVERGES THE OTHER WAY HERE TOO, and the table at the top already predicts
 # it: U+FEFF is JS whitespace, so `\s+` swallows the pad and the oracle still reads `exit<ws>3` --
@@ -570,13 +645,30 @@ for i in "${!CASE_NAME[@]}"; do
         "${CASE_ORACLE_EFFECT[$i]}"
 done
 
+# Same position-anchored form as the exit-code control, INCLUDING the mandatory first `[^ 0-9]`
+# whose absence would silently re-admit both misplacements -- see that control's comment; the
+# defect was copied to this surface before it was caught, so the two must stay the same shape.
+# The pad DESTROYS the token it sits in front of, so anchoring on `Created: 2099` would fail in
+# the red state and the green one alike.
+#   Created: X2099  -> MATCH   (intended)      XCreated: 2099 -> reject (digit after the space)
+#   Created: 2099X  -> reject                  Created: X     -> reject (date dropped)
+_control _write_ledger_created "control: created writer" 'Created: [^ 0-9][^ 0-9]*[0-9]'
+
+# The `differ` rows here move the oracle from STALE to clean rather than the other way round --
+# see the writer's comment for why the polarity is inverted. `CASE_ORACLE_EFFECT` is unchanged
+# because the same/differ split is a property of the codepoint under JS `\s`, not of the surface.
+for i in "${!CASE_NAME[@]}"; do
+  _case "created ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_created \
+        "${CASE_ORACLE_EFFECT[$i]}"
+done
+
 echo
 if [ "$fail" = 0 ]; then
   # "check(s) passed", not "trim vector(s) identical": `$pass` has always also counted the
   # controls, and a control does not assert identity -- it asserts a count, and now also that the
   # padded verdict DIFFERS from the unpadded one. A summary line that calls every check an
   # identity is the kind of over-claim this suite exists to catch.
-  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code surfaces) ---"
+  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"

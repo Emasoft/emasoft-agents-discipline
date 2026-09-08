@@ -188,8 +188,27 @@ TRAILING_PIPE = re.compile(r"(^|[^\\])\|$")
 SEPARATOR_CELL = re.compile(r"^:?-+:?$")
 RECEIPT_RE = re.compile(r"\n?<!-- agents-discipline-check: [^>]*-->\n?")
 PRIOR_RECEIPT = re.compile(r"<!-- agents-discipline-check: ([^ ]+) sha256:([0-9a-f]+) -->")
+# TWO INDEPENDENT DIVERGENCES ON ONE REGEX, and THIS COMMIT FIXES ONLY THE FIRST. MEASURED
+# against oracle `:303` over 13 probes -- port before: 6 disagreements; `\s`-fix only: 3; both: 0.
+#   Created:<U+001C>…, Created:<U+0085>…   port matched, node did NOT   (`\s` axis -- FIXED here)
+#   Created:<U+FEFF>…                      node matched, port did NOT   (`\s`, other direction)
+#   x<CR>Created: …, x<U+2028>…, x<U+2029>…  node matched, port does NOT (`/m` axis -- STILL OPEN)
+#
+# THE `/m` AXIS IS DELIBERATELY LEFT FOR ITS OWN COMMIT, not overlooked. ECMAScript's `^` under
+# `/m` matches after ANY LineTerminator -- LF, CR, U+2028, U+2029 -- while Python's `re.M`
+# recognizes LF alone, so the three probes above still disagree after this change. The fix is an
+# explicit lookbehind that makes `re.M` unnecessary; it is a SEPARATE revert from the whitespace
+# class, and its gate is a separate surface (`whitespace-diff.sh` emits LF only, so the six rows
+# that red this commit attribute entirely to `\s` and say nothing about line terminators).
+# Bundling the two would put the subtler half on the ungated side.
+#
+# Controls that had to NOT move, and did not: `Created: …` at string start and after LF (both
+# match in both runtimes); `Created:<NBSP>…` (NBSP is in both whitespace sets); Arabic-Indic
+# digits (both REFUSE -- `\d` was already `[0-9]`); and `xCreated: …` MID-LINE, which both REFUSE.
 CREATED = re.compile(
-    r"^Created:?\s+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:[+-][0-9]{2}:?[0-9]{2})?)", re.M
+    r"^Created:?" + JS_WS_CLASS
+    + r"+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:[+-][0-9]{2}:?[0-9]{2})?)",
+    re.M,
 )
 
 path = sys.argv[1] if len(sys.argv) > 1 else "DELEGATION.md"
