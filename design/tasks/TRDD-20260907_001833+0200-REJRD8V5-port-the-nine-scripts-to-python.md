@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T10:15:34+0200
+updated: 2026-09-08T11:04:12+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -884,7 +884,37 @@ was vacuous until a fifth `whitespace-diff.sh` writer was added — measure reac
 believing a green. (b) **The fold axis is a SECOND axis needing its OWN vector**: `EXIT_CODE`'s
 fold half is fixed but UNGATED, because `whitespace-diff.sh` carries no fold vector. Pattern to
 copy: `tests/fixtures/unit-header-fold.md` + its ledger-tests case. Owed for every `re.I` site.
-**NEXT: `CREATED` or the `^##\s+` pair — not `CITATION`,** which needs the `JS_WS_CLASS_BODY`
+**⏵ SITE 2 OF 8 IS DONE — `CREATED`, `b876c49`.** Diverged 6 of 13 probes before; the `\s` half
+landed here and closes 3 of the 6. Red/green: reverting only `JS_WS_CLASS`→`\s` reds exactly the
+6 new rows, 36 pre-existing green, control passes, U+FEFF opposite to the other five. `npm test`
+0, `test:diff` 0 across all 14.
+
+**⚠ THE `/m` HALF OF `CREATED` IS STILL OPEN, AND IT IS A NAMED ITEM, NOT "OWED".** JS `/m` makes
+`^` match after ANY LineTerminator (LF, CR, U+2028, U+2029); Python's `re.M` recognizes LF alone,
+so `x<CR>Created: …`, `x<U+2028>…` and `x<U+2029>…` still disagree with the oracle — the other 3
+of the 6. **The fix is written and measured (13/13 clean) and was deliberately backed out**: an
+explicit `(?:\A|(?<=[LF CR LS PS]))` lookbehind, `re.M` then dropped as unnecessary. Recover it
+from this commit's message and the comment at `CREATED`.
+Backed out because `whitespace-diff.sh` emits LF only, so the 6 red rows attribute ENTIRELY to
+the `\s` axis — bundling would have put the subtler half on the ungated side.
+**Its gate is a SEVENTH surface, and the shape is settled:** a writer identical to
+`_write_ledger_created` but with `\r` as the terminator, and a `_control` ONLY — no case loop.
+Do NOT put `\r` into the sixth writer: with `\r` the pre-fix port fails to match on all six
+pads, so the five non-FEFF rows agree with the oracle (both "clean") and the `\s` divergence is
+MASKED — measured, not feared. One real snag: `_control`'s node-vs-py message reads *"harness is
+broken; the cases below cannot be trusted"*, the wrong diagnosis for a genuine port divergence,
+so the surface needs either a distinguishing message or a `_case` with a hand-recorded baseline.
+**Two lessons site 2 adds.** (a) **A REVIEW FINDING IS A HYPOTHESIS.** The previous site's fork
+suggested `exit [^ 0-9]*[0-9]`; I applied it verbatim, un-traced, and copied it to the new
+anchor. `*` is zero-or-more, so `exit 3` — the misplacement the anchor exists to reject — matched
+with the class empty. One unchecked recommendation became two defects, both silently green. The
+correct form is `[^ 0-9][^ 0-9]*[0-9]`, and it was four lines of trace away.
+(b) **A site's DISCRIMINATOR may be several steps from its regex.** `CREATED` has one consumer
+and it is a staleness COMPARISON, so the pad moves nothing unless a cited artifact EXISTS — the
+writer has to build a side file and date the ledger 2099. Ask what the pattern's value is
+actually USED for before assuming a pad on it will move a verdict.
+
+**NEXT: the `^##\s+` pair or `CREATED`'s `/m` half — not `CITATION`,** which needs the `JS_WS_CLASS_BODY`
 factoring, and that must land IN the `CITATION` commit (a constant with no consumer is a
 dead-symbol commit). Its mechanics are settled and measured: the bracketed `JS_WS_CLASS` inside
 `[^...]` closes the class early, collapsing each path segment to ONE character — `app/stats.py`
