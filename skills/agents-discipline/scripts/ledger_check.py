@@ -373,8 +373,31 @@ for i in range(header_idx + 1, len(lines)):
     l = lines[i].strip(JS_TRIM)
     if l == "":
         continue
-    if re.match(r"^##\s+", l):
-        in_rules_section = bool(re.match(r"^##\s+Rules of this ledger\s*$", l, re.I))
+    # `\s` -> JS_WS_CLASS on BOTH expressions. These are one construct but two decisions, with
+    # different blast radii: the first says whether the line is a HEADING at all (a heading is
+    # dropped from the evidence scan entirely, so it decides what can corroborate a row), the
+    # second whether it is the boilerplate section to skip. Measured in both directions --
+    # `##<U+001C>Notes` was a heading to the port alone, `##<U+FEFF>Notes` to node alone.
+    # Gated by whitespace-diff.sh's `heading-finder` and `rules-heading` surfaces, one writer
+    # per line, so reverting either of the two alone reds exactly one of them.
+    #
+    # `$` NEEDS NO CONVERSION, and that is measured rather than skipped: `lines` is
+    # `text.split("\n")`, so `l` contains no newline and Python's match-before-a-final-newline
+    # case has nothing to fire on. Here `$` is end-of-string in both runtimes.
+    #
+    # STILL DIVERGENT, DELIBERATELY, and it is not this commit's axis: `re.I` below folds
+    # non-ASCII onto ASCII where JS `/i` without `/u` refuses, so `## Ruleſ of thiſ ledger`
+    # (U+017F -> `s`) is the rules heading to the port and not to the oracle. `re.A` would close
+    # it -- after this substitution no `\s` remains on either line for `re.A` to narrow, which is
+    # exactly the precondition `:111-117` names -- but it would ship with no test vector, and the
+    # fold axis already carries one undischarged debt at `EXIT_CODE`. Fixed with its gate or not
+    # at all; doubling ungated debt to save a commit is the wrong trade.
+    if re.match(r"^##" + JS_WS_CLASS + r"+", l):
+        in_rules_section = bool(
+            re.match(
+                r"^##" + JS_WS_CLASS + r"+Rules of this ledger" + JS_WS_CLASS + r"*$", l, re.I
+            )
+        )
         continue
     if l.startswith("|"):
         continue  # still in the table

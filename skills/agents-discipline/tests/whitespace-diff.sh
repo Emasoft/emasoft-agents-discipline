@@ -303,6 +303,68 @@ _write_ledger_created() {
   } > "$dest"
 }
 
+# SEVENTH AND EIGHTH SURFACES: the two `##` heading expressions (oracle `:181-182`, port
+# `ledger_check.py:376-377`). They are ONE two-line construct in the source and TWO writers here,
+# and the split is the point -- a single writer would leave one of the two lines revertible with
+# this suite still green, which is the mutation a single-writer version of this could not kill.
+#
+#   :376  `^##\s+`                              -- is this line a HEADING at all?
+#   :377  `^##\s+Rules of this ledger\s*$`      -- if so, is it the boilerplate section to SKIP?
+#
+# EACH WRITER ISOLATES ONE LINE, measured, not arranged by hope:
+#   _write_ledger_rules pads AFTER the space, so `^##\s+` matches on that space in BOTH runtimes
+#   whatever the pad is -- :376's class cannot move it, and only :377's can.
+#   _write_ledger_head pads BETWEEN `##` and the space, so it decides whether :376 fires at all;
+#   its heading text is not the rules heading, so :377 fails in both runtimes either way.
+# Reverting either production line alone therefore reds exactly one of the two loops.
+#
+# BOTH OBSERVABLES ARE `evidence: MISSING` vs `present`, arranged so the padded line carries the
+# unit's SOLE strong evidence. Without that the pad still lands but the verdict does not move:
+# the first draft of both fixtures put a second backed unit in the ledger and every row would
+# have compared exit-0 to exit-0. Measured before writing either one.
+#
+# THE CONTROL EXITS 1, AND THAT IS CORRECT rather than tolerated. With an empty pad the line IS a
+# heading (or IS the rules heading), so the evidence is skipped by construction and the ledger is
+# INCOMPLETE. `_control` does not require exit 0 -- it requires both runtimes to AGREE, the status
+# counter to have been reached (`verified: 1`, which this state does print; measured, because a
+# grep written as `verified: [0-9]+` misses the real four-space output and would have condemned a
+# healthy control), and the `X` pad to MOVE the verdict, which it does: MISSING -> present.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
+_write_ledger_rules() {
+  local dest="$1" ws="$2" pad
+  pad="$(printf '%b' "$ws")"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n\n'
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '\n## Evidence\n\n'
+    printf '**Unit 1 —** see the note below\n'
+    printf '## %sRules of this ledger\n' "$pad"
+    printf 'the runner ended with exit 3\n'
+  } > "$dest"
+}
+
+# NO BACKTICKS AND NO DOT on the evidence line below, same invariant the exit-code writer states:
+# `EXIT_CODE` must be the SOLE route to strong evidence, or a case passes on a sibling predicate
+# and asserts nothing about the surface it names.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
+_write_ledger_head() {
+  local dest="$1" ws="$2" pad
+  pad="$(printf '%b' "$ws")"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n\n'
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '\n## Evidence\n\n'
+    printf '**Unit 1 —** see the note below\n'
+    printf '##%s Notes on exit 3\n' "$pad"
+  } > "$dest"
+}
+
 # Runs one runtime against its OWN COPY. Separate copies are load-bearing, not hygiene: the
 # checker APPENDS a receipt to the ledger it reads, so a shared file would hand the second
 # runtime a document the first had already modified, and the comparison would be of two
@@ -662,13 +724,54 @@ for i in "${!CASE_NAME[@]}"; do
         "${CASE_ORACLE_EFFECT[$i]}"
 done
 
+# Position-anchored, same forced choice the exit-code and created controls document: a correctly
+# placed pad DESTROYS the token it sits in front of, so anchoring on the surviving token would
+# fail in the red and green states alike. `Rules` is the token the pad precedes.
+#   ## XRules...  -> MATCH (intended)        ## Rules...   -> reject (pad dropped or moved before)
+#   ## Rules...X  -> reject (pad at tail)    X## Rules     -> reject (line-initial `\|`... rule)
+_control _write_ledger_rules "control: rules-heading writer" '## [^ R][^ R]*Rules'
+
+# The :377 half. The pad sits inside the `\s+` that must span from `##` to `Rules`, so it decides
+# whether this line is recognised as the boilerplate section -- and therefore whether the evidence
+# line BELOW it is skipped as template prose or attributed to unit 1.
+#
+# CASE_ORACLE_EFFECT applies UNCHANGED, and that was measured rather than assumed: against node's
+# own empty-pad baseline (exit 1, evidence MISSING), U+FEFF leaves the rules regex matching -- js
+# `\s+` swallows it -- so the verdict does not move (`same`); the other five stop the `\s+` short
+# of `Rules`, the section is no longer recognised, the evidence line is attributed, and the oracle
+# moves to exit 0 (`differ`). An earlier design that padded a DIFFERENT position needed an
+# inverted array; this one does not, and the difference is the pad's placement, not the codepoints.
+for i in "${!CASE_NAME[@]}"; do
+  _case "rules-heading ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_rules \
+        "${CASE_ORACLE_EFFECT[$i]}" 'evidence:    present'
+done
+
+# The pad sits BETWEEN `##` and the space, so `[^ ]` immediately after `##` is exactly the intended
+# placement and both misplacements leave a space there.
+#   ##X Notes  -> MATCH (intended)           ## Notes   -> reject (pad dropped/moved before)
+#   ## NotesX  -> reject (pad at tail)
+_control _write_ledger_head "control: heading-finder writer" '##[^ ][^ ]* Notes'
+
+# The :376 half -- whether the line is a HEADING AT ALL, which is the more consequential of the
+# two: a heading is dropped from the evidence scan entirely, so this expression decides what can
+# corroborate a row. The heading text here is deliberately NOT the rules heading, so :377 fails in
+# both runtimes on every pad and cannot contribute; only :376's whitespace class can move this.
+#
+# The marker is what makes the rows attributable. Without it a fixture that became unreadable
+# would exit 2, differ from the exit-1 baseline, and satisfy the effect check while proving
+# nothing -- the same vacuity the header-finder surface added its marker to close.
+for i in "${!CASE_NAME[@]}"; do
+  _case "heading-finder ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_head \
+        "${CASE_ORACLE_EFFECT[$i]}" 'evidence:    present'
+done
+
 echo
 if [ "$fail" = 0 ]; then
   # "check(s) passed", not "trim vector(s) identical": `$pass` has always also counted the
   # controls, and a control does not assert identity -- it asserts a count, and now also that the
   # padded verdict DIFFERS from the unpadded one. A summary line that calls every check an
   # identity is the kind of over-claim this suite exists to catch.
-  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created surfaces) ---"
+  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + rules-heading + heading-finder surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"
