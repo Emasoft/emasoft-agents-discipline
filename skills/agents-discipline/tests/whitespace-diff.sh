@@ -329,6 +329,14 @@ _write_ledger_created() {
 # counter to have been reached (`verified: 1`, which this state does print; measured, because a
 # grep written as `verified: [0-9]+` misses the real four-space output and would have condemned a
 # healthy control), and the `X` pad to MOVE the verdict, which it does: MISSING -> present.
+#
+# BUT `verified: 1` DOES LESS WORK HERE than on the exit-0 controls, and the difference is worth
+# naming because the next reader will otherwise re-litigate the exit code. There it means "the
+# parse reached the counter AND the ledger closed"; here only the former, since the ledger is
+# failing on evidence by design. So this control alone cannot separate "evidence deliberately
+# skipped" from "evidence broken for an unrelated reason". THE `X`-PAD CHECK IS WHAT CLOSES THAT:
+# it proves the fixture CAN reach `evidence: present`, so MISSING is a property of the pad rather
+# than a permanent state of the fixture. That pairing is what makes a failing baseline acceptable.
 # shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
 _write_ledger_rules() {
   local dest="$1" ws="$2" pad
@@ -349,6 +357,17 @@ _write_ledger_rules() {
 # NO BACKTICKS AND NO DOT on the evidence line below, same invariant the exit-code writer states:
 # `EXIT_CODE` must be the SOLE route to strong evidence, or a case passes on a sibling predicate
 # and asserts nothing about the surface it names.
+#
+# THE `## Evidence` LINE ABOVE THE PADDED ONE IS LOAD-BEARING, AND NO CONTROL CAN SEE IT.
+# `in_rules_section` is STICKY STATE across lines: when `^##\s+` does NOT match, the `if` body
+# never runs, so the flag KEEPS ITS PREVIOUS VALUE. This surface works because that previous
+# value is False -- set by `## Evidence`, which is a heading in both runtimes and is not the
+# rules heading. Make the preceding heading the RULES heading instead and the flag is True on
+# entry, the non-matching runtime skips the reset, and the padded line is dropped as boilerplate
+# in BOTH -- collapsing the divergence into six vacuous OKs.
+# The control cannot catch that: it runs with an EMPTY pad, where `^##\s+` matches in both
+# runtimes and the stateful path is never exercised at all. So this invariant is held by comment
+# and by nothing else. Reorder or drop `## Evidence` and this surface silently stops testing.
 # shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
 _write_ledger_head() {
   local dest="$1" ws="$2" pad
@@ -383,6 +402,14 @@ _verdict() {
   printf 'exit=%s\n%s\n' "$rc" "${out//$mine/<LEDGER>}"
 }
 
+# `grep -qF -- "$marker"`, and the `--` is not defensive style. Without it a marker that STARTS
+# WITH `-` is parsed by grep as OPTIONS rather than a pattern, grep exits non-zero having matched
+# nothing, and `_case` reports `oracle moved, but not via ...` on output that contains the marker
+# verbatim -- sending the maintainer to the checker's report text when the bug is in this line.
+# Measured: `-> ledger complete` did exactly that on all five `differ` rows of both new surfaces.
+# It failed LOUD, but only because those rows assert must-CONTAIN; a `same` row's must-NOT-contain
+# would have been satisfied by the same broken grep in total silence.
+#
 # $5 is OPTIONAL: a string the ORACLE's padded output must contain when $4 is `differ`, and must
 # NOT contain when $4 is `same`. Absent (the three original surfaces) it is skipped, so their four
 # -argument calls are unchanged.
@@ -427,12 +454,12 @@ _case() {
   # ATTRIBUTION. Without this the effect check above proves only that SOMETHING moved.
   # shellcheck disable=SC2016  # the backticks below are literal report text, not command substitution
   if [ -n "$marker" ]; then
-    if [ "$effect" = differ ] && ! printf '%s' "$o" | grep -qF "$marker"; then
+    if [ "$effect" = differ ] && ! printf '%s' "$o" | grep -qF -- "$marker"; then
       printf 'DIVERGE  %-38s oracle moved, but not via `%s`; not attributable\n' "$name" "$marker"
       printf '    padded  : %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
       exit 1
     fi
-    if [ "$effect" = same ] && printf '%s' "$o" | grep -qF "$marker"; then
+    if [ "$effect" = same ] && printf '%s' "$o" | grep -qF -- "$marker"; then
       printf 'DIVERGE  %-38s oracle must NOT reject this pad, but emitted `%s`\n' "$name" "$marker"
       printf '    padded  : %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
       exit 1
@@ -743,7 +770,7 @@ _control _write_ledger_rules "control: rules-heading writer" '## [^ R][^ R]*Rule
 # inverted array; this one does not, and the difference is the pad's placement, not the codepoints.
 for i in "${!CASE_NAME[@]}"; do
   _case "rules-heading ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_rules \
-        "${CASE_ORACLE_EFFECT[$i]}" 'evidence:    present'
+        "${CASE_ORACLE_EFFECT[$i]}" '-> ledger complete'
 done
 
 # The pad sits BETWEEN `##` and the space, so `[^ ]` immediately after `##` is exactly the intended
@@ -760,9 +787,19 @@ _control _write_ledger_head "control: heading-finder writer" '##[^ ][^ ]* Notes'
 # The marker is what makes the rows attributable. Without it a fixture that became unreadable
 # would exit 2, differ from the exit-1 baseline, and satisfy the effect check while proving
 # nothing -- the same vacuity the header-finder surface added its marker to close.
+#
+# THE MARKER IS THE VERDICT LINE, NOT `evidence:    present`, AND THAT IS DELIBERATE. Both flip
+# together (the evidence flip is WHY the verdict flips), so they are equally attributable -- but
+# the `evidence:` value is COLUMN-ALIGNED, so its marker would encode the report's padding, and
+# the two failure directions are asymmetric. On a `differ` row a stale marker fires loudly
+# ("moved, but not via ..."). On the `same` row the assertion is must-NOT-contain, which a
+# never-matching string satisfies VACUOUSLY AND FOREVER -- and that row is U+FEFF, the one
+# carrying the opposition the whole design rests on. A field rename or a tab would have gutted it
+# in silence. `-> ledger complete` has no alignment dependency, and `-> ledger INCOMPLETE.` does
+# not contain it (grep -F is case-sensitive), so the same/differ split still discriminates.
 for i in "${!CASE_NAME[@]}"; do
   _case "heading-finder ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_head \
-        "${CASE_ORACLE_EFFECT[$i]}" 'evidence:    present'
+        "${CASE_ORACLE_EFFECT[$i]}" '-> ledger complete'
 done
 
 echo
