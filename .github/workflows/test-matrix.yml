@@ -33,14 +33,24 @@ jobs:
       - name: Run zero-dependency test suite
         run: npm test
 
-      # The twelve *-diff.sh suites are the PORT'S PRIMARY FIDELITY INSTRUMENT -- each runs the
+      # EVERY tests/*-diff.sh suite is the PORT'S PRIMARY FIDELITY INSTRUMENT -- each runs the
       # .mjs oracle and the .py port on the same input and compares exit code, stdout and
       # stderr. Until 2026-09-07 not one of them was wired to CI or to `npm test`, so every
       # "identical" claim in the port rested on someone remembering to type them by hand.
+      # Stated as the GLOB, never as a count: this said "the twelve" while fourteen existed,
+      # because `test:diff` globs and no prose number can track that. The set is whatever
+      # tests/*-diff.sh matches at run time -- to audit it, list the glob, do not trust a comment.
       # NOT a matrix-wide step: they are bash, and SEVERAL of them probe DIRECTORY PERMISSION
       # BITS (chmod 300), which has no Windows meaning. Windows keeps node-suite coverage only --
       # deliberate, not accidental. Reasoning and the darwin row-count baseline: TRDD-REJRD8V5.
-      # Making the twelve Windows-tolerant would NOT make it safe to drop this `if:` -- npm's
+      #
+      # THE CONSEQUENCE, stated because the chmod reason above does not imply it: `npm test`
+      # leaves AD_RUNTIME unset and therefore runs the ORACLE only, so on Windows NOTHING in
+      # this workflow exercises the Python port. Port fidelity is gated on ubuntu and macos
+      # alone. That is a real coverage limit, not a technicality -- a Windows-only port defect
+      # (path separators, cmd quoting, CRLF) would pass this workflow green.
+      #
+      # Making them Windows-tolerant would NOT make it safe to drop this `if:` -- npm's
       # script-shell defaults to cmd there, where this POSIX loop is not valid syntax (RECALLED,
       # not measured here, and a repo .npmrc could change it -- so lean on the chmod reason).
       - name: Run node-vs-python differential suites
