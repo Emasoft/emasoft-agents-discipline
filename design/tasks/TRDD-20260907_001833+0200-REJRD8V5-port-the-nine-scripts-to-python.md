@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T11:54:47+0200
+updated: 2026-09-08T12:29:30+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1167,12 +1167,23 @@ and as the whole span (`pytest<U+0085>`.strip(JS_TRIM) is still 7 chars). Interi
 shape all six share, hence the only shape one writer can cover; the edges are fixed by the same
 expression and are NOT separately gated.
 
-**`acceptance_command` IS DEFERRED, and the reason is structural rather than a config accident.**
-A command returned from it is precisely what makes the re-run EXECUTE it, and this differential
-ships only non-runnable acceptances by design — so no row in this suite can gate that site, and a
-fix there would land ungated. It is the MORE consequential of the two (it decides whether a
-command RUNS, so its divergence is side-effecting) and its verdict direction is NOT established
-by anything measured so far. It needs its own harness.
+**`acceptance_command` IS DEFERRED, and the reason I recorded for the deferral — "it needs its own
+harness" — IS REFUTED. MEASURED 2026-09-08.** The recorded argument was that a command returned
+from it is precisely what makes the re-run EXECUTE it, and this differential ships only
+non-runnable acceptances by design, so no row here could ever gate the site. The premise is true
+and the conclusion does not follow: `acceptance_command` runs BEFORE the no-op detector, and a
+no-op acceptance is REJECTED WITHOUT EXECUTION. Run with `SKIP_RERUN` unset, on a `verified` row
+whose acceptance cell is the code span `` `echo ok` ``:
+
+      ACCEPTANCE DID NOT REPRODUCE:
+        - #1 $ echo ok -> no-op acceptance — exits 0 by construction, tests nothing
+      -> ledger INCOMPLETE.
+
+Recognized, named in the output, verdict moved — and nothing ran. So the site IS observable
+through the ORDINARY verdict (recognized ⇒ `INCOMPLETE`, unrecognized ⇒ `complete`), which is the
+shape every other row in this suite already has. It is still the MORE consequential of the two
+sites (it decides whether a command RUNS), and its verdict DIRECTION is still unmeasured. What is
+gone is the reason it could not be gated cheaply.
 **Its guard nesting IS established, and was not before:** `if not rerun_skipped:` sits at column
 0 (`:719`), the call at column 8 (`:744`), and NO column-0 line lies between them — so nothing
 closes the block first. The earlier form of this claim rested on `744 > 719`, which is only file
@@ -1184,8 +1195,12 @@ before it shipped into a source comment.
 Written 2026-09-08 after a review fork made the point that lands hardest in this whole task:
 **the `\s` sweep is not the work.** The sweep has a numbered queue and a per-site protocol, so it
 moves. Four divergences of the SAME CLASS sat in a prose paragraph with no owner and no trigger,
-and one of them carries the largest stated blast radius in the file. Queues get drained;
-paragraphs get re-read and re-deferred. So they are numbered here with the sweep, not below it.
+and went unscheduled for two sessions while the sweep beside them had a numbered protocol. That
+observation is the whole warrant. **"Queues get drained; paragraphs get re-read and re-deferred"
+is what I first wrote here, and it is a general law inferred from one instance** — the numbering
+is prose in the same markdown file, nothing enforces draining, and the sentence is persuasive to
+its own author: it makes reformatting feel like it solved the problem. Numbered with the sweep on
+the observation alone.
 
 **A SECOND WARNING FROM THE SAME FORK: "sites 1-4 done" counts CONVERSIONS, NOT COVERAGE.** Each
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
@@ -1194,9 +1209,12 @@ positions are fixed but ungated. Do not read the site count as coverage.
 1. **no-op detector `:565`** — ×2 `\s` in the `\Z` alternation (`(?:\s+[^&|;]*)?`, `command\s+true`).
    TWO occurrences ⇒ **TWO separate mutations**, per the precedent correction above.
 2. **`in_rules_section` sticky-TRUE** — nothing exercises a divergence that leaves the flag true
-   across several following lines. **Largest blast radius named anywhere in this TRDD**, and the
-   shape a real BOM-prefixed ledger would actually hit. It has been recorded and unscheduled for
-   two sessions; it is now #2 rather than a sentence.
+   across several following lines. **The shape a real BOM-prefixed ledger would actually hit**,
+   which is concrete, checkable, and enough on its own to justify the position. It read "largest
+   blast radius named anywhere in this TRDD" until a fork pointed out that is a superlative over
+   the whole document resting on a comparison never made — item 3 spans four LineTerminators in a
+   document-scanning regex and was never ranked against it. Recorded and unscheduled for two
+   sessions; now #2 rather than a sentence.
 3. **`CREATED`'s `/m` LineTerminator half** — ECMAScript `^` under `/m` matches after LF, CR,
    U+2028 and U+2029; Python `re.M` recognizes LF alone. Fix source already recorded above.
 4. **`re.I` / U+017F fold at the rules heading** — `## Ruleſ of thiſ ledger` is the rules heading
@@ -1206,31 +1224,56 @@ positions are fixed but ungated. Do not read the site count as coverage.
 6. **`CITATION` `:150`** — ×2 inside a NEGATED class, so it needs `JS_WS_CLASS_BODY` (the existing
    `JS_WS_CLASS` is bracketed and closes the class early). **LAST**, and the constant must land IN
    that commit or it is a dead symbol.
-7. **`acceptance_command`** — its own harness; spec below.
+7. **`acceptance_command`** — an ordinary row in this suite, NOT its own harness. Spec below, and
+   it is ORDERED AFTER item 1 for a reason item 1 must not be finished without reading.
 
-### The `acceptance_command` harness — SPECIFIED, so the deferral cannot decay into abandonment
+### `acceptance_command` — the harness spec is WITHDRAWN; it is a normal row
 
-A deferral with no owner and no entry condition is indistinguishable from a decision never to do
-it, and "needs its own harness" was exactly that shape until now. It IS constructible, and the
-earlier finding that killed the "no orphan survives" test does NOT apply: that one had no
-legitimate input that could red it, whereas here `acceptance_command` returning a command versus
-`None` is directly observable and BOTH outcomes are legitimate for different inputs.
+**The ~40-line executing harness this section used to specify is withdrawn, and BOTH review forks
+independently found the same defect in it before the measurement did.** Recorded in full because
+the withdrawn design's flaw is the reusable part:
 
-Smallest honest form — `SKIP_RERUN` **unset**, acceptance cell a code span whose command leaves an
-observable trace (writes a file, or exits non-zero):
-- **control:** ordinary space in the span ⇒ both runtimes run it ⇒ trace present in BOTH; `X` pad
-  (whitespace in neither) ⇒ command not recognized ⇒ trace absent in BOTH. Legitimate inputs, and
-  it can fail.
-- **case:** a divergent pad ⇒ one runtime runs it and the other does not ⇒ trace present under one.
+- **Its control did not pair with its case.** The control asserted the two runtimes AGREE (space ⇒
+  trace in both; `X` ⇒ trace in neither) while the case asserted they DIVERGE. Both control legs
+  are satisfied by a harness in which the two legs are THE SAME RUNTIME — so it was a fixture check
+  wearing a differential's clothes, and a green control would have licensed no claim about the
+  port at all. `_control` is node-vs-node too, but *by construction* and without that dressing.
+- **The arming input was already in my hands, filed under the wrong claim.** The control that
+  proves the case CAN red is the case's own comparator run against inputs whose answer is known to
+  be NO — the space row and the `X` row, asserted as `NOT exactly-one` rather than as agreement.
+- **The spec had also dropped `_case`'s per-pad ORACLE expectation** (`CASE_ORACLE_EFFECT`), which
+  is the assertion that makes the row satisfy the every-check-needs-a-control rule. Its absence was
+  invisible because the two assertions the spec did carry looked complete.
 
-It cannot be a row in `whitespace-diff.sh`: that suite exports `SKIP_RERUN` globally and ships
-non-runnable acceptances BY DESIGN. ~40 lines borrowing `_case`'s shape, plus a writable fixture
-dir and cleanup.
+**What replaces it, from the measurement above: a writer, a control and six rows — the same shape
+as sites 1-4.** `SKIP_RERUN` unset for these rows only; acceptance cell is a code span holding a
+NO-OP command, so the no-op detector rejects it and nothing executes; the observable is the
+verdict, exactly as everywhere else. No trace file, no cleanup, no `trap`, no new execution
+capability for this suite — which also retires the strongest argument against building it at all.
 
-**COMMENT BUDGET, adopted 2026-09-08:** site 4 shipped a 24-line comment for a one-token change.
-From here: ~3 lines at the site plus a pointer to this TRDD. The TRDD is the durable record;
-duplicating it inline is where the ceremony lives, and the file is accreting commentary faster
-than code.
+**⚠ ORDERING DEPENDENCY, and it is NEW — the two sites CONFOUND EACH OTHER on the same string.**
+The no-op detector (item 1) carries bare `\s` too. A padded no-op command is read by BOTH
+predicates, so until item 1 is converted a moved verdict cannot be attributed to either site. Item
+1 first is therefore load-bearing, not merely the order I happened to pick.
+
+**STILL UNMEASURED, and it must be measured BEFORE the writer is written** (a fork named it and it
+is the harder question than the control one): the predicate is `re.search(\s)` **AND**
+`re.match(r"^[A-Za-z0-9_./-]+")`, and that second conjunct anchors at position 0. A LEADING pad
+fails the prefix match in BOTH runtimes; a TRAILING pad may already be gone to `strip(JS_TRIM)`.
+So the same three-position analysis site 4 needed is mandatory here, and it may prove some code
+point unreachable at every position — in which case that row must not exist. Do not assume
+interior-only by analogy with site 4; that analogy is what produced the wrong direction twice
+before in this task.
+
+**COMMENT BUDGET — REFRAMED 2026-09-08 from a LINE cap to a CONTENT rule, because the line cap was
+the wrong metric and would have broken at `CITATION`.** Site 4 shipped 24 comment lines for a
+one-token change, but its bloat was not length — it was NARRATING THE MEASUREMENT HISTORY ("an
+earlier draft did the latter under a MEASURED heading" is session archaeology, not code knowledge).
+The rule: **a site comment states the INVARIANT and WHY THE OBVIOUS ALTERNATIVE BREAKS IT.**
+Measurement history, draft corrections and predictions about unrun work go here instead. That
+lands site 4 near 6 lines and lets `CITATION` have 8 without a special case — a 3-line cap could
+not carry why `JS_WS_CLASS` must never be substituted into a negated class, which IS the
+correctness content and is precisely the sentence that gets "simplified" back into the bug later.
 
 **NEXT: queue item 1, the no-op detector — not `CITATION`,** which needs the `JS_WS_CLASS_BODY`
 factoring, and that must land IN the `CITATION` commit (a constant with no consumer is a
