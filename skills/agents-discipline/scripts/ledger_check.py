@@ -79,6 +79,10 @@ NOT_WORD_AFTER = r"(?![0-9A-Za-z_])"
 # trims whitespace or a paste through anything that normalizes. Numbers survive all of that, and
 # they are the only form in which a reader can check the set against the measurement above.
 # Re-derive it by finding, in each runtime, the code points cp where (cp + "x" + cp) trims to "x".
+# COUPLING -- READ BEFORE EDITING THIS TUPLE: every converted regex reads this set through
+# JS_WS_CLASS below, and those uses are hundreds of lines away with no per-site constant between
+# them. Adding or removing one code point here silently rewrites all of them at once, in a way no
+# single call site shows. Re-derive in BOTH runtimes; never adjust this tuple by eye.
 _JS_TRIM_CODEPOINTS = (
     0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0, 0x1680,
     0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
