@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T11:41:22+0200
+updated: 2026-09-08T11:54:47+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1090,13 +1090,19 @@ alone cannot show, because green never exercises a broken production line.
 substituting an always-present string reds the `same` row (`must NOT reject this pad`). The
 assertion can fail in each direction for its own reason.
 
-**`--` SWEEP: the class is CLOSED, measured rather than assumed.** A review fork argued the fix
-was incomplete and a wider sweep was owed. It is not: exactly two calls take caller-supplied
-argument-position data (`_case`'s two marker greps) and both carry `--`. `_control`'s
-`grep -qE "^> ${anchor}"` puts a literal `^> ` in front of the caller's string, so an anchor can
-never reach position 1 — safe by construction, not by luck about today's values; the hazard
-returns only if that prefix is ever dropped. Every `tr` call takes fixed sets. Do not re-open
-this on the strength of the fork's claim. `npm test` 0, `test:diff` 0,
+**`--` SWEEP: three sites CHECKED; the CLASS is NOT proven closed.** A review fork argued the fix
+was incomplete. Three specific refutations hold and are worth keeping: `_case`'s two marker greps
+both carry `--`; `_control`'s `grep -qE "^> ${anchor}"` puts a literal `^> ` ahead of the caller's
+string, so an anchor cannot reach position 1 — by construction, not luck about today's values,
+and the hazard returns the moment that prefix is dropped; the `tr` calls found take fixed sets.
+
+**"The class is closed" is a UNIVERSAL NEGATIVE derived from grep, and it is NOT established.**
+The first wording of this bullet asserted it and added "do not re-open this" — self-sealing, on a
+foundation grep cannot carry, which is worse than the over-claim itself because it instructs the
+next reader not to look. `grep -nE 'grep [^|]*"\$'` misses an unquoted `$var`, a `${var}` reached
+by concatenation, and a grep invoked through a variable command name; the fork's class was
+argument-position STRINGS, which also covers `sed`, `awk`, `diff`, `join` and `printf` formats,
+and only `grep` and `tr` were ever enumerated. Re-check before relying on it. `npm test` 0, `test:diff` 0,
 known-divergence set unchanged, ruff 6 and mypy 7 measured at BOTH endpoints (identical finding
 text, not just equal counts; temp-filename confirmed inert by a positive control).
 
@@ -1121,7 +1127,45 @@ needs its own writer and an effects array unrelated to `CASE_ORACLE_EFFECT`.
 across several following lines — the largest blast radius (every later line silently dropped from
 evidence), and the shape a real BOM-prefixed ledger would hit.
 
-**NEXT: the two inline `re.search(r"\s", inner)` sites, or the no-op detector — not `CITATION`,** which needs the `JS_WS_CLASS_BODY`
+**⏵ SITE 4 OF 8 IS DONE — `is_strong_evidence`, `f4ca402`.** The span test now spells
+`JS_WS_CLASS`. RED 6 `strong-span` rows with 0 other and controls green; GREEN 63 checks (was
+56), 0 diverge; `npm test` 0, `test:diff` 0 (known set unchanged), shellcheck 0, ruff 6/mypy 7
+unchanged. The RED run IS the mutation proof — reverting that one line reds exactly its own six.
+
+**TWO THINGS A FUTURE SESSION MUST NOT UNDO AT THIS SITE:**
+- **The fixture pads a RUNNER WORD (`pyt<pad>est`), not two arbitrary letters.** Both properties
+  are measured. (1) With `a<pad>b` the unpadded ledger is ALREADY not-strong, so `_control`'s
+  `X` pad moves nothing and the control cannot arm — six vacuous OKs behind a green control.
+  (2) `a<pad>b` also INVERTS the oracle effect relative to `CASE_ORACLE_EFFECT` (oracle moves for
+  U+FEFF, not for the other five), so the shared array would assert backwards on every row. The
+  runner word fixes both at once.
+- **The marker is `-> ledger INCOMPLETE.` here, inverted from every writer above.** The rule, not
+  the string: **the marker is the verdict the `differ` rows move TO.** The earlier writers start
+  INCOMPLETE and a breaking pad completes them; this one starts complete and a Python-only
+  whitespace pad breaks it. A copied `-> ledger complete` happens to fail loudly in both
+  directions here — that is luck, not design.
+
+**COVERAGE LIMIT, STATED RATHER THAN HIDDEN: the interior position ONLY is gated.** A review fork
+caught the first draft of the production comment asserting that `strip(JS_TRIM)` leaves only
+interior pads. MEASURED, and it is true of exactly ONE code point: U+FEFF is in the trim set and
+so is removed at the edges, while U+001C..U+001F and U+0085 are not and survive leading, trailing
+and as the whole span (`pytest<U+0085>`.strip(JS_TRIM) is still 7 chars). Interior is the one
+shape all six share, hence the only shape one writer can cover; the edges are fixed by the same
+expression and are NOT separately gated.
+
+**`acceptance_command` IS DEFERRED, and the reason is structural rather than a config accident.**
+A command returned from it is precisely what makes the re-run EXECUTE it, and this differential
+ships only non-runnable acceptances by design — so no row in this suite can gate that site, and a
+fix there would land ungated. It is the MORE consequential of the two (it decides whether a
+command RUNS, so its divergence is side-effecting) and its verdict direction is NOT established
+by anything measured so far. It needs its own harness.
+**Its guard nesting IS established, and was not before:** `if not rerun_skipped:` sits at column
+0 (`:719`), the call at column 8 (`:744`), and NO column-0 line lies between them — so nothing
+closes the block first. The earlier form of this claim rested on `744 > 719`, which is only file
+ORDER and cannot distinguish this guard from the `:818`/`:956` regions; a review fork caught it
+before it shipped into a source comment.
+
+**NEXT: the no-op detector (`:565`, ×2 inside the `\Z` alternation) — not `CITATION`,** which needs the `JS_WS_CLASS_BODY`
 factoring, and that must land IN the `CITATION` commit (a constant with no consumer is a
 dead-symbol commit). Its mechanics are settled and measured: the bracketed `JS_WS_CLASS` inside
 `[^...]` closes the class early, collapsing each path segment to ONE character — `app/stats.py`
