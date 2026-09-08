@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T11:34:20+0200
+updated: 2026-09-08T11:41:22+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1073,7 +1073,30 @@ section to SKIP) now spell `JS_WS_CLASS`. Reachable both ways: `##<U+001C>Notes`
 the port alone, `##<U+FEFF>Notes` to node alone. `whitespace-diff.sh` 42 → 56 checks, TWO writers
 (`_write_ledger_rules`, `_write_ledger_head`), one per production line — PROVEN disjoint by
 mutation with a cmp-verified restore: reverting `:376` alone reds exactly the 6 heading-finder
-rows, reverting `:377` alone exactly the 6 rules-heading rows. `npm test` 0, `test:diff` 0,
+rows, reverting `:377` alone exactly the 6 rules-heading rows.
+
+**RE-MEASURED 2026-09-08 UNDER THE CURRENT MARKER, and the qualifier is why.** The disjointness
+above was first measured while `_case` still used the old column-aligned marker; the marker was
+then CHANGED to the verdict line in the same commit that fixed the `grep --` bug. A mutation
+result measured against a different discriminator does not transfer, so the pair was re-run
+against the shipped marker: reverting the heading-finder line gives 6 heading-finder / 0
+rules-heading, reverting the rules line gives 0 / 6. Both totals 6, tree `git diff --quiet`
+clean afterwards. This closes the one composition the green run could NOT establish — that a
+reverted production line still reddens its row THROUGH the current marker check — which green
+alone cannot show, because green never exercises a broken production line.
+
+**BOTH MARKER DIRECTIONS ALSO CONTROLLED, so the marker check is not decoration.** Substituting
+`zzz-never-appears` reds the `differ` rows (`oracle moved, but not via ...; not attributable`);
+substituting an always-present string reds the `same` row (`must NOT reject this pad`). The
+assertion can fail in each direction for its own reason.
+
+**`--` SWEEP: the class is CLOSED, measured rather than assumed.** A review fork argued the fix
+was incomplete and a wider sweep was owed. It is not: exactly two calls take caller-supplied
+argument-position data (`_case`'s two marker greps) and both carry `--`. `_control`'s
+`grep -qE "^> ${anchor}"` puts a literal `^> ` in front of the caller's string, so an anchor can
+never reach position 1 — safe by construction, not by luck about today's values; the hazard
+returns only if that prefix is ever dropped. Every `tr` call takes fixed sets. Do not re-open
+this on the strength of the fork's claim. `npm test` 0, `test:diff` 0,
 known-divergence set unchanged, ruff 6 and mypy 7 measured at BOTH endpoints (identical finding
 text, not just equal counts; temp-filename confirmed inert by a positive control).
 
@@ -1082,7 +1105,9 @@ text, not just equal counts; temp-filename confirmed inert by a positive control
   is parsed as OPTIONS and matches nothing — loud on a `differ` row, SILENT on a `same` row.
 - `_write_ledger_head`'s `## Evidence` line must stay ABOVE the padded line. `in_rules_section` is
   sticky; when `^##\s+` fails to match the flag keeps its prior value, and only that line
-  guarantees it is False. No control can see this — the control runs an empty pad, where the
+  guarantees it is False. **REASONED FROM THE CODE, NOT MEASURED** — no run has reordered the two
+  lines and watched a row flip, so this is a derivation to re-check, not a result. It sits beside
+  measured facts in this block and will be read as one unless it says otherwise. No control can see this — the control runs an empty pad, where the
   non-matching path never executes.
 - The markers are the VERDICT line (`-> ledger complete`), not the column-aligned `evidence:` one.
 
