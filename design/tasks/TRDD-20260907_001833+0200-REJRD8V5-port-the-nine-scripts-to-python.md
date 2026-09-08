@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T22:44:00+0200
+updated: 2026-09-08T22:48:14+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1454,7 +1454,8 @@ than commits that landed code.
    **Ceiling, reasoned not measured:** the fixture exercises U+017F only; U+0131/U+0130/U+212A are
    named in the port comment as examples of what bare `re.I` folds, not as gated vectors.
 5. **✅ DONE (`acb3c8a`, 2026-09-08).** `EXIT_CODE` fold-axis vector: `tests/fixtures/exit-code-fold.md`
-   spells its only evidence line `exıt 0` (U+0131; normalization-stable, see item 4's note); the
+   spells its only evidence line `exıt 0` (U+0131; stable under NFC/NFD/NFKC/NFKD, unlike U+017F
+   and U+0130 — the case comment in `tests/ledger-tests.mjs` says why that vector was chosen); the
    ledger-tests case wants exit 1 + `evidence:    MISSING` and rejects `evidence:    present` /
    `ledger complete`; a fixture guard asserts the U+0131 byte. MEASURED three-state: oracle
    1/MISSING, port 1/MISSING, port with `re.A` removed (mutant) 0/present — exit and substring both
@@ -1556,8 +1557,8 @@ than commits that landed code.
     than "the port is ungated": the phrase "npm test" names the chain that holds the runtime
     FIXED, while the chain that VARIES it has been running all along under a different name.
 14. **`gate_check.py` SIGKILLs any CHECK that runs longer than about 15 s, whatever `--timeout`
-    says. DETERMINISTIC, MEASURED 2026-09-08, port vs oracle first-hand.** Under the default 120 s
-    timeout the port reports `FAIL leaf:G1 … exit=none signal=SIGKILL; EXPECT=not matched;
+    says. DETERMINISTIC, MEASURED 2026-09-08, port vs oracle first-hand.** For a CHECK of
+    `sleep 20; echo ok` under the default 120 s timeout the port reports `FAIL leaf:G1 … exit=none signal=SIGKILL; EXPECT=not matched;
     output=(no output)`, exit 1, with NO "timed out after" error — a signal death, not a timeout.
     **Mechanism, read at `run_check` (`:1283-1302`):** after the child starts, the two capture
     threads are joined with `timeout=5.0` each and then `child.wait(timeout=5.0)`; a `TimeoutExpired`
@@ -1577,15 +1578,15 @@ than commits that landed code.
     filed beside the defect, cause OPEN, like item 8:** on 2026-09-08 from 21:13 to at least 21:35
     every `stale-diff.sh` run I made diverged, its port rows of `echo ok` dying `signal=SIGKILL`;
     by 22:28 the same harness and a minimal repro passed and `test:diff` was green. Transient and
-    environmental, and it reached BOTH runtimes' check shells: an earlier `ps` showed the port's
-    supervisor tree with a 3 s-old shell (a passing run is 0.06 s), and a watcher later caught a
-    17 s-old sleeping shell whose fds read as the oracle's — a stall no runtime had killed yet.
-    `_signal_name` reports the child's returncode whoever sent the signal, so that signature alone
-    never names the sender; for the port's rows the 15 s-per-row arithmetic is consistent with
-    `run_check`'s bound being the sender, unconfirmed. What was and was not ruled out, and the
-    recipe if it recurs, are in the LOCAL memory atom `ATOM-MB3F-XQH6` (page
-    `stale-diff-check-shell-stall`); the deterministic defect stands on the `sleep` measurements
-    alone.
+    environmental, and consistent with reaching BOTH runtimes' check shells: an earlier `ps`
+    showed the port's supervisor tree with a 3 s-old shell (a whole passing `gate_check.py` run by
+    hand is 0.06 s, shell included), and a watcher later caught a 17 s-old sleeping shell whose
+    fds read as the oracle's — a stall no runtime had killed yet. `_signal_name` reports the
+    child's returncode whoever sent the signal, so that signature alone never names the sender;
+    for the port's rows the 15 s-per-row arithmetic is consistent with `run_check`'s bound being
+    the sender, unconfirmed. What was and was not ruled out, and the recipe if it recurs, are in
+    the LOCAL memory page `stale-diff-check-shell-stall` (its current atom); the deterministic
+    defect stands on the `sleep` measurements alone.
     **Why no suite saw it:** no test runs a CHECK longer than 5 s (grep over `tests/`: the longest
     `sleep` is 5, inside `mutate-probe-selftest.sh`, a harness self-test), so the 15 s ceiling was
     never crossed on a green run, and `run_check`'s own docstring describes the bounded wait as
