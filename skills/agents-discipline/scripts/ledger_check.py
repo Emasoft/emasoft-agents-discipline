@@ -81,6 +81,8 @@ NOT_WORD_AFTER = r"(?![0-9A-Za-z_])"
 # Every converted regex reads this set through JS_WS_CLASS, so a change here rewrites all of them
 # at once, far from here and invisible at every call site.
 # Re-derive it by finding, in each runtime, the code points cp where (cp + "x" + cp) trims to "x".
+# EACH runtime, not one: the divergence above runs both ways, so a single runtime can only ever
+# show half the defects -- "it strips fine in Python" is the reasoning that shipped the U+FEFF bug.
 _JS_TRIM_CODEPOINTS = (
     0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0, 0x1680,
     0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007,
