@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T10:57:21+0200
+updated: 2026-09-08T11:01:43+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -922,23 +922,46 @@ own expected set prints exactly that same reassuring line; `regex-worker-diff.sh
 cheat-shrink actually attempted on this corpus's own row-count floor (`EXPECTED_ROWS=22`), so the
 class is live, not hypothetical. **The failure signal of a pinned-literal instrument is "the
 literal was edited"; check it, or the pinning attests to nothing.**
-**AND MY FIRST CALIBRATION PROBE WAS BLIND TO EXACTLY THAT EDIT.** `git log -S <token>` is the
-PICKAXE: it lists commits where the NUMBER OF OCCURRENCES changed. The token appears twice here
-(`:177` assigns, `:179` consumes), so a commit that rewrites only the VALUE leaves the count at 2
-and `-S` never lists it — and a cheat-widening is precisely a value edit with the count preserved.
-Measured: `-S` returned ONE commit; **`git log -G 'EXPECTED_DIVERGENT_SET'` returns THREE** —
-`93fe3d0` (02:23), `6a186fd` (02:29, the only hit when pickaxing the VALUE `\p{L}<u>`), `03f2e84`
-(05:45), all 2026-09-07. `03f2e84` is the last value change and it SHRANK the set from
-`(?<y>\d{4})<>…` to `\p{L}<u>` — legitimately, alongside the fixes its subject names.
-**THE CONCLUSION SURVIVES AND IS STRONGER THAN THE BLIND PROBE COULD HAVE MADE IT**: all three
-predate site 1 (`c057c93`, 2026-09-08 10:15:08) and `e24398c` (10:15:35), so the literal is
-untouched across the entire site-1/site-2 window. `--follow` and plain `log` both return 10
-commits for the path, so no rename hides earlier history. **`-S` returning one was luck** — it
-happened to return a member of the same predates-the-window cluster; had `03f2e84` landed inside
-the window, `-S` would have missed it and I would have asserted a false calibration.
-**USE `-G` (or `-S` on the VALUE, or `git log -L`) TO ASK "was this constant edited". Never `-S`
-on its NAME.** This is the third instrument in three commits whose passing and broken states were
-indistinguishable, and this one was written in the commit whose whole subject was calibration. (2) I compared mypy against HEAD via `git stash push -- <one file>` on
+**AND THE ANSWER IS ONE COMMAND THAT I REACHED ON THE THIRD TRY, AFTER TWO WRONG INSTRUMENTS.**
+The settled form, and the general lesson worth more than everything below it:
+
+```bash
+diff <(git show e24398c:<path>) <(git show HEAD:<path>)   # → WHOLE FILE IDENTICAL
+```
+
+**"Was this constant edited between A and B" is a question about TWO FILE STATES. Compare the two
+states. Do not interrogate the log** — `git log` answers "WHICH COMMIT changed it", a strictly
+harder question I did not need answered, and every failure below is a failure of that harder
+question, not of the real one. The two-point diff is immune to all of them: pickaxe counting
+semantics, `-G`'s line-orientation, multi-line values, merge-diff defaults, history
+simplification, renames. **The pin is byte-identical from `e24398c` to HEAD** — in fact the whole
+file is — so the DIVERGE claim is established outright. (`git log --merges | wc -l` is 0, so the
+history is linear and the merge-blindness below never bit here either.)
+
+The two wrong instruments, kept because each is a live trap:
+- **`git log -S <token>` is the PICKAXE — it lists commits where the OCCURRENCE COUNT changed**,
+  so a value-only rewrite (one `-assign` line, one `+assign` line) is invisible to it. `-S`
+  returned ONE commit; `-G` returns THREE (`93fe3d0` 02:23, `6a186fd` 02:29, `03f2e84` 05:45, all
+  2026-09-07). **That single result was DETERMINISTIC, not luck** — `-S` on a constant's NAME
+  reliably returns its INTRODUCTION (count 0→n) and reliably hides every later value edit, so it
+  would have returned `93fe3d0` and only `93fe3d0` no matter where the others landed, including
+  if one of them had cheat-widened the set inside the window. A probe biased toward the
+  reassuring answer is worse than one that got lucky.
+- **`-G <token>` is not sufficient either, and this very constant proves it**: `6a186fd`'s diff
+  shows the value was once a MULTI-LINE shell string (`-EXPECTED_DIVERGENT_SET='JS named group
+  (?<n>)` — no closing quote), and a set member added or removed on a CONTINUATION line changes
+  no line containing the token. `-G` also examines no diff for a merge commit by default
+  (`--diff-merges=first-parent` does; `--full-history` is a different mechanism — it disables
+  pathspec pruning, so getting the same three from it closed pruning, not merge-blindness).
+
+Load-bearing scope: the claim is **unchanged from `e24398c` to HEAD**. All three edits also
+predate site 1 (`c057c93`, 10:15:08), which is a wider window and a bonus, not the claim.
+`03f2e84` is the last value change and shrank the set from `(?<y>\d{4})<>…` to `\p{L}<u>`; I do
+NOT assert that shrink was legitimate — its commit subject says so, and a subject line is the
+cheapest place to make a cheat-shrink look legitimate. The claim does not need it: `03f2e84`
+predates the window, so the current value is the baseline whatever its provenance.
+**THE CLASS, NOT THE COUNT — a count rots:** this is one more instrument whose passing and broken
+states were indistinguishable, written inside the commit whose whole subject was calibration. (2) I compared mypy against HEAD via `git stash push -- <one file>` on
 a CLEAN tree: nothing was stashed, so the "baseline" run re-measured the SAME working copy and
 `diff` said IDENTICAL trivially. The paired `stash pop` then popped a PRE-EXISTING 2026-09-06
 auto-backup and left three files `UU` (recovered: stash intact, copies in
