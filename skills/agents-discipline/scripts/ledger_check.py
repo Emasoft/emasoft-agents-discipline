@@ -613,7 +613,33 @@ ALWAYS_TRUE = re.compile(
     # `\Z`, not `$`: Python's `$` also matches just before a trailing newline, JavaScript's
     # does not. Unreachable today (cells come from one stripped table line) and spelled
     # exactly anyway, because the next edit is where an inexact anchor gets noticed.
-    r"^(?:(?:/(?:usr/)?bin/)?(?:true|echo|printf|pwd|sleep)(?:\s+[^&|;]*)?|:|command\s+true|exit\s+0)\Z",
+    #
+    # `\s` -> JS_WS_CLASS at ALL THREE occurrences, in ONE edit: they are alternatives of one
+    # pattern deciding one verdict, so converting two would leave the third diverging on the
+    # same bytes. The divergence runs BOTH WAYS -- Python's `\s` also matches U+001C..U+001F
+    # and U+0085, node's also matches U+FEFF -- so this is not "strip more", it is "strip
+    # exactly node's set", which is what JS_WS_CLASS is.
+    #
+    # This comment quotes `\s` literally, so a grep scoped to this whole block counts those
+    # occurrences too. Scope any such count to the two pattern lines below, never to the span:
+    # a count over the span reads 2, which is the comment, not the pattern.
+    #
+    # Stated as MECHANISM, not as a verdict pair: `exit<U+001C>0` is a no-op to the unconverted
+    # port and an ordinary command to node. Which line each runtime then PRINTS depends on the
+    # row's artifacts, so a comment asserting two verdicts would be true of one fixture only.
+    # tests/fixtures/noop-pad-divergence.md carries one vector per occurrence.
+    #
+    # `[^&|;]` needs no conversion -- three literal characters, no shorthand class.
+    #
+    # Adjacent f-string literals, never `+` across a line break: mixing implicit concatenation
+    # with `+` makes the grouping depend on where the line happens to wrap.
+    #
+    # The `re.I` below is a SEPARATE and still-open divergence at this same site -- Python folds
+    # U+017F onto `s`, so `sleep` spelled with a long s matches here and not in the oracle.
+    # Measured, NOT fixed here: the `\s` conversion above is complete and mutation-proven, and
+    # the fold is what still leaves this site short of oracle-equivalent.
+    rf"^(?:(?:/(?:usr/)?bin/)?(?:true|echo|printf|pwd|sleep)(?:{JS_WS_CLASS}+[^&|;]*)?"
+    rf"|:|command{JS_WS_CLASS}+true|exit{JS_WS_CLASS}+0)\Z",
     re.I,
 )
 

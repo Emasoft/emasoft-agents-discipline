@@ -35,6 +35,11 @@ function report(ok, name, detail) {
   if (!ok) failed++;
 }
 
+// U+001C, for the ARMING CHECK at the bottom of this file. Spelled as ASCII, never as the
+// character, for the reason the fold guard states: an assertion written with the raw byte is
+// vulnerable to the very normalization pass it exists to catch.
+const FS = String.fromCharCode(0x1c);
+
 const cases = [
   { name: "template (incomplete)", file: "templates/DELEGATION.md", want: 1 },
   { name: "partial ledger", file: "tests/fixtures/partial.md", want: 1 },
@@ -236,6 +241,53 @@ const cases = [
       "#8 $ ;true -> acceptance uses `||` or `;`",
       "#9 $ (false) ; (true) -> acceptance uses `||` or `;`",
     ],
+  },
+  {
+    // The `\s` divergence inside ALWAYS_TRUE, one vector per source occurrence. node's `\s` is
+    // 25 code points and Python's is 29; U+001C is in Python's set and not in node's, so an
+    // unconverted `\s` makes the port see a no-op where the oracle sees an ordinary command.
+    //
+    // MEASURED, and it is why these assert on the MESSAGE and never on the verdict: bash treats
+    // U+001C as an ordinary character rather than a blank, so `echo<U+001C>ok` is a single word
+    // naming a command that does not exist -- exit 127, in both runtimes. Both legs therefore
+    // land in `repro_failed` and both print `-> ledger INCOMPLETE.`, so `want: 1` cannot
+    // discriminate here; it is a control for "the ledger still parsed", nothing more.
+    //
+    // The `&& echo x` suffix is LOAD-BEARING and must not be tidied away as dead. It is
+    // unreachable at runtime -- 127 short-circuits it -- and that is not its job: it puts
+    // ORDINARY spaces in the cell so `acceptance_command`'s own still-unconverted `\s` matches
+    // in BOTH runtimes. Without it node returns null there and the row diverges a second time,
+    // at a site this case does not own, so the row would stay red after ALWAYS_TRUE is fixed
+    // and read as a failed fix.
+    //
+    // NOT SELF-ARMING -- it needs the external guard at the bottom of this file, exactly as the
+    // U+0131 case does. The expect strings carry the pad as a RAW BYTE, the same way the fixture
+    // does; shown here between backticks: ``. Because BOTH sides are raw, ONE normalization pass over the
+    // tree rewrites them together and this case keeps passing while testing nothing: the fixture
+    // becomes `echook && echo x`, the expect becomes the same string, and `echook` is still a
+    // command that does not exist -- still exit 127, still a match. Nothing inside the case can
+    // see that, which is what the arming guard is for.
+    //
+    // The disarms the case DOES catch by itself, both loud: delete the byte from the fixture
+    // alone and the printed command no longer matches an expect line that still holds it; turn
+    // the pad into an ordinary space and the command exits 0, filing the row under `re-ran`
+    // where it prints nothing at all, so every expect line reds.
+    name: "U+001C in an acceptance is whitespace to Python and not to node, at all three ALWAYS_TRUE sites",
+    file: "tests/fixtures/noop-pad-divergence.md",
+    want: 1,
+    rerun: true,
+    artifacts: ["reports/pad-1.txt", "reports/pad-2.txt", "reports/pad-3.txt"],
+    // One vector per SOURCE OCCURRENCE: `(?:\s+[^&|;]*)?`, `command\s+true`, `exit\s+0`. The
+    // five verbs and two path prefixes all route through the FIRST occurrence -- one textually
+    // shared fragment, so they are one site and one vector. A per-verb matrix would be testing
+    // the alternation list, which is not what changed.
+    expect: [
+      "#1 $ echook && echo x -> exit 127",
+      "#2 $ commandtrue && echo x -> exit 127",
+      "#3 $ exit0 && echo x -> exit 127",
+    ],
+    // Before the conversion the port prints this instead, on all three rows.
+    reject: ["no-op acceptance"],
   },
   {
     // The other half of the same predicate, and the reason it is a parser rather than a
@@ -714,6 +766,24 @@ report(
   foldFixture.includes("**Un" + String.fromCharCode(0x131) + "t 1"),
   "fold fixture: U+0131 header vector intact (not normalized, deleted, or substituted)"
 );
+
+// ARMING CHECK for the three ALWAYS_TRUE pad vectors, load-bearing for the same reason as the
+// fold guard above and with the same single blind spot. That case's expect strings hold U+001C
+// as a RAW BYTE, exactly as its fixture does, so a normalization pass over the tree rewrites
+// BOTH: the fixture's `echo<U+001C>ok` becomes `echook`, the expect string becomes `echook`,
+// and `echook` is still a command that does not exist -- still exit 127, still a match. The
+// case passes having tested nothing about `\s`, and nothing inside it can tell.
+//
+// Three assertions, one per SOURCE OCCURRENCE of `\s` in ALWAYS_TRUE, so a partial disarm names
+// which vector died instead of reporting one vague failure.
+const padFixture = readFileSync(resolve(root, "tests/fixtures/noop-pad-divergence.md"), "utf8");
+for (const [vector, occurrence] of [
+  [`echo${FS}ok`, "(?:\\s+[^&|;]*)?, reached through the verb alternation"],
+  [`command${FS}true`, "command\\s+true"],
+  [`exit${FS}0`, "exit\\s+0"],
+]) {
+  report(padFixture.includes(vector), `pad fixture: U+001C vector intact -- ${occurrence}`);
+}
 
 console.log(failed ? `${failed} failing` : "all pass");
 process.exit(failed ? 1 : 0);
