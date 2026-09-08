@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T20:21:21+0200
+updated: 2026-09-08T20:34:56+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1057,7 +1057,8 @@ than my last run" — a backwards move makes the edit invisible) or as a CONFLIC
 corollary is the durable one: the field is structurally unable to be exact and git already holds
 the authoritative timestamp, so **nothing should branch on `updated:` precisely.**
 
-**⚠ THE `/m` HALF OF `CREATED` IS STILL OPEN, AND IT IS A NAMED ITEM, NOT "OWED".** JS `/m` makes
+**RESOLVED 2026-09-08 → queue item 3 (`6337497`).** Was: **⚠ THE `/m` HALF OF `CREATED` IS STILL
+OPEN, AND IT IS A NAMED ITEM, NOT "OWED".** JS `/m` makes
 `^` match after ANY LineTerminator (LF, CR, U+2028, U+2029); Python's `re.M` recognizes LF alone,
 so `x<CR>Created: …`, `x<U+2028>…` and `x<U+2029>…` still disagree with the oracle — the other 3
 of the 6. **The fix was written, measured clean, and deliberately backed out — its source text is
@@ -1163,8 +1164,8 @@ text, not just equal counts; temp-filename confirmed inert by a positive control
   non-matching path never executes.
 - The markers are the VERDICT line (`-> ledger complete`), not the column-aligned `evidence:` one.
 
-**STILL OPEN, both non-`\s` axes on already-converted lines:** `CREATED`'s `/m` LineTerminator
-half (fix source recorded above), and NOW `:377`'s `re.I`/U+017F fold half — `re.A` is safe there
+**STILL OPEN, one non-`\s` axis on an already-converted line** (the `CREATED` `/m` half closed in
+`6337497`, queue item 3): `:377`'s `re.I`/U+017F fold half — `re.A` is safe there
 (no `\s` remains for it to narrow, the `:111-117` precondition) but would ship ungated, and the
 fold axis already owes one vector at `EXIT_CODE`. A fold vector does not fit this harness: it
 needs its own writer and an effects array unrelated to `CASE_ORACLE_EFFECT`.
@@ -1296,7 +1297,7 @@ the observation alone.
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
 positions are fixed but ungated. Do not read the site count as coverage.
 
-**ORDER IS NOT NUMBER.** Items 1, 2, 9 and 10 are done; the order is **13 → 3 → 4 → 5 → 7 → 6** (6 is
+**ORDER IS NOT NUMBER.** Items 1, 2, 3, 9 and 10 are done; the order is **13 → 4 → 5 → 7 → 6** (6 is
 last by construction — it needs `JS_WS_CLASS_BODY` in its own commit). Renumbering would churn
 every cross-reference, so the order lives here instead. A reader who takes the lowest open number
 takes item 2, and item 9's note then lands after the window it covers — which is precisely the
@@ -1392,8 +1393,24 @@ than commits that landed code.
    the whole document resting on a comparison never made — item 3 spans four LineTerminators in a
    document-scanning regex and was never ranked against it. Recorded and unscheduled for two
    sessions; now #2 rather than a sentence.
-3. **`CREATED`'s `/m` LineTerminator half** — ECMAScript `^` under `/m` matches after LF, CR,
-   U+2028 and U+2029; Python `re.M` recognizes LF alone. Fix source already recorded above.
+3. **✅ DONE — `6337497` (2026-09-08).** Anchor is now `(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH
+   SEPARATOR}]))` with no `re.M` — exactly `/m`'s five positions; `re.M`'s two are a strict subset;
+   no `$` in the pattern. Gate: `created-lt` surface, pad at the START of the `Created:` line, own
+   arrays, BOTH directions — narrowing (CR, U+2028, U+2029 `same` rows: reverting to `^`+`re.M`
+   reds exactly those three) and widening (a U+0085 `differ` row: `(?<=\s)` reds exactly it — the
+   direction the review found ungated in the proposal). LF and CRLF are HARNESS controls only:
+   `re.M` already fired after LF, so no anchor mutation can red them. Clean 70 checks; `npm test`,
+   port `ledger-tests`, all 14 diff suites green. **Scope:** a CRLF file already worked; the
+   divergence needs a bare CR/LS/PS immediately before `Created:` in an LF file. **Ceilings:**
+   dropping the position-0 alternative survives every row and fixture (each starts with
+   `# Delegation plan`). **Two instrument defects, both mine:** the writer's `pad="$(printf '%b'
+   …)"` stripped a trailing LF, so the "LF" row ran unpadded and "CRLF" ran as bare CR (it reddened
+   under the `re.M` revert — the tell); and a mutant builder that appended `# MUTANT` to the anchor
+   line swallowed `+ JS_WS_CLASS`, failing both mutants at the created control. **The editing tool
+   turned `  ` in the source into literal characters**; fixed by a byte-exact replace to
+   `\N{...}` escapes, all gates re-run on the escape form. Was: **`CREATED`'s `/m` LineTerminator
+   half** — ECMAScript `^` under `/m` matches after LF, CR, U+2028 and U+2029; Python `re.M`
+   recognizes LF alone. Fix source already recorded above.
 4. **`re.I` / U+017F fold at the rules heading** — `## Ruleſ of thiſ ledger` is the rules heading
    to the port and not to the oracle. Needs `re.A`, which is only safe now that no `\s` remains on
    those two lines.
@@ -1602,6 +1619,8 @@ pressure reads the number and skips the caveat, which is this stretch's own fail
   acceptance-command path. **These are invisible to any `re.compile`-shaped search** and were
   missed by the first enumeration. That note is the only part of this list a grep cannot
   regenerate; everything else above is `grep -an '\\s' scripts/ledger_check.py` away.
+**CLEARED 2026-09-08 — queue item 3, `6337497`. The sweep stays OPEN on items 4, 5, 6 and 7;
+clearing this blocker completes nothing.** Original text follows.
 **BLOCKER ON SWEEP COMPLETION (added 2026-09-08) — NOT a `\s` site and NOT one of the eight
 above. Do not count it into them, and do not skip it as off-topic.** It is deliberately outside
 that list, in this shape, because as a ninth bullet it invites both failures: a later summary
