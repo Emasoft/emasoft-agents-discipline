@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T20:34:56+0200
+updated: 2026-09-08T20:52:56+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1398,16 +1398,23 @@ than commits that landed code.
    no `$` in the pattern. Gate: `created-lt` surface, pad at the START of the `Created:` line, own
    arrays, BOTH directions — narrowing (CR, U+2028, U+2029 `same` rows: reverting to `^`+`re.M`
    reds exactly those three) and widening (a U+0085 `differ` row: `(?<=\s)` reds exactly it — the
-   direction the review found ungated in the proposal). LF and CRLF are HARNESS controls only:
-   `re.M` already fired after LF, so no anchor mutation can red them. Clean 70 checks; `npm test`,
-   port `ledger-tests`, all 14 diff suites green. **Scope:** a CRLF file already worked; the
-   divergence needs a bare CR/LS/PS immediately before `Created:` in an LF file. **Ceilings:**
-   dropping the position-0 alternative survives every row and fixture (each starts with
-   `# Delegation plan`). **Two instrument defects, both mine:** the writer's `pad="$(printf '%b'
+   direction the review found ungated in the proposal). **Per-terminator attribution MEASURED
+   after the post-write review flagged it as joint-only:** dropping CR, U+2028 or U+2029 from the
+   anchor reds exactly its own row; dropping LF fails at the `created` writer's CONTROL before any
+   row runs (every fixture puts `Created:` after LF), so the LF and CRLF rows are harness controls
+   for the pad position — neither inert nor the LF gate; the shipped harness comment and `6337497`'s
+   message first said "cannot red on any anchor mutation", corrected in the harness and here.
+   Clean 70 checks; `npm test` and port `ledger-tests` on the final port; `test:diff`'s 14-suite
+   run predates the writer's `%b`-in-format fix — the final harness ran standalone (70, exit 0) and
+   the other 13 suites read files unchanged since, so that claim holds by composition, not one run.
+   **Scope:** a CRLF file already worked; the divergence needs a bare CR/LS/PS immediately before
+   `Created:` in an LF file. **Ceilings, MEASURED (70 green under each):** dropping the position-0
+   alternative (every fixture starts with `# Delegation plan`); widening the class to VT/FF
+   without NEL (the oracle refuses those too, only NEL has a row). **Two instrument defects, both mine:** the writer's `pad="$(printf '%b'
    …)"` stripped a trailing LF, so the "LF" row ran unpadded and "CRLF" ran as bare CR (it reddened
    under the `re.M` revert — the tell); and a mutant builder that appended `# MUTANT` to the anchor
-   line swallowed `+ JS_WS_CLASS`, failing both mutants at the created control. **The editing tool
-   turned `  ` in the source into literal characters**; fixed by a byte-exact replace to
+   line swallowed `+ JS_WS_CLASS`, failing both mutants at the created control. **The editing tool turned
+   the typed escape spellings of U+2028 and U+2029 into the literal characters themselves**; fixed by a byte-exact replace to
    `\N{...}` escapes, all gates re-run on the escape form. Was: **`CREATED`'s `/m` LineTerminator
    half** — ECMAScript `^` under `/m` matches after LF, CR, U+2028 and U+2029; Python `re.M`
    recognizes LF alone. Fix source already recorded above.
@@ -1613,7 +1620,8 @@ recorded BY ANCHOR, not by line — a number rots within hours here, and a sessi
 pressure reads the number and skips the caveat, which is this stretch's own failure mode:
 
 - `EXIT_CODE`, `CITATION` (twice, INSIDE a negated class — needs `JS_WS_CLASS_BODY`), `CREATED`
-  (also the `re.M` site), the `##` heading finder (two `re.match` calls, twice on the second),
+  (also the `re.M` site — BOTH halves CLOSED: `b876c49`, `6337497`), the `##` heading finder (two
+  `re.match` calls, twice on the second),
   and the no-op detector (twice, inside the `\Z`-anchored alternation).
 - **Two are inline `re.search(r"\s", inner)` calls** — one in the strong-evidence path, one in the
   acceptance-command path. **These are invisible to any `re.compile`-shaped search** and were
