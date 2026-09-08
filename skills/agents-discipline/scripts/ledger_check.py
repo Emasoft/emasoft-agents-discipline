@@ -130,7 +130,21 @@ MEASURED_RESULT = re.compile(
     + r"+){0,3}(passed|passing|pass|ok)" + NOT_WORD_AFTER,
     re.I | re.A,
 )
-EXIT_CODE = re.compile(r"exit\s+[0-9]+", re.I)
+# Oracle `ledger-check.mjs:161` is `/exit\s+\d+/i`, and BOTH of its divergence axes bite here.
+# MEASURED against the oracle over 8 probes: the pre-fix port disagreed on 5 of them.
+#   exit<U+001C>0, exit<U+0085>0    port matched, node did NOT  (Python's `\s` is the wider set)
+#   exit<U+FEFF>0                   node matched, port did NOT  (it runs BOTH ways -- "strip
+#                                   more" is not the fix, the set must be exactly JS's)
+#   ex<U+0131>t 0, EX<U+0130>T 0    port matched, node did NOT  (`re.I` folds non-ASCII onto
+#                                   ASCII; JS `/i` without `u` refuses exactly those foldings)
+# Controls that had to NOT move, and did not: `exit 0` (both match), `exit<NBSP>0` (NBSP is in
+# both whitespace sets, both match), `exit <U+0660>` (both REFUSE -- the oracle's `\d` was
+# already spelled `[0-9]` here, so that axis was closed before this change and the probe proves
+# the fix did not reopen it).
+# Order per :101-127: BODY first, FLAGS second. `re.A` is safe here by the precondition stated
+# at :117-124 -- every case-bearing element is ASCII (`exit`), so the ASCII-folding restriction
+# `re.A` adds has no non-ASCII literal to act on.
+EXIT_CODE = re.compile(r"exit" + JS_WS_CLASS + r"+[0-9]+", re.I | re.A)
 # NO WHITESPACE in the span: `node test/run-tests.mjs` is a COMMAND that happens to name a
 # path, and demanding that string exist as a file is nonsense. Only a bare path is a citation.
 CITATION = re.compile(r"`([^`\s]*/[^`\s]*\.[A-Za-z0-9]{1,6})`")

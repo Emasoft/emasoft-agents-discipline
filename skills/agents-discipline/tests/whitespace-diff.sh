@@ -213,6 +213,36 @@ _write_ledger_ev() {
   } > "$dest"
 }
 
+# FIFTH SURFACE: `EXIT_CODE` (oracle `:161`, `/exit\s+\d+/i`), one of the three strong-evidence
+# predicates. The four writers above cannot reach it -- MEASURED, not argued: 0 of the 31 inputs
+# `ledger-tests.mjs` drives reach it either, because `FILENAME_SHAPED` and `MEASURED_RESULT` are
+# tried first and the existing evidence lines all say "12 passed", which `MEASURED_RESULT` claims.
+# So before this writer, NOTHING in the repo watched that line in either runtime.
+#
+# The evidence sentence is chosen so EXIT_CODE is the SOLE path to strong evidence, or the case
+# would pass on a sibling predicate and assert nothing about this one:
+#   - no `.`, so `FILENAME_SHAPED` (which needs a dot-extension) cannot fire;
+#   - no `pass`/`passing`/`passed`/`ok` after the digit, so `MEASURED_RESULT` cannot.
+#
+# The pad goes AFTER the existing space (`exit %s3`), never instead of it, for the reason
+# `_write_ledger_ev` documents: with an empty pad this must emit `exit 3`, which the oracle DOES
+# match. Replacing the space would make the control `exit<pad>3` -- unmatched in both runtimes,
+# so every case below would agree on a ledger where the predicate never fired.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
+_write_ledger_exit() {
+  local dest="$1" ws="$2" pad
+  pad="$(printf '%b' "$ws")"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n\n'
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '\n## Evidence\n\n'
+    printf '**Unit 1 —** the runner ended with exit %s3\n' "$pad"
+  } > "$dest"
+}
+
 # Runs one runtime against its OWN COPY. Separate copies are load-bearing, not hygiene: the
 # checker APPENDS a receipt to the ledger it reads, so a shared file would hand the second
 # runtime a document the first had already modified, and the comparison would be of two
@@ -517,13 +547,36 @@ for i in "${!CASE_NAME[@]}"; do
         "${CASE_ORACLE_EFFECT[$i]}" 'no unit table header'
 done
 
+# The anchor asserts the pad's POSITION, not a surviving token -- the same forced choice
+# `_write_ledger_find` documents, and for the same reason. This writer pads THROUGH the span its
+# surface is made of, so `exit 3` is destroyed by a CORRECTLY placed pad; anchoring on it fails in
+# both the red and the green state and reports a working test as a broken one. (Written that way
+# first, and the control caught it: `changed: > ... exit X3` against anchor `.*exit 3`.)
+#
+# `exit [^ 0-9]` says: a space after `exit`, then something that is neither a space nor a digit --
+# i.e. the pad is exactly between the space and the `3`. It rejects both misplacements: a pad
+# moved BEFORE `exit` leaves `exit 3` (a digit follows the space), and a pad moved to the line's
+# TAIL leaves `exit 3X` (likewise). Only the intended placement matches.
+_control _write_ledger_exit "control: exit-code writer" '\*\*Unit 1 .*exit [^ 0-9]'
+
+# THE SIXTH CODE POINT DIVERGES THE OTHER WAY HERE TOO, and the table at the top already predicts
+# it: U+FEFF is JS whitespace, so `\s+` swallows the pad and the oracle still reads `exit<ws>3` --
+# effect `same`. The other five are not JS whitespace, so `\s+` stops at the space and then needs
+# a digit, finds the pad, and the predicate goes silent -- effect `differ`. That is the SAME
+# same/differ split as the four surfaces above, which is why CASE_ORACLE_EFFECT is reused
+# unchanged rather than given a per-surface copy that could drift out of step with the bytes.
+for i in "${!CASE_NAME[@]}"; do
+  _case "exit-code ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_exit \
+        "${CASE_ORACLE_EFFECT[$i]}"
+done
+
 echo
 if [ "$fail" = 0 ]; then
   # "check(s) passed", not "trim vector(s) identical": `$pass` has always also counted the
   # controls, and a control does not assert identity -- it asserts a count, and now also that the
   # padded verdict DIFFERS from the unpadded one. A summary line that calls every check an
   # identity is the kind of over-claim this suite exists to catch.
-  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder surfaces) ---"
+  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"
