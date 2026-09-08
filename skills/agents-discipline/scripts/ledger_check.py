@@ -431,6 +431,11 @@ for i in range(header_idx + 1, len(lines)):
         continue
     if l.startswith("|"):
         continue  # still in the table
+    # STICKY until the next heading, on purpose -- the rules section is several lines. Gated by
+    # ledger-tests' "copy the template and flip every status" case under
+    # `AD_RUNTIME=python node tests/ledger-tests.mjs`: the template's own rules bullets score
+    # strong if leaked, so an early reset reds `evidence: MISSING` there; its arming case checks
+    # that those bullets still score strong when the section is not skipped.
     if in_rules_section:
         continue  # template rules boilerplate
     if l.lower().startswith("units:"):

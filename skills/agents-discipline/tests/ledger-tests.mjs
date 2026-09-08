@@ -346,6 +346,13 @@ const cases = [
     // evidence all by itself -- so the copy-and-flip ledger reported `evidence: present`.
     // Derived from the live template, not a snapshot, so a future template edit that
     // reintroduces satisfying boilerplate fails here instead of shipping.
+    // It is ALSO the gate on `inRulesSection`'s PERSISTENCE, by the same property: the rules
+    // bullets carry backticked commands, so a checker that stops skipping the section early --
+    // after one non-blank line, or at the blank line under the heading -- leaks a strong span,
+    // and `evidence:    MISSING` reds while `want: 1` still holds on UNBACKED. MEASURED: a
+    // reset-after-one mutant in the port (`AD_RUNTIME=python node tests/ledger-tests.mjs`) and
+    // in the oracle, and a reset-on-blank mutant in the port; each reddened this case and no
+    // other case in the suite. The case below ARMS it.
     name: "copy the template and flip every status: still fails",
     file: "templates/DELEGATION.md",
     mutate: (t) => t.replace(/\| pending \|/g, "| verified |"),
@@ -355,6 +362,28 @@ const cases = [
     // so acceptanceCommand extracts nothing and nothing is executed.
     rerun: true,
     expect: ["evidence:    MISSING", "UNBACKED verified rows"],
+  },
+  {
+    // ARMING CHECK for the persistence gate above. That gate rests on the template's rules text
+    // scoring strong when it is NOT skipped -- a precondition nothing asserted, so shortening
+    // the rules section, or narrowing `isStrongEvidence`, would disarm it with every check
+    // green and the case above still passing. Rename the heading so the section is scanned and
+    // require the evidence to be seen: same text, same predicate, must read `present`. If this
+    // reds, the case above no longer gates persistence -- restore strong text or move the gate.
+    // MEASURED: replacing the bullets with plain prose reads MISSING in both runtimes, so this
+    // can fail; stripping every backtick does NOT disarm it, because filename-shaped prose such
+    // as `tests/stats.py` still scores -- the gate rests on ANY strong route, not on the spans.
+    // Not a regex over the template: a `[^`]*\s[^`]*` scan also matches the GAP between two
+    // spans (`||` or `;` yields "` or `"), so it passed on text with every span de-whitespaced.
+    // Going through the checker asserts the route it actually uses.
+    name: "template rules text scores strong when not skipped (arms the persistence gate)",
+    file: "templates/DELEGATION.md",
+    mutate: (t) =>
+      t
+        .replace(/\| pending \|/g, "| verified |")
+        .replace("## Rules of this ledger", "## Notes on this ledger"),
+    want: 0,
+    expect: ["evidence:    present"],
   },
   {
     // T13. The placeholder filter dropped any line CONTAINING angle brackets, so real
