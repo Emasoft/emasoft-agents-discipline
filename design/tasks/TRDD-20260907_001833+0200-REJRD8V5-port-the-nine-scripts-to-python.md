@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T20:52:56+0200
+updated: 2026-09-08T20:55:28+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1400,17 +1400,23 @@ than commits that landed code.
    reds exactly those three) and widening (a U+0085 `differ` row: `(?<=\s)` reds exactly it — the
    direction the review found ungated in the proposal). **Per-terminator attribution MEASURED
    after the post-write review flagged it as joint-only:** dropping CR, U+2028 or U+2029 from the
-   anchor reds exactly its own row; dropping LF fails at the `created` writer's CONTROL before any
-   row runs (every fixture puts `Created:` after LF), so the LF and CRLF rows are harness controls
-   for the pad position — neither inert nor the LF gate; the shipped harness comment and `6337497`'s
-   message first said "cannot red on any anchor mutation", corrected in the harness and here.
-   Clean 70 checks; `npm test` and port `ledger-tests` on the final port; `test:diff`'s 14-suite
-   run predates the writer's `%b`-in-format fix — the final harness ran standalone (70, exit 0) and
-   the other 13 suites read files unchanged since, so that claim holds by composition, not one run.
+   anchor reds exactly its own row. Dropping LF fails at the `created` writer's CONTROL before any
+   row runs. That writer puts `Created:` after a bare LF, as does every file under `tests/fixtures`
+   and `templates` that carries one (18 of 18, grep-verified after the second review asked). So the
+   LF and CRLF rows are harness controls for the pad position, neither inert nor the LF gate. The
+   shipped harness comment and `6337497`'s message first said "cannot red on any anchor mutation";
+   corrected in `f9c36dc` and here.
+   Clean 70 checks; `npm test` and port `ledger-tests` on the final port; `test:diff` re-run on the
+   final harness after the second review (14 suites, exit 0; regex-worker still reports its one
+   known unresolved divergence, set unchanged — the earlier "holds by composition" wording is gone).
    **Scope:** a CRLF file already worked; the divergence needs a bare CR/LS/PS immediately before
-   `Created:` in an LF file. **Ceilings, MEASURED (70 green under each):** dropping the position-0
-   alternative (every fixture starts with `# Delegation plan`); widening the class to VT/FF
-   without NEL (the oracle refuses those too, only NEL has a row). **Two instrument defects, both mine:** the writer's `pad="$(printf '%b'
+   `Created:` in an LF file. **Ceilings (70 green under each, measured):** dropping the position-0
+   alternative — no file under `tests/fixtures` or `templates` starts with `Created:`, each opens
+   with an H1 (44 of 44, grep-verified; the first draft here said "every fixture starts with
+   `# Delegation plan`", false for the 13 gates fixtures and templates, though the ceiling holds);
+   widening the class to VT/FF without NEL — the green run shows only that the suite cannot see
+   it; that the oracle refuses VT/FF is the ECMAScript `/m` spec, not measured, since no VT/FF
+   fixture exists. **Two instrument defects, both mine:** the writer's `pad="$(printf '%b'
    …)"` stripped a trailing LF, so the "LF" row ran unpadded and "CRLF" ran as bare CR (it reddened
    under the `re.M` revert — the tell); and a mutant builder that appended `# MUTANT` to the anchor
    line swallowed `+ JS_WS_CLASS`, failing both mutants at the created control. **The editing tool turned
