@@ -728,12 +728,47 @@ out of this position — see the RESUMPTION POINT below. It now gates one site, 
 (`UNIT_HEADER` at `:103` is the pattern to copy), its divergence is already measured so its control
 is already designed, and finishing one site measures the per-site cost instead of estimating it.
 
-**⚠ FOUR CLAIMS ACROSS `47bc2be`, `7e8d56c`, `d88f586` AND `9ee169e` ARE WRONG OR OVER-STATED.
-The commits are permanent; the corrections live here.** Items 3 and 4 are FALSE, not merely
+**⚠ SIX CLAIMS ACROSS `47bc2be`, `7e8d56c`, `d88f586`, `9ee169e`, `8ff64ca` AND `5e14b76` ARE
+WRONG OR OVER-STATED.
+The commits are permanent; the corrections live here.** Items 3, 4 and 6 are FALSE, not merely
 over-stated, and they share one shape: **an absence asserted without searching for the thing.**
 Both would have cost one `find` or one `grep -a`. When about to write "X does not exist" into a
 commit message, search first — that sentence is the one this task keeps getting wrong.
 
+**5 AND 6 ARE PLACED FIRST because they are the ones a resuming session has not seen.** Both are
+2026-09-08 and both repeat the shape the paragraph above names — a claim of the form "X does not
+happen", asserted after reading one layer and not the next.
+
+5. **`8ff64ca` concluded "`npm test` runs the ORACLE only" from FOUR `AD_RUNTIME` ternaries. There
+   are FIVE mechanisms.** `run-tests.mjs:71`, `run-tests.mjs:267` and `dispatch-tests.mjs:58` pick
+   the interpreter from the script's OWN extension — `script.endsWith(".py") ? (process.env.PYTHON
+   || "python3") : process.execPath` — independent of the `PY` flag. Read first-hand 2026-09-08:
+   **the conclusion HOLDS** (with `AD_RUNTIME` unset, the `:39` ternary yields `gate-check.mjs`, so
+   the extension test yields `process.execPath`), but `8ff64ca`'s METHOD did not establish its own
+   claim. It enumerated four of five and generalized — which is the same proxy-generalization
+   defect `8ff64ca` was itself written to correct, one layer down. **The correction lives here and
+   not in a later commit message on purpose: commit messages are forward-only, so a reader who
+   greps the AD_RUNTIME claim lands on `8ff64ca`, reads a confident conclusion, and never reaches
+   its correction.**
+6. **`5e14b76`'s workflow comment says "on Windows NOTHING in this workflow exercises the Python
+   port". FALSE.** `npm test`'s NINTH command is `python3 tests/python-lib-checks.py`,
+   unconditional — so it runs on all three `windows-latest` matrix cells AND in the dedicated
+   `windows-node-22-14` job. That file is 83 KB and imports `gates.py`, `regex_worker.py` and
+   `process_tree.py` from `scripts/lib/`: port code, executing on Windows.
+
+   **The true claim is narrower, and still a real hole:** on Windows there is no DIFFERENTIAL and
+   no ORACLE-SUITE coverage of the port — `test:diff` is skipped by `if: runner.os != 'Windows'`
+   (`test-matrix.yml:57`) and `npm test` leaves `AD_RUNTIME` unset (verified: no match in
+   `package.json`) — but port LIBRARY code is exercised there. `python-lib-checks.py` carries ONE
+   textual reference to `ledger_check.py`, so a Windows-only divergence in the checker itself
+   still passes green.
+
+   **UNRESOLVED, and it INVERTS the finding if it goes the other way:** does `python3` even resolve
+   on `windows-latest`? On Windows the executable is normally `python`, with `python3` often a
+   Store app-execution-alias stub. If it does not resolve, that ninth command fails and `npm test`
+   is **RED on all four Windows runs** — a far larger finding than a coverage gap. This CANNOT be
+   settled from here: CI has never run this tree (`origin/main` is 250 commits behind, nothing
+   pushed), and the three most recent workflow runs are all pre-port.
 1. **`47bc2be` says "NOTHING WAS WATCHING THIS LINE" and cites the silent settle. Too strong.**
    Every existing fixture *executes* the finder — that is how any of them parse at all. What the
    settle actually measured is that **no existing test's verdict changes when the site's semantics
