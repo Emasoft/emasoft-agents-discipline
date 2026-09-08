@@ -353,10 +353,14 @@ def is_strong_evidence(l):
         # Both directions reach the VERDICT, not merely the predicate: `evidence: present` vs
         # `MISSING`, hence `-> ledger complete` against `-> ledger INCOMPLETE.` on the same bytes.
         #
+        # All five were measured at all three positions, not three measured and two inferred from
+        # the trim-set constant -- an earlier draft did the latter under a MEASURED heading.
+        #
         # GATED AT THE INTERIOR POSITION ONLY -- that is the one shape where all six code points
         # diverge, so it is the only shape a single writer can cover. The edge positions are fixed
-        # by this same expression and are NOT separately gated; a future writer that pads the span
-        # edge would gate them, and would red for the five and pass for U+FEFF.
+        # by this same expression and are NOT separately gated. PREDICTION, not a result: a writer
+        # padding the span EDGE should red for the five and pass for U+FEFF (stripped at the edges,
+        # so both runtimes see the bare runner word). Nobody has run it.
         #
         # `[/.]` NEEDS NO CONVERSION -- two literal ASCII characters, no shorthand class.
         #

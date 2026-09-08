@@ -1130,7 +1130,21 @@ evidence), and the shape a real BOM-prefixed ledger would hit.
 **⏵ SITE 4 OF 8 IS DONE — `is_strong_evidence`, `f4ca402`.** The span test now spells
 `JS_WS_CLASS`. RED 6 `strong-span` rows with 0 other and controls green; GREEN 63 checks (was
 56), 0 diverge; `npm test` 0, `test:diff` 0 (known set unchanged), shellcheck 0, ruff 6/mypy 7
-unchanged. The RED run IS the mutation proof — reverting that one line reds exactly its own six.
+unchanged.
+
+**DO NOT INHERIT "the RED run IS the mutation proof" — IT IS TRUE HERE AND FALSE AS A RULE.**
+The RED state was produced by `git show HEAD:<path> >` the file, which reverts EVERY difference,
+not one line. It equals a one-line mutation here only because exactly one production line had
+changed since the previous commit — a dependency invisible in the result. Red-before-fix
+establishes *this test detects this defect*; a mutation proof establishes *each production line is
+individually attributable, so no row rides on a sibling*. They coincide at a ONE-LINE site and
+part company immediately: **the next site (the no-op detector) has TWO `\s`, so reverting both at
+once would prove the pair matters and nothing about either line.** That site needs two separate
+mutations, as the `^##` heading pair did. The disjointness half here comes from `0 other red`,
+not from the revert.
+**Also weaker than the earlier sites in one respect:** GREEN restored from a `/tmp` copy and was
+committed without a `git diff --quiet` check. The 63-check pass makes a stale copy unlikely, but
+the stronger control was available and was not used. Use it.
 
 **TWO THINGS A FUTURE SESSION MUST NOT UNDO AT THIS SITE:**
 - **The fixture pads a RUNNER WORD (`pyt<pad>est`), not two arbitrary letters.** Both properties
@@ -1165,7 +1179,60 @@ closes the block first. The earlier form of this claim rested on `744 > 719`, wh
 ORDER and cannot distinguish this guard from the `:818`/`:956` regions; a review fork caught it
 before it shipped into a source comment.
 
-**NEXT: the no-op detector (`:565`, ×2 inside the `\Z` alternation) — not `CITATION`,** which needs the `JS_WS_CLASS_BODY`
+## ⏵ THE QUEUE — everything open, numbered, because paragraphs do not drain
+
+Written 2026-09-08 after a review fork made the point that lands hardest in this whole task:
+**the `\s` sweep is not the work.** The sweep has a numbered queue and a per-site protocol, so it
+moves. Four divergences of the SAME CLASS sat in a prose paragraph with no owner and no trigger,
+and one of them carries the largest stated blast radius in the file. Queues get drained;
+paragraphs get re-read and re-deferred. So they are numbered here with the sweep, not below it.
+
+**A SECOND WARNING FROM THE SAME FORK: "sites 1-4 done" counts CONVERSIONS, NOT COVERAGE.** Each
+site is gated only at the position its writer pads; site 4's own comment concedes the edge
+positions are fixed but ungated. Do not read the site count as coverage.
+
+1. **no-op detector `:565`** — ×2 `\s` in the `\Z` alternation (`(?:\s+[^&|;]*)?`, `command\s+true`).
+   TWO occurrences ⇒ **TWO separate mutations**, per the precedent correction above.
+2. **`in_rules_section` sticky-TRUE** — nothing exercises a divergence that leaves the flag true
+   across several following lines. **Largest blast radius named anywhere in this TRDD**, and the
+   shape a real BOM-prefixed ledger would actually hit. It has been recorded and unscheduled for
+   two sessions; it is now #2 rather than a sentence.
+3. **`CREATED`'s `/m` LineTerminator half** — ECMAScript `^` under `/m` matches after LF, CR,
+   U+2028 and U+2029; Python `re.M` recognizes LF alone. Fix source already recorded above.
+4. **`re.I` / U+017F fold at the rules heading** — `## Ruleſ of thiſ ledger` is the rules heading
+   to the port and not to the oracle. Needs `re.A`, which is only safe now that no `\s` remains on
+   those two lines.
+5. **`EXIT_CODE` fold-axis test vector** — the fix landed; the gate never did. Undischarged debt.
+6. **`CITATION` `:150`** — ×2 inside a NEGATED class, so it needs `JS_WS_CLASS_BODY` (the existing
+   `JS_WS_CLASS` is bracketed and closes the class early). **LAST**, and the constant must land IN
+   that commit or it is a dead symbol.
+7. **`acceptance_command`** — its own harness; spec below.
+
+### The `acceptance_command` harness — SPECIFIED, so the deferral cannot decay into abandonment
+
+A deferral with no owner and no entry condition is indistinguishable from a decision never to do
+it, and "needs its own harness" was exactly that shape until now. It IS constructible, and the
+earlier finding that killed the "no orphan survives" test does NOT apply: that one had no
+legitimate input that could red it, whereas here `acceptance_command` returning a command versus
+`None` is directly observable and BOTH outcomes are legitimate for different inputs.
+
+Smallest honest form — `SKIP_RERUN` **unset**, acceptance cell a code span whose command leaves an
+observable trace (writes a file, or exits non-zero):
+- **control:** ordinary space in the span ⇒ both runtimes run it ⇒ trace present in BOTH; `X` pad
+  (whitespace in neither) ⇒ command not recognized ⇒ trace absent in BOTH. Legitimate inputs, and
+  it can fail.
+- **case:** a divergent pad ⇒ one runtime runs it and the other does not ⇒ trace present under one.
+
+It cannot be a row in `whitespace-diff.sh`: that suite exports `SKIP_RERUN` globally and ships
+non-runnable acceptances BY DESIGN. ~40 lines borrowing `_case`'s shape, plus a writable fixture
+dir and cleanup.
+
+**COMMENT BUDGET, adopted 2026-09-08:** site 4 shipped a 24-line comment for a one-token change.
+From here: ~3 lines at the site plus a pointer to this TRDD. The TRDD is the durable record;
+duplicating it inline is where the ceremony lives, and the file is accreting commentary faster
+than code.
+
+**NEXT: queue item 1, the no-op detector — not `CITATION`,** which needs the `JS_WS_CLASS_BODY`
 factoring, and that must land IN the `CITATION` commit (a constant with no consumer is a
 dead-symbol commit). Its mechanics are settled and measured: the bracketed `JS_WS_CLASS` inside
 `[^...]` closes the class early, collapsing each path segment to ONE character — `app/stats.py`
