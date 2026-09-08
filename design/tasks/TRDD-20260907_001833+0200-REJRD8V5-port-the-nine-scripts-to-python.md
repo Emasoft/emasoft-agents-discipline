@@ -1583,7 +1583,7 @@ than commits that landed code.
     `_signal_name` reports the child's returncode whoever sent the signal, so that signature alone
     never names the sender; for the port's rows the 15 s-per-row arithmetic is consistent with
     `run_check`'s bound being the sender, unconfirmed. What was and was not ruled out, and the
-    recipe if it recurs, are in the LOCAL memory atom `ATOM-HB2A-L5DV` (page
+    recipe if it recurs, are in the LOCAL memory atom `ATOM-MB3F-XQH6` (page
     `stale-diff-check-shell-stall`); the deterministic defect stands on the `sleep` measurements
     alone.
     **Why no suite saw it:** no test runs a CHECK longer than 5 s (grep over `tests/`: the longest
