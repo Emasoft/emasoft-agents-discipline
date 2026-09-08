@@ -826,16 +826,20 @@ _control _write_ledger_created_lt "control: created line-terminator writer" '[^ 
 
 # LF and CRLF are HARNESS controls: they prove the pad position is one where a terminator reads
 # as line-start. They are not the LF gate -- an anchor that DROPS LF fails at the `created`
-# writer's CONTROL above (every fixture puts `Created:` after LF), before any row here runs.
+# writer's CONTROL above, before any row here runs (that writer puts `Created:` after a bare LF,
+# as does every file in tests/fixtures and templates that carries one: 18 of 18, grep-verified).
 # MEASURED, one mutant per terminator: dropping CR, U+2028 or U+2029 from the anchor reds exactly
 # that terminator's row and nothing else; dropping LF fails the created control. U+0085 is the
 # widening row (`differ`: the oracle refuses NEL as a terminator, so its verdict moves STALE ->
 # clean, and a port anchor written `(?<=\s)` diverges -- measured, exactly that row). No marker:
 # `same` already requires the padded oracle output to EQUAL the baseline, stronger than any
 # substring; the created surface above sets the precedent for a markerless `differ`.
-# CEILINGS, MEASURED (each mutant leaves all 70 checks green): dropping the `^` alternative
-# (position 0) -- every fixture starts with `# Delegation plan`; and widening the class to VT/FF
-# without NEL -- the oracle refuses those too, but only NEL has a row.
+# CEILINGS (each mutant leaves all 70 checks green -- measured): dropping the `^` alternative
+# (position 0) -- no file in tests/fixtures or templates starts with `Created:`, each opens with
+# an H1 line (44 of 44, grep-verified); and widening the class to VT/FF without NEL -- the green
+# run shows only that the suite cannot see it. That the oracle refuses VT/FF is the ECMAScript
+# `/m` spec (`^` matches after LF, CR, U+2028, U+2029 only), not a measurement: no VT/FF fixture
+# exists, so the oracle was never asked.
 declare -a LT_NAME=("LF" "CRLF" "CR" "U+2028 (LINE SEPARATOR)" "U+2029 (PARAGRAPH SEPARATOR)" "U+0085 (NEL, not a terminator)")
 declare -a LT_BYTES=('\n' '\r\n' '\r' '\xe2\x80\xa8' '\xe2\x80\xa9' '\xc2\x85')
 declare -a LT_EFFECT=(same same same same same differ)
