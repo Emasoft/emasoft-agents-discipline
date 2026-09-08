@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-07T22:52:06+0200
+updated: 2026-09-08T10:15:34+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -873,6 +873,25 @@ premise. So a fork's approval is not evidence the work was the right work.
 **THEREFORE, ON EVERY RESUME AFTER A COMPACTION: read `precompact-handoff.md` and this block
 BEFORE the first tool call that changes anything.** Not "before acting" — before EDITING. The two
 commits above were both preceded by long, careful, entirely misdirected measurement.
+
+**⏵ SITE 1 OF 8 IS DONE — `EXIT_CODE`, `c057c93`.** Diverged on 5 of 8 probes (3 whitespace, both
+directions; 2 fold), 0 after. Fixed per the file's own BODY-then-FLAGS order. Red/green through
+the real suite: reverted → exactly the 6 new rows fail, 29 pre-existing stay green; restored →
+35/35. `npm test` 0, all 14 diff suites 0.
+**Two things it establishes for the seven that remain.** (a) **A site's cost is its test surface,
+not its regex.** 0 of the 31 inputs `ledger-tests.mjs` drives reached `EXIT_CODE`, so its green
+was vacuous until a fifth `whitespace-diff.sh` writer was added — measure reachability BEFORE
+believing a green. (b) **The fold axis is a SECOND axis needing its OWN vector**: `EXIT_CODE`'s
+fold half is fixed but UNGATED, because `whitespace-diff.sh` carries no fold vector. Pattern to
+copy: `tests/fixtures/unit-header-fold.md` + its ledger-tests case. Owed for every `re.I` site.
+**NEXT: `CREATED` or the `^##\s+` pair — not `CITATION`,** which needs the `JS_WS_CLASS_BODY`
+factoring, and that must land IN the `CITATION` commit (a constant with no consumer is a
+dead-symbol commit). Its mechanics are settled and measured: the bracketed `JS_WS_CLASS` inside
+`[^...]` closes the class early, collapsing each path segment to ONE character — `app/stats.py`
+stops matching. It fails LOUDLY, so the factoring is plumbing the conversion needs, NOT a guard;
+do not describe it as one. The silent direction is the mirror: `JS_WS_CLASS_BODY + "+"` OUTSIDE a
+class is a 25-char literal run with `+` on its last member, and the file already spells
+`JS_WS_CLASS + r"+"` twice, one copy-paste away.
 
 **RESUMPTION POINT — the blocker was TESTED, and the test NARROWED it rather than killing it.**
 `:144` is done (`47bc2be`). Next is `JS_WS_CLASS_BODY` factoring and the `\s`-membership decision,
