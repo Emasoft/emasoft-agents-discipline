@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T21:10:46+0200
+updated: 2026-09-08T22:44:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1298,7 +1298,7 @@ the observation alone.
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
 positions are fixed but ungated. Do not read the site count as coverage.
 
-**ORDER IS NOT NUMBER.** Items 1, 2, 3, 4, 9 and 10 are done; the order is **13 → 5 → 7 → 6** (6 is
+**ORDER IS NOT NUMBER.** Items 1, 2, 3, 4, 5, 9 and 10 are done; the order is **13 → 7 → 6** (6 is
 last by construction — it needs `JS_WS_CLASS_BODY` in its own commit). Renumbering would churn
 every cross-reference, so the order lives here instead. A reader who takes the lowest open number
 takes item 2, and item 9's note then lands after the window it covers — which is precisely the
@@ -1441,17 +1441,28 @@ than commits that landed code.
    which would have left a substring-only gate. **MEASURED, oracle / port / port with `re.A`
    removed:** exit 0 / 0 / 1, `evidence:` present / present / MISSING. **Mutants:** dropping `re.A`
    reds exactly this case (six assertions), no other case — 141 PASS + 6 FAIL = the suite's 147,
-   so no case threw either (the post-write review asked for the subtraction) — and the whitespace
+   so the loop ran to the end (a checker failure is a FAIL line inside the 6; only a throw outside
+   the runner's try would shorten the total; the post-write review asked for the subtraction) — and the whitespace
    suite stays 70 green (reasoned why: the `rules-heading` rows pad with whitespace only, which
    has no case for `re.A` to act on); normalizing the fixture's ſ to `s` reds the case AND the
    guard in both runtimes, 140 PASS + 7 FAIL each — a disarmed fixture fails loudly instead of
-   passing. Suites: `npm test` 256 PASS, port suite 147 PASS (was 140: six assertions plus the
-   guard), 14 diff suites exit 0. **Why U+017F:** the heading has three `s` and its `i` is inside
+   passing. Suites: `npm test` 256 PASS (it chains nine test scripts; ledger-tests alone is 147 in
+   either runtime, which is the number the mutant counts above use), port suite 147 PASS (was 140:
+   six assertions plus the guard), 14 diff suites exit 0. **Why U+017F:** the heading has three `s` and its `i` is inside
    `this`; U+017F survives NFC/NFD (only NFKC maps it to `s`). **Scope:** this one site. The
    FLAG CLASS section's other `re.I` sites keep their own items; item 5 is the adjacent debt.
    **Ceiling, reasoned not measured:** the fixture exercises U+017F only; U+0131/U+0130/U+212A are
    named in the port comment as examples of what bare `re.I` folds, not as gated vectors.
-5. **`EXIT_CODE` fold-axis test vector** — the fix landed; the gate never did. Undischarged debt.
+5. **✅ DONE (`acb3c8a`, 2026-09-08).** `EXIT_CODE` fold-axis vector: `tests/fixtures/exit-code-fold.md`
+   spells its only evidence line `exıt 0` (U+0131; normalization-stable, see item 4's note); the
+   ledger-tests case wants exit 1 + `evidence:    MISSING` and rejects `evidence:    present` /
+   `ledger complete`; a fixture guard asserts the U+0131 byte. MEASURED three-state: oracle
+   1/MISSING, port 1/MISSING, port with `re.A` removed (mutant) 0/present — exit and substring both
+   discriminate. No `rerun: true`: on this fixture that path exits 1 in every state. Gates at
+   commit: `npm test` 261 `^PASS` lines / 0 FAIL across its nine scripts (ledger-tests' oracle run
+   inside it); `AD_RUNTIME=python node tests/ledger-tests.mjs` 152 / 0 (the port run, standalone —
+   a real gate; item 13's caveat is about `run-tests.mjs`); `test:diff` exit 0 at 22:32 (24 s, only
+   the known `unicode property escape` divergence, set unchanged).
 6. **`CITATION` `:150`** — ×2 inside a NEGATED class, so it needs `JS_WS_CLASS_BODY` (the existing
    `JS_WS_CLASS` is bracketed and closes the class early). **LAST**, and the constant must land IN
    that commit or it is a dead symbol.
@@ -1544,6 +1555,44 @@ than commits that landed code.
     separate npm script that IS run per-commit here. So the defect is narrower and more precise
     than "the port is ungated": the phrase "npm test" names the chain that holds the runtime
     FIXED, while the chain that VARIES it has been running all along under a different name.
+14. **`gate_check.py` SIGKILLs any CHECK that runs longer than about 15 s, whatever `--timeout`
+    says. DETERMINISTIC, MEASURED 2026-09-08, port vs oracle first-hand.** Under the default 120 s
+    timeout the port reports `FAIL leaf:G1 … exit=none signal=SIGKILL; EXPECT=not matched;
+    output=(no output)`, exit 1, with NO "timed out after" error — a signal death, not a timeout.
+    **Mechanism, read at `run_check` (`:1283-1302`):** after the child starts, the two capture
+    threads are joined with `timeout=5.0` each and then `child.wait(timeout=5.0)`; a `TimeoutExpired`
+    there calls `stop_child()`, which SIGKILLs the process group. Those three bounds are the
+    "never block forever on a wedged descendant" guard, but they run BEFORE the `timeout_seconds`
+    timer has any say. The bounds are sequential, each starting when the previous returns, but
+    the supervisor (`lib/check_supervisor.py`) holds both of its pipes until it exits, so both
+    joins run their full 5 s: the ceiling is 15 s from spawn for every shape measured — `sleep 12`
+    passes; `sleep 16`, `sleep 20` and `echo start; sleep 20` die at 15 s, the last with
+    `output=start` (port; the oracle passes all four) — and the pipe-holding predicts no shorter
+    one. The oracle (`gate-check.mjs:636-660`) bounds nothing on the success path: it settles on
+    the child's `close` event, and only `stopChild` (timeout or overflow) starts the 1 s / 1.5 s
+    grace timers. **Fix shape, not yet proposed:** bound the joins and the wait by the REMAINING
+    budget to the timeout deadline (the timer fires `stop_child` on its own); AFTER `stop_child`
+    keep the existing 5 s bounds and the daemon reaper thread, which are the real guard against a
+    descendant that escaped the group and still holds a pipe. **How it surfaced — an OBSERVATION
+    filed beside the defect, cause OPEN, like item 8:** on 2026-09-08 from 21:13 to at least 21:35
+    every `stale-diff.sh` run I made diverged, its port rows of `echo ok` dying `signal=SIGKILL`;
+    by 22:28 the same harness and a minimal repro passed and `test:diff` was green. Transient and
+    environmental, and it reached BOTH runtimes' check shells: an earlier `ps` showed the port's
+    supervisor tree with a 3 s-old shell (a passing run is 0.06 s), and a watcher later caught a
+    17 s-old sleeping shell whose fds read as the oracle's — a stall no runtime had killed yet.
+    `_signal_name` reports the child's returncode whoever sent the signal, so that signature alone
+    never names the sender; for the port's rows the 15 s-per-row arithmetic is consistent with
+    `run_check`'s bound being the sender, unconfirmed. What was and was not ruled out, and the
+    recipe if it recurs, are in the LOCAL memory atom `ATOM-HB2A-L5DV` (page
+    `stale-diff-check-shell-stall`); the deterministic defect stands on the `sleep` measurements
+    alone.
+    **Why no suite saw it:** no test runs a CHECK longer than 5 s (grep over `tests/`: the longest
+    `sleep` is 5, inside `mutate-probe-selftest.sh`, a harness self-test), so the 15 s ceiling was
+    never crossed on a green run, and `run_check`'s own docstring describes the bounded wait as
+    "only for the pathological case" — true of the post-SIGKILL wait it was written for, false of
+    the success path it also governs. Not a `\s` site; not part of items 5–7; its own commit,
+    proposal first, with a leaf that sleeps past 15 s as the gate (both runtimes, exit AND the
+    PASS line); that leaf costs its sleep twice per run, so where it lives is part of the proposal.
 
 ### `acceptance_command` — the harness spec is WITHDRAWN; it is a normal row
 
