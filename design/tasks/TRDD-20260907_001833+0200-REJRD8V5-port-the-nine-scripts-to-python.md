@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T10:45:47+0200
+updated: 2026-09-08T10:51:14+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -915,7 +915,16 @@ than the suite's own say-so** — which would otherwise be exactly as worthless 
 since it is derived from a set the same run computed. `regex-worker-diff.sh:177` pins
 `EXPECTED_DIVERGENT_SET='\p{L}<u>'` as a HARDCODED literal and diffs the observed set against it
 at `:180`, so a NEW divergence and a VANISHED one both red it. Its `(see TRDD)` pointer was
-DANGLING until this entry — nothing in this TRDD named that row. (2) I compared mypy against HEAD via `git stash push -- <one file>` on
+DANGLING until this entry — nothing in this TRDD named that row.
+**AND THE PINNED LITERAL IS ITSELF CALIBRATED — trading up to a better instrument does not
+calibrate it, and I nearly stopped one step short.** A literal is version-controlled and mutable,
+so a suite made green by WIDENING its own expected set prints exactly that same reassuring line;
+`regex-worker-diff.sh:133` records a cheat-shrink attempted on the sibling `EXPECTED_ROWS`
+constant, three lines above the one being trusted. Measured: `git log -S 'EXPECTED_DIVERGENT_SET'`
+returns ONE commit, `93fe3d0` (2026-09-07 02:23), and `git merge-base --is-ancestor 93fe3d0
+e24398c` succeeds — so the literal has been unchanged across the whole site-1/site-2 window and
+the claim is established. **The failure signal of a pinned-literal instrument is "the literal was
+edited"; check it, or the pinning attests to nothing.** (2) I compared mypy against HEAD via `git stash push -- <one file>` on
 a CLEAN tree: nothing was stashed, so the "baseline" run re-measured the SAME working copy and
 `diff` said IDENTICAL trivially. The paired `stash pop` then popped a PRE-EXISTING 2026-09-06
 auto-backup and left three files `UU` (recovered: stash intact, copies in
@@ -933,14 +942,29 @@ worktree is byte-identical to HEAD, and an empty short status covers `??` too, s
 file left by the pop would also have shown. It is NOT the three-entry `git stash list`, which
 proves only that the conflicted pop KEPT its entry — which is what a conflicted pop always does.
 **And `stash@{0}`'s `dispatch_check.py` hunk was not the cosmetic reorder I called it**: it
-DELETES the `sys.dont_write_bytecode` guard. Restoring to HEAD was still correct — `c4a36d6`
-deliberately moved that guard out of the shipped scripts into the harness, and HEAD reflects
-that. I reported "trivial `import sys` reordering" from inspecting ONE of the three files.
-(3) A third, smaller one in this block's own frontmatter: `a0e4763` set `updated:
+DELETES the `sys.dont_write_bytecode` guard. I reported "trivial `import sys` reordering" from
+inspecting ONE of the three files. Restoring to HEAD was still correct, and the argument is the
+ORDER, not ancestry — `0ee18b6` added that guard to the shipped scripts, the stash was taken from
+a tree with it removed, and `c4a36d6` then committed that removal deliberately ("move the bytecode
+guard out of the shipped scripts and into the harness"; it now lives in nine `tests/*_drive.py`).
+The stash was a WIP snapshot of the change `c4a36d6` landed. **`git merge-base --is-ancestor
+0ee18b6 HEAD` proves nothing** — every commit reachable from HEAD is an ancestor of HEAD.
+**And the stash holds NINE files, not the three that conflicted** (`git stash show --stat`): three
+shipped scripts at −8 each, three `tests/*.mjs` at +8, three `*_drive.py` at −1. A pop applies the
+non-conflicting files SILENTLY, so `git checkout HEAD --` on only the conflicted three could have
+left six applied. It did not — and the thing that shows that is again the EMPTY `git status
+--short`, not any argument about the stash's provenance.
+
+**A smaller record defect, deliberately NOT numbered alongside those two** — they were instruments
+returning a false GREEN; this is a data field nothing branched on, and calling it a third would
+invite a future reader to inherit "three instrument defects". `a0e4763` set `updated:
 2026-09-08T11:22:47+0200` on a commit made at **10:37:45** — 45 minutes in the FUTURE, so it was
-never read from `date`. Corrected to the measured time. `updated:` is what a later session reads
-to judge staleness, so a fabricated one makes a stale block look fresh. **Run `date
-+%Y-%m-%dT%H:%M:%S%z` and paste it; never re-type or reuse a timestamp.**
+never read from `date`. `updated:` is what a later session reads to judge staleness, so a
+fabricated one makes a stale block look fresh. **Run `date +%Y-%m-%dT%H:%M:%S%z` and paste it;
+never re-type or reuse a timestamp.** That rule cannot make the field exact — the pasted value is
+already stale by the time the commit lands, so the field now sits slightly in the PAST of its own
+commit. That is the safe direction (a slow field invites a re-read; a fast one licenses skipping
+it), and approximately-right-and-safely-wrong is all this field can be.
 
 **⚠ THE `/m` HALF OF `CREATED` IS STILL OPEN, AND IT IS A NAMED ITEM, NOT "OWED".** JS `/m` makes
 `^` match after ANY LineTerminator (LF, CR, U+2028, U+2029); Python's `re.M` recognizes LF alone,
