@@ -3,11 +3,10 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T13:40:49+0200
+updated: 2026-09-08T13:49:43+0200
 current-owner: main
 task-type: refactor
 scope: project
-implementation-commits: [a118202]
 ---
 
 # Port all nine scripts to Python
@@ -1251,6 +1250,19 @@ the observation alone.
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
 positions are fixed but ungated. Do not read the site count as coverage.
 
+**ORDER IS NOT NUMBER.** Item 1 is done; the order is **13 → 9 → 2 → 3 → 4 → 5 → 7 → 6** (6 is
+last by construction — it needs `JS_WS_CLASS_BODY` in its own commit). Renumbering would churn
+every cross-reference, so the order lives here instead. A reader who takes the lowest open number
+takes item 2, and item 9's note then lands after the window it covers — which is precisely the
+defect item 9 exists to prevent, so it is written down rather than left to be noticed.
+
+**`implementation-commits:` IS DELIBERATELY ABSENT.** `git log --grep 'TRDD-REJRD8V5'` matches
+**166** commits, so the field cannot serve its purpose by enumeration. It was briefly set to
+`[a118202]` (in `10c10d7`), which was a false machine-readable assertion with its own correction
+buried in the body — the layer the field's readers skip. The authoritative recovery query is the
+grep above; note it counts commits whose MESSAGE cites the TRDD, which is a strictly wider set
+than commits that landed code.
+
 1. **✅ DONE — `a118202` (2026-09-08).** All three `\s` → `JS_WS_CLASS` in ONE commit, with
    `tests/fixtures/noop-pad-divergence.md` and its `ledger-tests.mjs` case. Evidence is TWO kinds
    proving DIFFERENT things: set equality (`_JS_TRIM_CODEPOINTS` == node's `\s` == node's trim set,
@@ -1260,17 +1272,23 @@ positions are fixed but ungated. Do not read the site count as coverage.
    The mutation vectors are U+001C only — one of the five Python-only code points, and nothing
    exercises the U+FEFF direction; set equality covers those, the mutations do not.
    **Two corrections to that commit, recorded here because a commit message is permanent:**
-   — Its gate line reads "npm test exit 0 on node **and python**". That run's output carries NO
-     runtime labels, so the line asserts an attribution it never printed. The claim is TRUE, and
-     what establishes it is the red-then-green asymmetry plus the three attributions — **not** the
-     gate line. Do not cite the gate line as evidence the port was covered.
+   — Its gate line reads "npm test exit 0 on node **and python**". **MEASURED 2026-09-08, and the
+     problem is worse than the unlabelled output I first recorded: `npm test` does not exercise
+     the port of this file AT ALL.** `ledger-tests.mjs:21` defaults `checker` to the ORACLE, and
+     only `:27-28` swaps in `ledger_check.py`, on `AD_RUNTIME=python` — which `package.json`'s
+     nine-command chain never sets. The port coverage is real but came from a SEPARATE invocation,
+     **`AD_RUNTIME=python node tests/ledger-tests.mjs`**, which is what produced py 134/4 → 138/0
+     and is the invocation the evidence above should have named instead of leaving it unsourced.
+     The chain's 9th command IS `python3 tests/python-lib-checks.py` — presumably what made "and
+     python" feel true — but that is a different suite and it never touches `ALWAYS_TRUE`.
+     See item 13: this scope problem is not specific to this commit.
    — The fixture's `&& echo x` suffix is LOAD-BEARING and unreachable at runtime: it exists so
      `acceptance_command`'s own still-unconverted `\s` matches in BOTH runtimes. Item 7 removes
      the need for it; deleting it before then silently stops the case discriminating.
    **`re.I`/U+017F at this SAME site is still open — that is item 4, not part of this.** The class
    itself is fold-inert (25 in, 25 out; control `[sk]` widens by 004B 0053 017F 212A).
-   **`implementation-commits:` starts at `a118202`** — the earlier commits that landed this TRDD
-   are named in the prose above and were never collected into the field.
+   **`implementation-commits:` is absent by decision** — see the queue head for why enumeration
+   cannot work at 166 commits, and what the authoritative recovery query is instead.
    The original entry follows, kept as the record of what the site was.
 
    **no-op detector — the `ALWAYS_TRUE` pattern (`ledger_check.py:616`, oracle
@@ -1341,6 +1359,28 @@ positions are fixed but ungated. Do not read the site count as coverage.
     **Not mine:** `ledger[-_]check` refs in that file = 0, against a control of 93 `gateRun` refs
     proving the counter works. Caveat on my own controls: they ran the suite standalone while the
     failure came from the `npm test` chain, so their green is weaker than a matched control.
+    **⚠ THIS IS NOT A QUEUE ITEM AND SHOULD NOT HAVE BEEN NUMBERED.** It has no completion
+    condition — "cause NOT known, NOT mine" admits no state in which it is marked done — so it
+    would be re-read and re-deferred every session, which is the exact failure this queue's own
+    header warns about, now instantiated inside the structure built to prevent it. Its value is
+    realized on RECALL, when someone hits the same intermittent failure, not on a drain. Pending
+    relocation to a memory note indexed by symptom (`waitForPath`, pid file absent for the full
+    window, hardening-tests intermittent); it stays here only until that note exists.
+13. **`npm test` runs every `AD_RUNTIME`-aware suite against the ORACLE ONLY. MEASURED 2026-09-08.**
+    Four suites read `AD_RUNTIME` — `run-tests.mjs`, `dispatch-tests.mjs`, `lint-tests.mjs`,
+    `ledger-tests.mjs` — and `package.json`'s nine-command chain sets it NOWHERE. So a green
+    `npm test` says nothing about the port for any of the four, and **every "npm test exit 0" gate
+    claim in this task's commits inherits that scope**, `a118202` included.
+    **This RETRO-SCOPES, it does not invalidate:** the port runs that carried the red-then-green
+    proofs were separate `AD_RUNTIME=python` invocations and they did happen. What is wrong is the
+    sentence, not the work. The chain's 9th command (`python3 tests/python-lib-checks.py`) is a
+    real python run and is probably why "and python" kept passing unchallenged — it is a different
+    suite.
+    Fix is a second chain (`test:port`) or a matrix. **It changes the SUITE, which this task holds
+    FIXED as the oracle**, so it needs an explicit decision first rather than a quiet edit — the
+    convention forbids re-specifying a test to make a port look covered, and adding a run of the
+    same fixed suite under a different env is arguably not that, but the call should be made out
+    loud. Placed FIRST in the order above because every later item's gate line depends on it.
 
 ### `acceptance_command` — the harness spec is WITHDRAWN; it is a normal row
 
