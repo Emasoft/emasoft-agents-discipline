@@ -1382,6 +1382,31 @@ than commits that landed code.
     same fixed suite under a different env is arguably not that, but the call should be made out
     loud. Placed FIRST in the order above because every later item's gate line depends on it.
 
+    **VERIFIED BY READING ALL FOUR TERNARIES (2026-09-08), because this item's first version was a
+    proxy generalization.** `ea9e4f6` asserted "four suites run oracle-only" having checked the
+    mechanism in ONE (`ledger-tests.mjs`) and inferred the other three from the mere PRESENCE of
+    the string `AD_RUNTIME` — the counted-a-proxy shape this task keeps producing, committed one
+    turn after I drafted a memory note about it. Read in full, the claim HOLDS:
+    `ledger-tests.mjs:13-16` (`: ["node", [checker]]`), `run-tests.mjs:38-39`
+    (`PY ? "gate_check.py" : "gate-check.mjs"`), `dispatch-tests.mjs:25-26`
+    (`PY ? "dispatch_check.py" : "dispatch-check.mjs"`) and `lint-tests.mjs:33-35`
+    (`PY ? gate_lint.py : LINT`) all default to the ORACLE. It holds for a REASON, not by luck:
+    the four share one deliberate convention and cross-cite it (`run-tests.mjs:29` — "matching the
+    convention dispatch-tests.mjs:22-26 established"). **A proxy that happens to be right is still
+    a proxy; what makes this safe to rely on now is the reading, not the outcome.**
+    **Two facts the grep could not see, and both narrow the fix:**
+    — `run-tests.mjs:32` calls its own python mode **"A PROGRESS METER, NOT A GATE, until the port
+      is complete"**. That suite never claimed to gate the port, so a `test:port` chain must not
+      treat its exit code as one.
+    — `dispatch-tests.mjs:313` SKIPS a case under `AD_RUNTIME=python` ("mid-read swap needs a Node
+      preload"), so the opt-in run has a documented hole: a green port chain would still not cover
+      `read_stable_regular_file`'s mid-read replacement guard.
+    **And the port is NOT uncovered — it is covered by a command nobody calls the gate.** The
+    fourteen `tests/*-diff.sh` suites run BOTH runtimes head to head and live in `test:diff`, a
+    separate npm script that IS run per-commit here. So the defect is narrower and more precise
+    than "the port is ungated": the phrase "npm test" names the chain that holds the runtime
+    FIXED, while the chain that VARIES it has been running all along under a different name.
+
 ### `acceptance_command` — the harness spec is WITHDRAWN; it is a normal row
 
 **The ~40-line executing harness this section used to specify is withdrawn, and BOTH review forks
