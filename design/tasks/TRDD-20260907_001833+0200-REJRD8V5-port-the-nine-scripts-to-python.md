@@ -740,33 +740,44 @@ commit message, search first — that sentence is the one this task keeps gettin
 happen", asserted after reading one layer and not the next.
 
 5. **`8ff64ca` concluded "`npm test` runs the ORACLE only" from FOUR `AD_RUNTIME` ternaries. There
-   are FIVE mechanisms.** `run-tests.mjs:71`, `run-tests.mjs:267` and `dispatch-tests.mjs:58` pick
+   are AT LEAST FIVE, and they are not all `AD_RUNTIME`-keyed — a grep for the env var alone
+   undercounts.** `run-tests.mjs:71`, `run-tests.mjs:267` and `dispatch-tests.mjs:58` pick
    the interpreter from the script's OWN extension — `script.endsWith(".py") ? (process.env.PYTHON
    || "python3") : process.execPath` — independent of the `PY` flag. Read first-hand 2026-09-08:
    **the conclusion HOLDS** (with `AD_RUNTIME` unset, the `:39` ternary yields `gate-check.mjs`, so
    the extension test yields `process.execPath`), but `8ff64ca`'s METHOD did not establish its own
-   claim. It enumerated four of five and generalized — which is the same proxy-generalization
-   defect `8ff64ca` was itself written to correct, one layer down. **The correction lives here and
-   not in a later commit message on purpose: commit messages are forward-only, so a reader who
-   greps the AD_RUNTIME claim lands on `8ff64ca`, reads a confident conclusion, and never reaches
-   its correction.**
+   claim. It enumerated four and generalized — the same proxy-generalization defect `8ff64ca` was
+   itself written to correct, one layer down. **This item states no count either**, because only
+   two of the eight suites in the `npm test` chain were swept, so a sixth is not excluded.
+   Enumerate before anyone writes one:
+   `grep -an 'endsWith(".py")\|process.execPath\|process.env.PYTHON'` over `tests/*.mjs` and
+   `scripts/**/*.mjs` — `-a` because the oracle is binary to grep.
+   **The correction lives here and not in a later commit message because commit messages are
+   forward-only. What makes it FINDABLE is a different mechanism: every item names the SHA it
+   corrects, so from a commit in hand the index is `grep -rn <sha> design/`.**
 6. **`5e14b76`'s workflow comment says "on Windows NOTHING in this workflow exercises the Python
    port". FALSE.** `npm test`'s NINTH command is `python3 tests/python-lib-checks.py`,
    unconditional — so it runs on all three `windows-latest` matrix cells AND in the dedicated
-   `windows-node-22-14` job. That file is 83 KB and imports `gates.py`, `regex_worker.py` and
-   `process_tree.py` from `scripts/lib/`: port code, executing on Windows.
+   `windows-node-22-14` job. **An import list would prove nothing** — a module can be imported and
+   never called — so this is MEASURED: `:186` is a module-level
+   `report(_rw._FLAG_MAP == _g._JS_FLAG_MAP, …)` sitting ahead of the file's first `if WIN32:` at
+   `:192`, so `regex_worker` and `gates` are ASSERTED ON unconditionally, on every platform.
+   `process_tree`'s uses (`:377`, `:397`, `:418`) are all indented under blocks and are NOT
+   established as unconditional.
 
    **The true claim is narrower, and still a real hole:** on Windows there is no DIFFERENTIAL and
    no ORACLE-SUITE coverage of the port — `test:diff` is skipped by `if: runner.os != 'Windows'`
    (`test-matrix.yml:57`) and `npm test` leaves `AD_RUNTIME` unset (verified: no match in
-   `package.json`) — but port LIBRARY code is exercised there. `python-lib-checks.py` carries ONE
-   textual reference to `ledger_check.py`, so a Windows-only divergence in the checker itself
-   still passes green.
+   `package.json`) — but port LIBRARY code is exercised there. `python-lib-checks.py`'s ONE
+   reference to `ledger_check.py` is a COMMENT (`:50`, about the 3.11 floor) — READ, not counted —
+   so a Windows-only divergence in the checker itself still passes green.
 
-   **UNRESOLVED, and it INVERTS the finding if it goes the other way:** does `python3` even resolve
-   on `windows-latest`? On Windows the executable is normally `python`, with `python3` often a
-   Store app-execution-alias stub. If it does not resolve, that ninth command fails and `npm test`
-   is **RED on all four Windows runs** — a far larger finding than a coverage gap. This CANNOT be
+   **UNRESOLVED, and it INVERTS the finding if it goes the other way — by TWO routes, not one:**
+   does `python3` even resolve on `windows-latest`? On Windows the executable is normally `python`,
+   with `python3` often a Store app-execution-alias stub. And even where it DOES resolve,
+   `python-lib-checks.py:21-23` hard-exits (`sys.exit(<str>)`, non-zero) on any Python below 3.11.
+   Either route makes that ninth command fail and `npm test`
+   **RED on all four Windows runs** — a far larger finding than a coverage gap. This CANNOT be
    settled from here: CI has never run this tree (`origin/main` is 250 commits behind, nothing
    pushed), and the three most recent workflow runs are all pre-port.
 1. **`47bc2be` says "NOTHING WAS WATCHING THIS LINE" and cites the silent settle. Too strong.**
