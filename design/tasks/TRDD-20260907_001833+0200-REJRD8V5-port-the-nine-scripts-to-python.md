@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T12:29:30+0200
+updated: 2026-09-08T12:35:32+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1170,20 +1170,48 @@ expression and are NOT separately gated.
 **`acceptance_command` IS DEFERRED, and the reason I recorded for the deferral — "it needs its own
 harness" — IS REFUTED. MEASURED 2026-09-08.** The recorded argument was that a command returned
 from it is precisely what makes the re-run EXECUTE it, and this differential ships only
-non-runnable acceptances by design, so no row here could ever gate the site. The premise is true
-and the conclusion does not follow: `acceptance_command` runs BEFORE the no-op detector, and a
-no-op acceptance is REJECTED WITHOUT EXECUTION. Run with `SKIP_RERUN` unset, on a `verified` row
-whose acceptance cell is the code span `` `echo ok` ``:
+non-runnable acceptances by design, so no row here could ever gate the site. The premise is true;
+the conclusion is not, because the site is observable at the VERDICT.
 
-      ACCEPTANCE DID NOT REPRODUCE:
-        - #1 $ echo ok -> no-op acceptance — exits 0 by construction, tests nothing
-      -> ledger INCOMPLETE.
+**⚠ MY FIRST WRITE-UP OF THIS INVERTED THE SOURCE ORDER, and the inversion also picked the wrong
+fixture.** I wrote "`acceptance_command` runs BEFORE the no-op detector" and built the spec on a
+NO-OP acceptance. The call site says the opposite — `:753` collects spans, `:757` rejects chain
+operators, `:765` rejects no-ops, and only `:772` calls `acceptance_command`, each with a
+`continue`. **A no-op acceptance never reaches `acceptance_command` at all**, so the `` `echo ok` ``
+probe I generalized from was measuring the NO-OP DETECTOR (queue item 1), not this site. Caught by
+reading the call site, before the writer was written.
 
-Recognized, named in the output, verdict moved — and nothing ran. So the site IS observable
-through the ORDINARY verdict (recognized ⇒ `INCOMPLETE`, unrecognized ⇒ `complete`), which is the
-shape every other row in this suite already has. It is still the MORE consequential of the two
-sites (it decides whether a command RUNS), and its verdict DIRECTION is still unmeasured. What is
-gone is the reason it could not be gated cheaply.
+**BOTH ARMS ARE NOW MEASURED, with a NON-no-op command, `SKIP_RERUN` unset, default budget:**
+
+| acceptance span | `acceptance_command` | output | verdict | node vs py |
+|---|---|---|---|---|
+| `` `pytest` `` (no whitespace) | `None` | `unreproducible: 1 verified row(s) have no runnable acceptance` | **complete**, exit 0 | byte-identical |
+| `` `false x` `` (whitespace) | returns it | `ACCEPTANCE DID NOT REPRODUCE: - #1 $ false x -> exit 1` | **INCOMPLETE**, exit 1 | byte-identical |
+
+The arms discriminate, so the row is buildable. A review fork predicted the unrecognized arm would
+also be `INCOMPLETE` (which would make every row vacuous), reasoning from the plan file's
+`complete.md` result — that fixture is confounded, it ALSO had no citations and went `unbacked`.
+Measured here with citations present: `complete`.
+
+**THE MARKER IS THE RE-RUN ENTRY, NOT THE MESSAGE TEXT.** The entry exists iff `acceptance_command`
+returned non-`None`; every wording downstream of it (`no-op acceptance`, `exit 1`, `budget
+exhausted`) belongs to a DIFFERENT function, and a marker keyed on one of those reds when that
+other function changes. This is the per-case attribution discipline `_case` already enforces.
+
+**AND THE HONEST COST: the recognized arm EXECUTES the command.** "Nothing executes" was true only
+of the no-op fixture, which is the one that cannot reach this site. Keep the command PROVABLY INERT
+(`false`-shaped: non-zero exit, no filesystem effect) — that reduces the new capability from
+"this suite runs commands" to "this suite runs `false`", which is a much smaller claim, but it is
+not zero and must not be written as zero.
+
+**DEAD END, RECORDED SO IT IS NOT RE-TRIED:** `AGENTS_DISCIPLINE_RERUN_BUDGET_MS=1` reaches a
+`remaining <= 0` branch at `:785` that reports the command by name WITHOUT executing it, which
+looks like a free no-execution observable. It is a RACE, in BOTH runtimes. Five trials: both
+`exhausted`, both `exit 1`, both `exit 1`, then node `exhausted` / py `exit 1` twice. The
+node/python disagreement is `Date.now()` integer-ms against `time.monotonic()` sub-ms resolution at
+a 1 ms budget — **not a porting defect, and not a usable mechanism.** It was 3-of-5 disagreement on
+first contact, which is exactly what a real divergence looks like; the determinism check is what
+separated them.
 **Its guard nesting IS established, and was not before:** `if not rerun_skipped:` sits at column
 0 (`:719`), the call at column 8 (`:744`), and NO column-0 line lies between them — so nothing
 closes the block first. The earlier form of this claim rested on `744 > 719`, which is only file
@@ -1245,16 +1273,33 @@ the withdrawn design's flaw is the reusable part:
   is the assertion that makes the row satisfy the every-check-needs-a-control rule. Its absence was
   invisible because the two assertions the spec did carry looked complete.
 
-**What replaces it, from the measurement above: a writer, a control and six rows — the same shape
-as sites 1-4.** `SKIP_RERUN` unset for these rows only; acceptance cell is a code span holding a
-NO-OP command, so the no-op detector rejects it and nothing executes; the observable is the
-verdict, exactly as everywhere else. No trace file, no cleanup, no `trap`, no new execution
-capability for this suite — which also retires the strongest argument against building it at all.
+**What replaces it: a writer, a control and six rows — near the shape of sites 1-4.** `SKIP_RERUN`
+unset FOR THESE ROWS ONLY; acceptance cell is a code span holding a NON-no-op, provably inert
+command (`false`-shaped); the observable is the presence/absence of the re-run entry, read at the
+verdict. No trace file, no cleanup, no `trap`. Not "exactly as everywhere else": every other row
+runs under a suite-global `SKIP_RERUN=1`, so the loop needs a real change, and `_control`'s
+fixture-file `diff -a` contract may not transfer once the re-run path appends different content.
 
-**⚠ ORDERING DEPENDENCY, and it is NEW — the two sites CONFOUND EACH OTHER on the same string.**
-The no-op detector (item 1) carries bare `\s` too. A padded no-op command is read by BOTH
-predicates, so until item 1 is converted a moved verdict cannot be attributed to either site. Item
-1 first is therefore load-bearing, not merely the order I happened to pick.
+**⚠ THE "ORDERING DEPENDENCY" I WROTE HERE WAS FALSE, AND A FORK CAUGHT IT.** I claimed the two
+sites confound each other, so item 1 had to land first. That is a property of the `` `echo<PAD>ok` ``
+FIXTURE — where item 1's `(?:\s+[^&|;]*)?` and this site's `re.search(\s)` read the same pad — not
+of the two SITES. A `false`-shaped command matches no `ALWAYS_TRUE` alternative whatever the pad,
+so `is_noop_acceptance` returns False in both runtimes and item 1's predicate does not participate.
+**The sites are separable and item 1 need not precede item 7.** Recording a universal dependency
+between two sites, inferred from one fixture, and labelling it "load-bearing" is the same
+over-generalization this TRDD already records twice.
+
+**The trade that replaces it, stated as a trade:** the no-op fixture executes nothing but cannot
+reach this site; the inert fixture reaches it and runs one `false`. Take the inert fixture.
+
+**MUST BE MEASURED BEFORE THE WRITER IS WRITTEN** (do not reason it from `ALWAYS_TRUE`'s
+alternatives, which is how the no-op inversion above got in): that `false<PAD>x` is genuinely
+not-a-no-op in BOTH runtimes at every pad position, and the three-position analysis below.
+**AND RE-TAKE THE TWO-ARM MEASUREMENT INSIDE A REAL GIT REPO.** Both probes above ran in a scratch
+dir with no `.git` ancestor, so they took `run_cwd`'s not-found fallback — the plan file already
+warns about exactly this and says to re-run the rerun-path measurements in a repo. It cannot affect
+the unrecognized arm (nothing executes there), so the discriminating result stands; it can affect
+the recognized arm's exit code, which is the arm the writer depends on.
 
 **STILL UNMEASURED, and it must be measured BEFORE the writer is written** (a fork named it and it
 is the harder question than the control one): the predicate is `re.search(\s)` **AND**
