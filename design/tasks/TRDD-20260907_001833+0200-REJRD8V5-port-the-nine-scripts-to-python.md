@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T13:49:43+0200
+updated: 2026-09-08T20:21:21+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1169,9 +1169,9 @@ half (fix source recorded above), and NOW `:377`'s `re.I`/U+017F fold half — `
 fold axis already owes one vector at `EXIT_CODE`. A fold vector does not fit this harness: it
 needs its own writer and an effects array unrelated to `CASE_ORACLE_EFFECT`.
 
-**NAMED, NOT YET SCHEDULED:** nothing exercises a divergence that leaves `in_rules_section` TRUE
-across several following lines — the largest blast radius (every later line silently dropped from
-evidence), and the shape a real BOM-prefixed ledger would hit.
+**RESOLVED 2026-09-08 → queue item 2 (`3bb7e99`):** the PERSISTENCE half was already gated by the
+flipped-template case in `ledger-tests.mjs`, now named at both sites and armed; the DIVERGENCE
+half is killed by this site's own U+FEFF rows under either `\s` revert. Detail in the queue.
 
 **⏵ SITE 4 OF 8 IS DONE — `is_strong_evidence`, `f4ca402`.** The span test now spells
 `JS_WS_CLASS`. RED 6 `strong-span` rows with 0 other and controls green; GREEN 63 checks (was
@@ -1296,7 +1296,7 @@ the observation alone.
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
 positions are fixed but ungated. Do not read the site count as coverage.
 
-**ORDER IS NOT NUMBER.** Item 1 is done; the order is **13 → 9 → 2 → 3 → 4 → 5 → 7 → 6** (6 is
+**ORDER IS NOT NUMBER.** Items 1, 2, 9 and 10 are done; the order is **13 → 3 → 4 → 5 → 7 → 6** (6 is
 last by construction — it needs `JS_WS_CLASS_BODY` in its own commit). Renumbering would churn
 every cross-reference, so the order lives here instead. A reader who takes the lowest open number
 takes item 2, and item 9's note then lands after the window it covers — which is precisely the
@@ -1355,7 +1355,37 @@ than commits that landed code.
    that way — a second code span in the same cell is the candidate, and that is the part to
    measure first. Do NOT write three vectors by analogy with site 4; two of the three shapes
    behave differently.
-2. **`in_rules_section` sticky-TRUE** — nothing exercises a divergence that leaves the flag true
+2. **✅ DONE (no test added) — `3bb7e99` (2026-09-08).** The PERSISTENCE half was ALREADY gated:
+   the ledger-tests case "copy the template and flip every status" reds `evidence:    MISSING`
+   when the rules section stops being skipped early — MEASURED with a reset-after-one mutant in
+   the port and in the oracle and a reset-on-blank mutant in the port, each reddening that case
+   and no other in the suite, while its `want: 1` stays green on UNBACKED: the expect string is
+   the gate, the exit code is not. The commit names the gate at both sites and ARMS it — a second
+   template case renames the heading so the section is scanned and requires `present`. Plain-prose
+   bullets read MISSING in both runtimes, so it can fail; stripping every backtick does NOT disarm
+   it, because filename-shaped prose such as `tests/stats.py` still scores — the gate rests on ANY
+   strong route, not on the spans. Ceiling, by READING the template: a reset after k non-blank
+   lines leaks a strong bullet for every k ≤ 9 (qualifying spans at non-blank lines 2, 6, 8, 10 of
+   the section); only k = 1 is measured, and the arming case pins the property, not the number. A
+   defect keyed on a line shape absent from the template's rules — a table row, a `units:` line,
+   a placeholder — survives. The DIVERGENCE half (flag set in one runtime and not the other) was
+   already killed, measured in round 1: either `\s` revert reds the heading-finder and
+   rules-heading U+FEFF rows, one-line blast radius — a kill is a kill.
+   **Two designs built in a scratch copy, measured, withdrawn:** (i) a `whitespace-diff.sh`
+   writer + six rows — the persistence mutants fired only `_control`'s empty-pad agreement check,
+   i.e. an ASCII semantic tested through a whitespace suite's control, and under the two `\s`
+   reverts the rows added no kill beyond the existing U+FEFF rows; (ii)
+   `tests/fixtures/rules-sticky.md` + a case — reds on exactly the mutants the template case reds
+   on, lower ceiling as built (k ≤ 3). A regex arming check was rejected: `[^`]*\s[^`]*` matches
+   the GAP between two spans and passed on de-whitespaced text.
+   **The oracle's `if (inRulesSection) continue;` carries no comment on purpose** — held fixed.
+   **The search that missed the gate:** `tests/fixtures/*.md` excludes `templates/`, and
+   `mutate:` cases read from there. The mutation run found the gate; the grep did not — the
+   absence-asserted-without-searching shape, third instance in this task. Search every SOURCE a
+   case can read, not the fixtures directory.
+   The original entry follows, kept as the record of what the item was.
+
+   **`in_rules_section` sticky-TRUE** — nothing exercises a divergence that leaves the flag true
    across several following lines. **The shape a real BOM-prefixed ledger would actually hit**,
    which is concrete, checkable, and enough on its own to justify the position. It read "largest
    blast radius named anywhere in this TRDD" until a fork pointed out that is a superlative over
@@ -1379,13 +1409,18 @@ than commits that landed code.
    larger n and a second budget value before it is called a defect or dismissed. I first filed it
    as a dead end on the strength of the 3 agreements; see the DEAD END paragraph below for why
    that was the wrong read of a one-directional sample.
-9. **`JS_TRIM` coupling note — NEXT, before item 2, as its own two-line commit.** `JS_WS_CLASS` is
+9. **✅ DONE — `37fcb6b` + `18987da` (2026-09-08), the note at the tuple's definition.** Was: **`JS_TRIM`
+   coupling note — NEXT, before item 2, as its own two-line commit.** `JS_WS_CLASS` is
    built ~500 lines away from every use of it, so an edit to `_JS_TRIM_CODEPOINTS` silently widens
    every converted regex. The note goes at the DEFINITION. Do NOT defer it to item 6 — item 6 is
    last, so the note would arrive after the window it covers and for the reader least likely to
    need it.
-10. **`test-matrix.yml` may enumerate the differential suites BY NAME.** The glob matches 14 files;
-    if CI lists fewer, the extras have never run in CI. One grep of the workflow answers it.
+10. **✅ DONE (no change needed, 2026-09-08).** `test-matrix.yml:58` runs `npm run test:diff`, and
+    `package.json:9` defines that as `for f in tests/*-diff.sh`, so CI's set IS the glob; only the
+    workflow COMMENT carried a count, fixed in `5e14b76`. The `runner.os != 'Windows'` skip is
+    recorded under correction 6 above. Was: **`test-matrix.yml` may enumerate the differential
+    suites BY NAME.** The glob matches 14 files; if CI lists fewer, the extras have never run in
+    CI. One grep of the workflow answers it.
 11. **Two suite failures that were never classified.** A killed fork attributed four of six to its
     own cwd bug and never classified the remaining two. Nothing has re-run them.
 12. **`hardening-tests.mjs:1336` fails intermittently. OBSERVATION ONLY — cause NOT known, and it
@@ -1417,6 +1452,9 @@ than commits that landed code.
     `ledger-tests.mjs` — and `package.json`'s nine-command chain sets it NOWHERE. So a green
     `npm test` says nothing about the port for any of the four, and **every "npm test exit 0" gate
     claim in this task's commits inherits that scope**, `a118202` included.
+    **Why the decision matters (2026-09-08):** `test:diff` — the `*-diff.sh` suites — is currently
+    the ONLY per-commit dual-runtime run; every `ledger-tests.mjs` case, item 2's persistence gate
+    included, reaches the port only under the opt-in `AD_RUNTIME=python` invocation.
     **This RETRO-SCOPES, it does not invalidate:** the port runs that carried the red-then-green
     proofs were separate `AD_RUNTIME=python` invocations and they did happen. What is wrong is the
     sentence, not the work. The chain's 9th command (`python3 tests/python-lib-checks.py`) is a
