@@ -824,16 +824,18 @@ done
 # dropped) and `Created: X2099` (pad moved into the `\s` position) both fail it.
 _control _write_ledger_created_lt "control: created line-terminator writer" '[^ ]Created: 2099'
 
-# LF and CRLF are HARNESS controls, not anchor rows: Python's `re.M` already fired after LF, so
-# neither can red on any anchor mutation -- they prove the pad position is one where a terminator
-# reads as line-start, nothing more. CR, U+2028 and U+2029 are the narrowing rows (each reds when
-# the port anchor drops it -- measured against the `re.M` port: exactly those three). U+0085 is
-# the widening row (`differ`: the oracle refuses NEL as a terminator, so its verdict moves STALE
-# -> clean, and a port that honours NEL diverges). No marker: `same` already requires the padded
-# oracle output to EQUAL the baseline, stronger than any substring; the created surface above sets
-# the precedent for a markerless `differ` on this ledger shape.
-# CEILING, recorded rather than hidden: dropping the `^` alternative (position 0) survives every
-# row here and every fixture in the tree, because each starts with `# Delegation plan`.
+# LF and CRLF are HARNESS controls: they prove the pad position is one where a terminator reads
+# as line-start. They are not the LF gate -- an anchor that DROPS LF fails at the `created`
+# writer's CONTROL above (every fixture puts `Created:` after LF), before any row here runs.
+# MEASURED, one mutant per terminator: dropping CR, U+2028 or U+2029 from the anchor reds exactly
+# that terminator's row and nothing else; dropping LF fails the created control. U+0085 is the
+# widening row (`differ`: the oracle refuses NEL as a terminator, so its verdict moves STALE ->
+# clean, and a port anchor written `(?<=\s)` diverges -- measured, exactly that row). No marker:
+# `same` already requires the padded oracle output to EQUAL the baseline, stronger than any
+# substring; the created surface above sets the precedent for a markerless `differ`.
+# CEILINGS, MEASURED (each mutant leaves all 70 checks green): dropping the `^` alternative
+# (position 0) -- every fixture starts with `# Delegation plan`; and widening the class to VT/FF
+# without NEL -- the oracle refuses those too, but only NEL has a row.
 declare -a LT_NAME=("LF" "CRLF" "CR" "U+2028 (LINE SEPARATOR)" "U+2029 (PARAGRAPH SEPARATOR)" "U+0085 (NEL, not a terminator)")
 declare -a LT_BYTES=('\n' '\r\n' '\r' '\xe2\x80\xa8' '\xe2\x80\xa9' '\xc2\x85')
 declare -a LT_EFFECT=(same same same same same differ)
