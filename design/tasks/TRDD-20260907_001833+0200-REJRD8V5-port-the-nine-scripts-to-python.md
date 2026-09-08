@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T11:22:47+0200
+updated: 2026-09-08T10:45:47+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -884,10 +884,25 @@ was vacuous until a fifth `whitespace-diff.sh` writer was added — measure reac
 believing a green. (b) **The fold axis is a SECOND axis needing its OWN vector**: `EXIT_CODE`'s
 fold half is fixed but UNGATED, because `whitespace-diff.sh` carries no fold vector. Pattern to
 copy: `tests/fixtures/unit-header-fold.md` + its ledger-tests case. Owed for every `re.I` site.
-**⏵ SITE 2 OF 8 IS DONE — `CREATED`, `b876c49`.** Diverged 6 of 13 probes before; the `\s` half
-landed here and closes 3 of the 6. Red/green: reverting only `JS_WS_CLASS`→`\s` reds exactly the
-6 new rows, 36 pre-existing green, control passes, U+FEFF opposite to the other five. `npm test`
-0, `test:diff` 0 across all 14.
+**⏵ SITE 2 OF 8 IS DONE — `CREATED`, `b876c49`.** Diverged on **6 of the 10 probes the pre-fix
+port was actually run over**; the `\s` half landed here and closes 3 of those 6 — {U+001C,
+U+0085, **U+FEFF**}, so including the opposite-direction one — leaving {CR, U+2028, U+2029}.
+Red/green: reverting only `JS_WS_CLASS`→`\s` reds exactly the **6 new `created` rows**; the other
+36 stay green (35 pre-existing + this site's own new control, which is not pre-existing), control
+passes, U+FEFF opposite to the other five. `npm test` 0, `test:diff` 0 across all 14.
+**TWO DIFFERENT SETS OF SIX live in that sentence** — the 6 divergent PROBES and the 6 new
+differential ROWS overlap by three and are not the same set. Name which one whenever you quote it.
+**"6 of 13" was wrong and stood here for a day.** The measured output reads `port NOW diverges
+6/10; ws-fix-only diverges 3/10`; the 13 came from a LATER run that added three controls, for the
+combined fix only. A numerator from one run over a denominator from another is the same defect
+that cost a revert earlier in this task ("of 37" counted declaration SYNTAXES, not cases).
+**THE HALF-FIX IS MONOTONE, structurally and not by luck** — the property that makes shipping a
+half legitimate, so state it rather than assume it. Both versions use Python `re.M`, so the ANCHOR
+behaviour is untouched and they can differ only where Python `\s` and `JS_WS_CLASS` differ:
+Python-only {U+001C…U+001F, U+0085} the port used to match wrongly and now refuses; JS-only
+{U+FEFF} it used to refuse wrongly and now matches; shared members identical; `\r`/U+2028/U+2029
+still wrong in BOTH, i.e. not NEWLY wrong. `JS_WS_CLASS` is the oracle's `\s` by construction, so
+no input is newly divergent.
 **TWO INSTRUMENT DEFECTS FOUND WHILE VERIFYING THIS, both mine, both the same shape — an
 instrument blind to the signal it was pointed at.** (1) My regression failure-scan grepped
 `FAIL|not ok|Traceback`. **These suites print `DIVERGE`.** Re-run unanchored it finds one hit:
@@ -895,34 +910,89 @@ instrument blind to the signal it was pointed at.** (1) My regression failure-sc
 `1 KNOWN PORT DIVERGENCES, UNRESOLVED (see TRDD) — set unchanged, no regression`, exit 0. The
 conclusion held, but the scan that "confirmed" it could not have seen a real failure. **Scan for
 `DIVERGE|DIVERGENCE`, UNANCHORED** — these suites indent status rows two spaces, so `^FAIL`
-cannot match them either. (2) I compared mypy against HEAD via `git stash push -- <one file>` on
+cannot match them either. **"Pre-existing, not a regression" is safe here on evidence stronger
+than the suite's own say-so** — which would otherwise be exactly as worthless as an exit code,
+since it is derived from a set the same run computed. `regex-worker-diff.sh:177` pins
+`EXPECTED_DIVERGENT_SET='\p{L}<u>'` as a HARDCODED literal and diffs the observed set against it
+at `:180`, so a NEW divergence and a VANISHED one both red it. Its `(see TRDD)` pointer was
+DANGLING until this entry — nothing in this TRDD named that row. (2) I compared mypy against HEAD via `git stash push -- <one file>` on
 a CLEAN tree: nothing was stashed, so the "baseline" run re-measured the SAME working copy and
 `diff` said IDENTICAL trivially. The paired `stash pop` then popped a PRE-EXISTING 2026-09-06
 auto-backup and left three files `UU` (recovered: stash intact, copies in
 `scripts_dev/stash-pop-conflict-20260908/`, `git checkout HEAD --` on the three).
-**Correct method:** `git show <pre-change-rev>:<path> > <SAME dir>/_tmp.py`, mypy both, strip
-`path:LINE:`, sort, `diff`. Result: **8 messages, identical sets** — this change adds none.
+**Correct method:** `git show e24398c:<path> > <SAME dir>/_tmp.py` — **name the SHA, never
+`HEAD~2`**, which rots the moment another commit lands; verified `e24398c` == `b876c49^` == the
+`HEAD~2` of that run — then mypy both, strip `path:LINE:`, sort, `diff`. Result: **8 diagnostic
+lines, identical sets** — this change adds none. The gap against mypy's own `Found 7 errors` is
+**7 errors + 1 note**: the note carries a `path:LINE:` prefix and survives the strip. That is a
+labelling gap in the report, not a soundness gap in the comparison — the note matched on both
+sides too. `pyproject.toml` carries a bare `[tool.mypy]` with no per-module overrides, so the
+temp file's different MODULE NAME cannot change its diagnostics.
+**The discriminating evidence that nothing was lost is the EMPTY `git status --short`** — the
+worktree is byte-identical to HEAD, and an empty short status covers `??` too, so an untracked
+file left by the pop would also have shown. It is NOT the three-entry `git stash list`, which
+proves only that the conflicted pop KEPT its entry — which is what a conflicted pop always does.
+**And `stash@{0}`'s `dispatch_check.py` hunk was not the cosmetic reorder I called it**: it
+DELETES the `sys.dont_write_bytecode` guard. Restoring to HEAD was still correct — `c4a36d6`
+deliberately moved that guard out of the shipped scripts into the harness, and HEAD reflects
+that. I reported "trivial `import sys` reordering" from inspecting ONE of the three files.
+(3) A third, smaller one in this block's own frontmatter: `a0e4763` set `updated:
+2026-09-08T11:22:47+0200` on a commit made at **10:37:45** — 45 minutes in the FUTURE, so it was
+never read from `date`. Corrected to the measured time. `updated:` is what a later session reads
+to judge staleness, so a fabricated one makes a stale block look fresh. **Run `date
++%Y-%m-%dT%H:%M:%S%z` and paste it; never re-type or reuse a timestamp.**
 
 **⚠ THE `/m` HALF OF `CREATED` IS STILL OPEN, AND IT IS A NAMED ITEM, NOT "OWED".** JS `/m` makes
 `^` match after ANY LineTerminator (LF, CR, U+2028, U+2029); Python's `re.M` recognizes LF alone,
 so `x<CR>Created: …`, `x<U+2028>…` and `x<U+2029>…` still disagree with the oracle — the other 3
-of the 6. **The fix is written and measured (13/13 clean) and was deliberately backed out**: an
-explicit `(?:\A|(?<=[LF CR LS PS]))` lookbehind, `re.M` then dropped as unnecessary. Recover it
-from this commit's message and the comment at `CREATED`.
+of the 6. **The fix was written, measured clean, and deliberately backed out — its source text is
+in NO commit** (`git log -S '_JS_LINE_START' --all` returns nothing), so it is RECORDED HERE
+rather than recoverable. Do not go looking for it; re-apply these four lines:
+
+```python
+_JS_LINE_TERMINATORS = (0x0A, 0x0D, 0x2028, 0x2029)
+_JS_LINE_START = r"(?:\A|(?<=[" + "".join(
+    map(re.escape, map(chr, _JS_LINE_TERMINATORS))) + r"]))"
+```
+
+used as `_JS_LINE_START + r"Created:?" + JS_WS_CLASS + r"+(...)"`, with `re.M` then dropped as
+unnecessary. Its "13/13 clean" measurement describes code that exists nowhere and is
+unreproducible until the block above is re-applied — do not quote it as a settled result.
 Backed out because `whitespace-diff.sh` emits LF only, so the 6 red rows attribute ENTIRELY to
 the `\s` axis — bundling would have put the subtler half on the ungated side.
-**Its gate is a SEVENTH surface, and the shape is settled:** a writer identical to
-`_write_ledger_created` but with `\r` as the terminator, and a `_control` ONLY — no case loop.
+**Its gate is a SEVENTH surface, and the shape is settled FOR CR ONLY** — U+2028 and U+2029 stay
+ungated unless the writer is parameterised over the terminator, so do not read "settled" as
+covering the axis it names: a writer identical to `_write_ledger_created` but with `\r` as the
+terminator, and no case loop.
 Do NOT put `\r` into the sixth writer: with `\r` the pre-fix port fails to match on all six
 pads, so the five non-FEFF rows agree with the oracle (both "clean") and the `\s` divergence is
-MASKED — measured, not feared. One real snag: `_control`'s node-vs-py message reads *"harness is
-broken; the cases below cannot be trusted"*, the wrong diagnosis for a genuine port divergence,
-so the surface needs either a distinguishing message or a `_case` with a hand-recorded baseline.
+MASKED — measured, not feared. **Use a `_case` with a hand-recorded baseline, NOT a `_control`.**
+Two reasons, and the second is the one that decides it: `_control`'s node-vs-py message reads
+*"harness is broken; the cases below cannot be trusted"*, the wrong diagnosis for a genuine port
+divergence — and that branch `exit 1`s the WHOLE suite, so a `/m` regression there would suppress
+every surface after it, whereas `_case` counts a divergence as `fail` and continues. A control
+also cannot carry the same/differ OPPOSITION the six cases carry, which is what pins the boundary
+to JS's exact set rather than to "some whitespace handling".
 **Two lessons site 2 adds.** (a) **A REVIEW FINDING IS A HYPOTHESIS.** The previous site's fork
 suggested `exit [^ 0-9]*[0-9]`; I applied it verbatim, un-traced, and copied it to the new
 anchor. `*` is zero-or-more, so `exit 3` — the misplacement the anchor exists to reject — matched
 with the class empty. One unchecked recommendation became two defects, both silently green. The
 correct form is `[^ 0-9][^ 0-9]*[0-9]`, and it was four lines of trace away.
+**STRENGTHENED 2026-09-08, because the lesson as first written could NOT have caught its own next
+recurrence.** A later fork was RIGHT that my mypy baseline was unsound; I then ran its suggested
+`git stash push`/`pop` recipe verbatim, and the recipe was unsound on a clean tree. A lesson aimed
+at a finding's CONCLUSION gives no reason to trace a PROCEDURE whose conclusion you have already
+accepted — accepting the diagnosis made the prescription feel pre-validated. So: **a review
+finding is a hypothesis, and its suggested procedure is a SECOND hypothesis; accepting the first
+does not validate the second.** Before running a suggested recipe, state what it would print if it
+silently did NOTHING, and confirm that differs from what it prints on success. `git stash push`
+with nothing to stash exits 0 silently; `diff` on two names for one file exits 0; a `grep` for a
+vocabulary the tool never emits finds nothing. Each is a green that could not have been red — the
+exact vacuity this whole task is organised around, committed inside the instrument checking for
+it. **If you cannot name the recipe's failure signal, you do not have a check, you have a ritual.**
+Corollary for a clean result: name the string that would have appeared on failure, and confirm the
+tool actually emits that string — "these suites print `DIVERGE`, not `FAIL`" is that check, and I
+only ran it after the fact.
 (b) **A site's DISCRIMINATOR may be several steps from its regex.** `CREATED` has one consumer
 and it is a staleness COMPARISON, so the pad moves nothing unless a cited artifact EXISTS — the
 writer has to build a side file and date the ledger 2099. Ask what the pattern's value is
@@ -957,13 +1027,17 @@ pressure reads the number and skips the caveat, which is this stretch's own fail
   acceptance-command path. **These are invisible to any `re.compile`-shaped search** and were
   missed by the first enumeration. That note is the only part of this list a grep cannot
   regenerate; everything else above is `grep -an '\\s' scripts/ledger_check.py` away.
-- **NINTH SITE, ADDED 2026-09-08 — `CREATED`'s `/m` LineTerminator half.** NOT a bare-`\s` site,
-  which is exactly why it must be listed here: the sweep counts eight, site 2 is ticked, and
-  without this entry the sweep reaches "complete" with `CREATED` still divergent on `\r`,
-  U+2028 and U+2029. **The comment at `CREATED` will then read as satisfied history rather than
-  open work.** Fix and gate are specified in the SITE 2 entry above. **The fix's source text
-  exists in NO commit** — it was backed out before `b876c49` — so it must be re-typed from the
-  four LineTerminators named there, not recovered by `git log -S`.
+**BLOCKER ON SWEEP COMPLETION (added 2026-09-08) — NOT a `\s` site and NOT one of the eight
+above. Do not count it into them, and do not skip it as off-topic.** It is deliberately outside
+that list, in this shape, because as a ninth bullet it invites both failures: a later summary
+quoting "nine `\s` sites", and a session working the list top-down recognising a `/m` item as a
+different axis and skipping it as misfiled.
+`CREATED`'s `/m` LineTerminator half, deferred from site 2. **The sweep is NOT complete while
+this is open**: with site 2 ticked and nothing recorded, the sweep would reach "complete" with
+`CREATED` still divergent on `\r`, U+2028 and U+2029, and the comment at `CREATED` would read as
+satisfied history rather than open work. Fix source and gate are in the SITE 2 entry above. It
+stays in this TRDD rather than becoming its own card — it is the deferred half of a change
+recorded here, and a card nobody pulls is the stalled-pipeline failure.
 
 **CORRECTION — I ranked the receipt defect above `:144`, and that was wrong.** The commit report
 called the receipt rewrite "the more serious find". It is the more INSIDIOUS one (it mutates the
