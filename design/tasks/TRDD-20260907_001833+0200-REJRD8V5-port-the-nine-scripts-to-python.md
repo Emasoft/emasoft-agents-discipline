@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-09T12:29:15+0200
+updated: 2026-09-09T13:43:55+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -695,6 +695,15 @@ set) and covered by the driver rows, but it is not zero. `gates.py`'s own remain
 and `dispatch.py` (7 uses, `read_state` done) are what is left.
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-07
+
+> **2026-09-09 UPDATE — SUPERSEDES THE "NEXT WORK" DIRECTIVE BELOW.** The nine-script `\s` port
+> sweep is **COMPLETE**: items 1–7, 9, 10 and 14 are done; `07a7d47` closed the last `\s` site
+> (item 6), and the colony ledger (`docs_dev/DELEGATION.md`) re-ran complete (6/6 units verified,
+> all acceptances reproduce). The "NEXT WORK — `:144` FIRST" section below is **HISTORICAL** — do
+> NOT redo it. The only open items are **item 13** (awaits a USER decision — whether to wire the
+> `test:port` chain into the CI matrix) and the cause-OPEN observations **8, 11, 12** (not
+> `\s`-port work; need larger-n investigation). The card still reads `column: dev` pending the
+> USER's call on its disposition. The correction items (5, 6, …) below remain valid reference.
 
 ### ⚠ READ FIRST — THE ORACLE IS BINARY TO `grep`. A BARE GREP ON IT RETURNS SILENT ZERO.
 
