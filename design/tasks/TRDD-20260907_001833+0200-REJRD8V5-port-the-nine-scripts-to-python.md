@@ -705,8 +705,9 @@ and `dispatch.py` (7 uses, `read_state` done) are what is left.
 > oracle-only, over n=40×2 runtimes; gone by 2ms; default budget 600000ms), confirmed first-hand +
 > reviewed; NO code change — the port's `time.monotonic()` is the correct monotonic deadline and
 > matching the oracle's `Date.now()` would regress it. **#11 NOT A DEFECT** — `npm test` ×3 = 261/0,
-> zero FAIL; the two unclassified failures were the killed fork's own cwd bug (same cause as the
-> other four); de-queued. **#12 RELOCATED** to the LOCAL memory note
+> zero FAIL. That is NON-REPRODUCTION, not a proven cause — consistent with, but NOT established
+> as, the killed fork's own cwd bug pinned for the other four (the cause of these two was never
+> classified first-hand); de-queued. **#12 RELOCATED** to the LOCAL memory note
 > `hardening-tests-waitforpath-pid-absent-flake` (no repro in 5× `hardening-tests.mjs`; a JS-oracle
 > flake, not the port; cause still OPEN — recall-only); de-queued. **#13 Linux/macOS DONE** (`3a58d15`
 > — guarded `test:port` + `test:slow` wired non-Windows). The ONE remaining open item is
