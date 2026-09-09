@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-09T11:36:38+0200
+updated: 2026-09-09T11:55:59+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1298,7 +1298,7 @@ the observation alone.
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
 positions are fixed but ungated. Do not read the site count as coverage.
 
-**ORDER IS NOT NUMBER.** Items 1, 2, 3, 4, 5, 9, 10 and 14 are done; the order is **13 → 7 → 6** (6 is
+**ORDER IS NOT NUMBER.** Items 1, 2, 3, 4, 5, 7, 9, 10 and 14 are done; the order is **13 → 6** (6 is
 last by construction — it needs `JS_WS_CLASS_BODY` in its own commit). Renumbering would churn
 every cross-reference, so the order lives here instead. A reader who takes the lowest open number
 takes item 2, and item 9's note then lands after the window it covers — which is precisely the
@@ -1469,7 +1469,7 @@ than commits that landed code.
 6. **`CITATION` `:150`** — ×2 inside a NEGATED class, so it needs `JS_WS_CLASS_BODY` (the existing
    `JS_WS_CLASS` is bracketed and closes the class early). **LAST**, and the constant must land IN
    that commit or it is a dead symbol.
-7. **`acceptance_command`** — an ordinary row in this suite, NOT its own harness. Spec below. The
+7. **✅ DONE (`e3f7e94`, 2026-09-09).** `acceptance_command`'s `\s` → `JS_WS_CLASS` at `:594`, an ordinary row in this suite, NOT its own harness: a writer padding `false%sx`, a `_control ... stays` (ordinary pad must NOT move the verdict), and six interior rows. Five of the six are parity-only; liveness rides on the U+FEFF row plus the `:594`-revert mutant (both measured, exit 1). Spec below. The
    ordering dependency on item 1 that this line used to assert is RETRACTED there.
 8. **Re-run deadline resolution — `Date.now()` ms vs `time.monotonic()` sub-ms.** NOT a `\s` site.
    At `AGENTS_DISCIPLINE_RERUN_BUDGET_MS=1` the `remaining <= 0` branch fires in node and not in
