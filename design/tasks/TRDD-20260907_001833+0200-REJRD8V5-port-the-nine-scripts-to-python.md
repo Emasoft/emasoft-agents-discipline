@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-08T22:48:14+0200
+updated: 2026-09-09T11:36:38+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1298,7 +1298,7 @@ the observation alone.
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
 positions are fixed but ungated. Do not read the site count as coverage.
 
-**ORDER IS NOT NUMBER.** Items 1, 2, 3, 4, 5, 9 and 10 are done; the order is **13 → 7 → 6** (6 is
+**ORDER IS NOT NUMBER.** Items 1, 2, 3, 4, 5, 9, 10 and 14 are done; the order is **13 → 7 → 6** (6 is
 last by construction — it needs `JS_WS_CLASS_BODY` in its own commit). Renumbering would churn
 every cross-reference, so the order lives here instead. A reader who takes the lowest open number
 takes item 2, and item 9's note then lands after the window it covers — which is precisely the
@@ -1454,8 +1454,10 @@ than commits that landed code.
    **Ceiling, reasoned not measured:** the fixture exercises U+017F only; U+0131/U+0130/U+212A are
    named in the port comment as examples of what bare `re.I` folds, not as gated vectors.
 5. **✅ DONE (`acb3c8a`, 2026-09-08).** `EXIT_CODE` fold-axis vector: `tests/fixtures/exit-code-fold.md`
-   spells its only evidence line `exıt 0` (U+0131; stable under NFC/NFD/NFKC/NFKD, unlike U+017F
-   and U+0130 — the case comment in `tests/ledger-tests.mjs` says why that vector was chosen); the
+   spells its only evidence line `exıt 0` (U+0131; stable under NFC/NFD/NFKC/NFKD, unlike U+017F,
+   compatibility-decomposed under NFKC/NFKD, and U+0130, canonically decomposed under NFD/NFKD and
+   recomposed under NFC/NFKC — the case comment in `tests/ledger-tests.mjs` says why that vector was
+   chosen); the
    ledger-tests case wants exit 1 + `evidence:    MISSING` and rejects `evidence:    present` /
    `ledger complete`; a fixture guard asserts the U+0131 byte. MEASURED three-state: oracle
    1/MISSING, port 1/MISSING, port with `re.A` removed (mutant) 0/present — exit and substring both
@@ -1556,8 +1558,9 @@ than commits that landed code.
     separate npm script that IS run per-commit here. So the defect is narrower and more precise
     than "the port is ungated": the phrase "npm test" names the chain that holds the runtime
     FIXED, while the chain that VARIES it has been running all along under a different name.
-14. **`gate_check.py` SIGKILLs any CHECK that runs longer than about 15 s, whatever `--timeout`
-    says. DETERMINISTIC, MEASURED 2026-09-08, port vs oracle first-hand.** For a CHECK of
+14. **✅ DONE (`b6e6f6a`, 2026-09-09).** **`gate_check.py` SIGKILLs any CHECK that runs longer than
+    about 15 s, whatever `--timeout` says. DETERMINISTIC, MEASURED 2026-09-08, port vs oracle
+    first-hand.** For a CHECK of
     `sleep 20; echo ok` under the default 120 s timeout the port reports `FAIL leaf:G1 … exit=none signal=SIGKILL; EXPECT=not matched;
     output=(no output)`, exit 1, with NO "timed out after" error — a signal death, not a timeout.
     **Mechanism, read at `run_check` (`:1283-1302`):** after the child starts, the two capture
@@ -1571,10 +1574,12 @@ than commits that landed code.
     `output=start` (port; the oracle passes all four) — and the pipe-holding predicts no shorter
     one. The oracle (`gate-check.mjs:636-660`) bounds nothing on the success path: it settles on
     the child's `close` event, and only `stopChild` (timeout or overflow) starts the 1 s / 1.5 s
-    grace timers. **Fix shape, not yet proposed:** bound the joins and the wait by the REMAINING
-    budget to the timeout deadline (the timer fires `stop_child` on its own); AFTER `stop_child`
-    keep the existing 5 s bounds and the daemon reaper thread, which are the real guard against a
-    descendant that escaped the group and still holds a pipe. **How it surfaced — an OBSERVATION
+    grace timers. **Fix shape, as landed:** wait the child FIRST, bounded by the REMAINING budget
+    to the timeout deadline, and treat that expiry as the deadline (`on_timeout`, not a bare
+    `stop_child` — the wait's deadline precedes `timer.start()` by construction, so which handler runs
+    first is a scheduler race and both must set the flag); AFTER it keep the existing 5 s join bounds
+    and the daemon reaper thread, which are the real guard against a descendant that escaped the
+    group and still holds a pipe. **How it surfaced — an OBSERVATION
     filed beside the defect, cause OPEN, like item 8:** on 2026-09-08 from 21:13 to at least 21:35
     every `stale-diff.sh` run I made diverged, its port rows of `echo ok` dying `signal=SIGKILL`;
     by 22:28 the same harness and a minimal repro passed and `test:diff` was green. Transient and
@@ -1585,15 +1590,17 @@ than commits that landed code.
     child's returncode whoever sent the signal, so that signature alone never names the sender;
     for the port's rows the 15 s-per-row arithmetic is consistent with `run_check`'s bound being
     the sender, unconfirmed. What was and was not ruled out, and the recipe if it recurs, are in
-    the LOCAL memory page `stale-diff-check-shell-stall` (its current atom); the deterministic
+    the LOCAL memory page `stale-diff-check-shell-stall`; the deterministic
     defect stands on the `sleep` measurements alone.
     **Why no suite saw it:** no test runs a CHECK longer than 5 s (grep over `tests/`: the longest
     `sleep` is 5, inside `mutate-probe-selftest.sh`, a harness self-test), so the 15 s ceiling was
     never crossed on a green run, and `run_check`'s own docstring describes the bounded wait as
     "only for the pathological case" — true of the post-SIGKILL wait it was written for, false of
-    the success path it also governs. Not a `\s` site; not part of items 5–7; its own commit,
-    proposal first, with a leaf that sleeps past 15 s as the gate (both runtimes, exit AND the
-    PASS line); that leaf costs its sleep twice per run, so where it lives is part of the proposal.
+    the success path it also governs. Not a `\s` site; not part of items 5–7. **Landed in
+    `b6e6f6a`:** gate `tests/check-timeout-slow.sh` (`sleep 17`, both runtimes, ~35 s), kept out of the
+    per-commit `tests/*-diff.sh` glob by name, run by `npm run test:slow`; wiring it into CI is the
+    USER's decision with item 13. Timeout EXPIRY has no `*-diff.sh` suite (gate-args-diff.sh passes
+    `--timeout` only to validate it); a ~3 s expiry row is a candidate item.
 
 ### `acceptance_command` — the harness spec is WITHDRAWN; it is a normal row
 

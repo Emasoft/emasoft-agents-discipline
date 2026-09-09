@@ -1290,10 +1290,11 @@ def main(argv):
         # fixed 5.0s -- spent up to 15s before this wait ever ran, killing any CHECK past ~15s
         # regardless of --timeout. Waiting on the child first means nothing SIGKILLs it before
         # the Timer's own deadline gets a chance to. The wait expiring here IS the deadline --
-        # `deadline` is computed before `timeout_timer.start()`, so this branch always expires
-        # first, by microseconds, and with `stop_child()` alone would report SIGKILL with
-        # `timed_out` still False whenever the Timer has not fired by `cancel()`; `on_timeout()`
-        # sets the flag deterministically and calls the idempotent `stop_child()` itself.
+        # `deadline` is computed before `timeout_timer.start()`, so the wait's deadline is always
+        # the earlier one and which handler runs first is a scheduler race: both paths must set
+        # the flag, or `stop_child()` alone here would report SIGKILL with `timed_out` still False
+        # whenever the Timer has not fired by `cancel()`. `on_timeout()` sets it and calls the
+        # idempotent `stop_child()` itself.
         try:
             exit_status = child.wait(timeout=max(0.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
