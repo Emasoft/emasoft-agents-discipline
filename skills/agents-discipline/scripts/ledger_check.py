@@ -97,7 +97,12 @@ JS_TRIM = "".join(map(chr, _JS_TRIM_CODEPOINTS))
 # line `**Unit<U+FEFF>1 --** the endpoint was retired.` opened a block under node and opened
 # NOTHING under python3, so the abandoned-row marker stayed silent in the oracle and FIRED in
 # the port. Same bytes, opposite output, no test covering it.
-JS_WS_CLASS = "[" + "".join(map(re.escape, JS_TRIM)) + "]"
+# JS_WS_CLASS_BODY is the escaped whitespace set WITHOUT the surrounding brackets, so it can go
+# inside a NEGATED class `[^...]` (the CITATION site below) where the bracketed JS_WS_CLASS would
+# close the class early. JS_WS_CLASS is redefined FROM it and keeps its exact value -- every other
+# consumer is byte-identical. TRDD-REJRD8V5 item 6.
+JS_WS_CLASS_BODY = "".join(map(re.escape, JS_TRIM))
+JS_WS_CLASS = "[" + JS_WS_CLASS_BODY + "]"
 CODE_SPAN = re.compile(r"`[^`]+`")
 FILENAME_SHAPED = re.compile(r"\b[A-Za-z0-9_./-]+\.[a-z0-9]{2,5}\b", re.I | re.A)
 # TWO divergences on one line, and they must be fixed TOGETHER in this order -- MEASURED.
@@ -153,7 +158,12 @@ MEASURED_RESULT = re.compile(
 EXIT_CODE = re.compile(r"exit" + JS_WS_CLASS + r"+[0-9]+", re.I | re.A)
 # NO WHITESPACE in the span: `node test/run-tests.mjs` is a COMMAND that happens to name a
 # path, and demanding that string exist as a file is nonsense. Only a bare path is a citation.
-CITATION = re.compile(r"`([^`\s]*/[^`\s]*\.[A-Za-z0-9]{1,6})`")
+# `\s` -> JS_WS_CLASS_BODY at BOTH negated-class members: it is the oracle's `\s` by construction,
+# and the unbracketed BODY is required because `[^` + JS_WS_CLASS + `]` would nest `[...]` inside
+# `[^...]` and corrupt the class. TRDD-REJRD8V5 item 6 (the last `\s` site).
+CITATION = re.compile(
+    r"`([^`" + JS_WS_CLASS_BODY + r"]*/[^`" + JS_WS_CLASS_BODY + r"]*\.[A-Za-z0-9]{1,6})`"
+)
 # `re.A` is not cosmetic here: bare `re.I` folds U+017F/U+0131/U+0130/U+212A onto ASCII, so
 # `**UNIT 1` (dotted-I) matched the literal `unit` in Python and NOT in node -- this finder
 # decides evidence ATTRIBUTION, so over-matching reports a row BACKED that the oracle reports

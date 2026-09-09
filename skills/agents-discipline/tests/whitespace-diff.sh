@@ -1004,13 +1004,64 @@ for i in "${!CASE_NAME[@]}"; do
 done
 export AGENTS_DISCIPLINE_SKIP_RERUN=1
 
+# TENTH SURFACE: `CITATION` (oracle "artifact citation" regex `ledger-check.mjs:235`, port `:156`).
+# The LAST `\s` site, and the only NEGATED class (`[^`\s]`): `JS_WS_CLASS`'s own brackets cannot be
+# substituted in without closing the class early, so the fix pairs a new `JS_WS_CLASS_BODY` (escaped
+# set, no outer brackets) with `JS_WS_CLASS` (now derived FROM it) -- both spellings from one set.
+#
+# RECOGNITION, NOT TRIMMING: a class member excludes the WHOLE citation from matching, not just that
+# byte, so the observable is CITATION-RECOGNIZED vs. NOT (verdict `N cited` vs `none cited`).
+#
+# THE ARTIFACT FILE IS WRITTEN AT THE PADDED NAME, deliberately: a recognized citation (pad included
+# as an ordinary byte) then resolves to an existing file and reads `all present` = baseline, so ONLY
+# non-recognition diverges. MEASURED: a fixed target name makes every pad print PROBLEMS -- vacuous.
+#
+# ALL THREE POSITIONS REACH IT (unlike acceptance-command): CITATION has no pre-match edge strip --
+# its `.strip(JS_TRIM)` runs AFTER findall, on the captured group. INTERIOR is used for sibling
+# consistency, NOT because lead/trail are dead here (MEASURED: all three agree per code point).
+#
+# SKIP_RERUN stays =1 here (this block sits AFTER the acceptance-command block's `export`): the
+# fixture's `tests pass` Acceptance cell contains a space and WOULD be run if this block ever moved
+# up into that block's `unset` window (above its re-export). It does not, and citation tests
+# RECOGNITION, not the re-run path.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
+_write_ledger_citation() {
+  local dest="$1" ws="$2" pad fname
+  pad="$(printf '%b' "$ws")"
+  fname="cre${pad}ated.md"
+  mkdir -p "$(dirname "$dest")/art"
+  printf 'ran it\n' > "$(dirname "$dest")/art/$fname"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n\n'
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '\n## Evidence\n\n'
+    # shellcheck disable=SC2016  # the backticks are a literal markdown code span, not a command
+    printf '**Unit 1 —** ran the suite by hand; wrote `art/%s`.\n' "$fname"
+  } > "$dest"
+}
+
+_control _write_ledger_citation "control: citation writer" \
+  '\*\*Unit 1 .*wrote .art/cre[^`]*ated\.md.\.$' stays
+
+# INVERTED relative to CASE_ORACLE_EFFECT, same shape as ACCEPT_ORACLE_EFFECT: the oracle EXCLUDES
+# U+FEFF from the citation path (JS `\s` matches it) so recognition is LOST; it treats the other five
+# as ordinary bytes (JS `\s` does not match them) so the citation stays recognized. MEASURED.
+declare -a CITATION_ORACLE_EFFECT=(differ same same same same same)
+for i in "${!CASE_NAME[@]}"; do
+  _case "citation ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_citation \
+        "${CITATION_ORACLE_EFFECT[$i]}" 'none cited'
+done
+
 echo
 if [ "$fail" = 0 ]; then
   # "check(s) passed", not "trim vector(s) identical": `$pass` has always also counted the
   # controls, and a control does not assert identity -- it asserts a count, and now also that the
   # padded verdict DIFFERS from the unpadded one. A summary line that calls every check an
   # identity is the kind of over-claim this suite exists to catch.
-  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + created-lt + rules-heading + heading-finder + strong-span + acceptance-command surfaces) ---"
+  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + created-lt + rules-heading + heading-finder + strong-span + acceptance-command + citation surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"
