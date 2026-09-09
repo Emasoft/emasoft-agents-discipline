@@ -363,11 +363,10 @@ def is_strong_evidence(l):
         #
         # `[/.]` NEEDS NO CONVERSION -- two literal ASCII characters, no shorthand class.
         #
-        # The sibling `\s` in `acceptance_command` is deliberately NOT fixed with it. A command
-        # returned from there is what makes the re-run EXECUTE it, and the differential ships only
-        # non-runnable acceptances by design -- so no row in that suite can gate that site, and a
-        # fix landing there would ship ungated. It is the more consequential of the two (it decides
-        # whether a command RUNS), so it gets its own harness rather than a ride. TRDD-REJRD8V5.
+        # The sibling `\s` in `acceptance_command` (:594) is converted too, gated by
+        # whitespace-diff.sh's `acceptance-command` rows (writer + `_control ... stays` + six
+        # cases, SKIP_RERUN unset for those rows only) -- the earlier "needs its own harness"
+        # claim was withdrawn in TRDD-REJRD8V5.
         if re.search(JS_WS_CLASS, inner) or re.search(r"[/.]", inner):
             return True
         # A runner word counts only when it IS the span -- `pytest`, `make`. The scan this
@@ -591,7 +590,7 @@ def acceptance_command(cell):
     for s in CODE_SPAN.findall(cell):
         inner = s[1:-1].strip(JS_TRIM)
         # A command, not a bare path or a single word: it must have an argument or a runner.
-        if re.search(r"\s", inner) and re.match(r"^[A-Za-z0-9_./-]+", inner):
+        if re.search(JS_WS_CLASS, inner) and re.match(r"^[A-Za-z0-9_./-]+", inner):
             return inner
     return None
 

@@ -590,7 +590,14 @@ _case() {
 NON_WS_PAD='\x58'
 
 _control() {
-  local writer="$1" label="$2" anchor="$3" led o p padded po added changed nchanged
+  local writer="$1" label="$2" anchor="$3" move="${4:-moves}" led o p padded po added changed nchanged
+  # Validated first: an unrecognized fourth argument is a caller bug, not a divergence -- letting
+  # it fall through to the movement checks below would silently treat it as neither `moves` nor
+  # `stays` and skip both, reporting a pass for a check that never ran.
+  case "$move" in
+    moves|stays) ;;
+    *) printf 'DIVERGE  %-38s unknown polarity %s\n' "$label" "$move"; exit 1;;
+  esac
   led="$WORK/control-$writer.md"
   "$writer" "$led" ''
   o="$(_verdict node "$led")"
@@ -641,8 +648,18 @@ _control() {
   padded="$WORK/padded-$writer.md"
   "$writer" "$padded" "$NON_WS_PAD"
   po="$(_verdict node "$padded")"
-  if [ "$po" = "$o" ]; then
+  if [ "$move" = moves ] && [ "$po" = "$o" ]; then
     printf 'DIVERGE  %-38s pad had no effect on the verdict; its cases are vacuous\n' "$label"
+    printf '    unpadded: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
+    printf '    padded  : %s\n' "$(printf '%s' "$po" | tr '\n' '|')"
+    exit 1
+  fi
+  # `stays` is the acceptance-command control's inversion: on that surface `X` is deliberately
+  # not whitespace to either runtime, so a correctly-placed ordinary pad must leave the verdict
+  # UNCHANGED -- if it moves, the writer is broken (landed somewhere else) or this site is not
+  # actually whitespace-gated, either way the six cases below would be meaningless.
+  if [ "$move" = stays ] && [ "$po" != "$o" ]; then
+    printf 'DIVERGE  %-38s ordinary-character pad moved the verdict; this surface is not whitespace-gated\n' "$label"
     printf '    unpadded: %s\n' "$(printf '%s' "$o" | tr '\n' '|')"
     printf '    padded  : %s\n' "$(printf '%s' "$po" | tr '\n' '|')"
     exit 1
@@ -684,7 +701,9 @@ _control() {
     printf '    changed : %s line(s): %s\n' "$nchanged" "$(printf '%s' "$changed" | tr '\n' '|')"
     exit 1
   fi
-  printf '  OK      %-38s counts it verified; pad lands on its surface and moves the verdict\n' "$label"
+  local phrase='moves the verdict'
+  [ "$move" = stays ] && phrase='does not move the verdict'
+  printf '  OK      %-38s counts it verified; pad lands on its surface and %s\n' "$label" "$phrase"
   pass=$((pass + 1))
 }
 
@@ -922,13 +941,76 @@ for i in "${!CASE_NAME[@]}"; do
         "${CASE_ORACLE_EFFECT[$i]}" '-> ledger INCOMPLETE.'
 done
 
+# NINTH SURFACE: `acceptance_command` (oracle `:352`, port `:594`). Unlike every writer above,
+# this one changes what the RE-RUN engine does with a `verified` row's own acceptance command --
+# recognized vs. not decides whether `false<PAD>x` EXECUTES (and fails, loudly, in the
+# `ACCEPTANCE DID NOT REPRODUCE` report) or is silently classed UNBACKED/unreproducible. Gated
+# as an ordinary row here per TRDD-REJRD8V5 (the dedicated-harness design was withdrawn): a
+# writer, a `_control ... stays` and six cases, same shape as the sites above.
+#
+# THE COMMAND HAS NO BUILT-IN SEPARATOR. Every writer above pads AFTER an existing space so an
+# empty pad still parses; here that would let the always-present ASCII space satisfy
+# `re.search(\s, …)`/`/\s/.test(…)` in BOTH runtimes regardless of the pad, and the six rows
+# would agree by construction on the wrong reason. `false<PAD>x` (no space at all) makes the pad
+# the SOLE candidate separator, so recognition is decided entirely by whether that one byte is
+# `\s` to a given runtime. MEASURED: with a real space present, all six positions agreed in both
+# runtimes; removing it is what exposes the divergence.
+#
+# INTERIOR ONLY -- measured, not by analogy with the strong-span writer. LEADING is dead for all
+# six: `re.match(r"^[A-Za-z0-9_./-]+", inner)` anchors at byte 0 and a leading pad fails that
+# prefix in both languages before `\s` is even consulted. TRAILING kills U+FEFF only -- it is
+# stripped by the edge `.strip(JS_TRIM)`/`.trim()` before the regex runs -- but lets the other
+# five through, so it covers five of six, not all six. INTERIOR is the one position all six code
+# points reach, with U+FEFF's polarity INVERTED relative to the other five (oracle recognizes it
+# there and only there; the five are recognized by python only).
+#
+# SKIP_RERUN is UNSET for exactly these rows -- every other writer in this file runs under the
+# suite-global `AGENTS_DISCIPLINE_SKIP_RERUN=1` (line 43) because a fixture that grew a runnable
+# span later must not silently start executing, but this surface only exists while the re-run
+# path is live, so it is the one place the global skip is deliberately lifted. `false<PAD>x` is
+# provably inert throughout: no built-in separator means the shell reads a single word naming a
+# program that does not exist, so a recognized run always exits 127 -- unconditionally non-zero
+# in both runtimes, never routed through the no-op/`ALWAYS_TRUE` branch (checked: every
+# recognized case prints `ACCEPTANCE DID NOT REPRODUCE`, never "no-op acceptance").
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
+_write_ledger_accept() {
+  local dest="$1" ws="$2" pad
+  pad="$(printf '%b' "$ws")"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n\n'
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    # shellcheck disable=SC2016  # the backticks are a literal markdown code span, not a command
+    printf '| 1 | stats | app/stats.py | worker-1 | `false%sx` | verified |\n' "$pad"
+    printf '\n## Evidence\n\n'
+    printf '**Unit 1 —** ran the suite by hand; 12 passed.\n'
+  } > "$dest"
+}
+
+unset AGENTS_DISCIPLINE_SKIP_RERUN
+# `stays`: this surface IS whitespace-membership, and `X` is deliberately whitespace to neither
+# runtime -- so an ordinary pad must NOT move the verdict here, opposite every writer above where
+# `X` still breaks the token it lands in. MEASURED: `X` at the interior position leaves
+# `falseXx`, unrecognized in both runtimes, same as the empty-pad baseline.
+_control _write_ledger_accept "control: acceptance-command writer" \
+  '\| 1 \| stats \| app/stats\.py \| worker-1 \| .false[^ ]x. \|' stays
+
+# INVERTED relative to CASE_ORACLE_EFFECT: the oracle recognizes U+FEFF here and stays put on the other five.
+declare -a ACCEPT_ORACLE_EFFECT=(differ same same same same same)
+for i in "${!CASE_NAME[@]}"; do
+  _case "acceptance-command ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_accept \
+        "${ACCEPT_ORACLE_EFFECT[$i]}" 'ACCEPTANCE DID NOT REPRODUCE'
+done
+export AGENTS_DISCIPLINE_SKIP_RERUN=1
+
 echo
 if [ "$fail" = 0 ]; then
   # "check(s) passed", not "trim vector(s) identical": `$pass` has always also counted the
   # controls, and a control does not assert identity -- it asserts a count, and now also that the
   # padded verdict DIFFERS from the unpadded one. A summary line that calls every check an
   # identity is the kind of over-claim this suite exists to catch.
-  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + created-lt + rules-heading + heading-finder + strong-span surfaces) ---"
+  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + created-lt + rules-heading + heading-finder + strong-span + acceptance-command surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"
