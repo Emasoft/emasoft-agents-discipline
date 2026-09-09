@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-09T13:43:55+0200
+updated: 2026-09-09T14:20:07+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -700,10 +700,20 @@ and `dispatch.py` (7 uses, `read_state` done) are what is left.
 > sweep is **COMPLETE**: items 1–7, 9, 10 and 14 are done; `07a7d47` closed the last `\s` site
 > (item 6), and the colony ledger (`docs_dev/DELEGATION.md`) re-ran complete (6/6 units verified,
 > all acceptances reproduce). The "NEXT WORK — `:144` FIRST" section below is **HISTORICAL** — do
-> NOT redo it. The only open items are **item 13** (awaits a USER decision — whether to wire the
-> `test:port` chain into the CI matrix) and the cause-OPEN observations **8, 11, 12** (not
-> `\s`-port work; need larger-n investigation). The card still reads `column: dev` pending the
-> USER's call on its disposition. The correction items (5, 6, …) below remain valid reference.
+> NOT redo it. **2026-09-09 DISPOSITIONS (authoritative; investigation done):** **#8 DISMISSED** —
+> benign clock/startup-resolution artifact (at budget=1ms the skip branch is one-directional,
+> oracle-only, over n=40×2 runtimes; gone by 2ms; default budget 600000ms), confirmed first-hand +
+> reviewed; NO code change — the port's `time.monotonic()` is the correct monotonic deadline and
+> matching the oracle's `Date.now()` would regress it. **#11 NOT A DEFECT** — `npm test` ×3 = 261/0,
+> zero FAIL; the two unclassified failures were the killed fork's own cwd bug (same cause as the
+> other four); de-queued. **#12 RELOCATED** to the LOCAL memory note
+> `hardening-tests-waitforpath-pid-absent-flake` (no repro in 5× `hardening-tests.mjs`; a JS-oracle
+> flake, not the port; cause still OPEN — recall-only); de-queued. **#13 Linux/macOS DONE** (`3a58d15`
+> — guarded `test:port` + `test:slow` wired non-Windows). The ONE remaining open item is
+> **#13-Windows**: running `test:port` on the Windows CI cells is deferred pending a USER decision
+> (offered 2026-09-09, not yet answered) — the port is unverified on Windows and a first run could
+> red CI. Card stays `column: dev` pending that call. The correction items (5, 6, …) below remain
+> valid reference.
 
 ### ⚠ READ FIRST — THE ORACLE IS BINARY TO `grep`. A BARE GREP ON IT RETURNS SILENT ZERO.
 
