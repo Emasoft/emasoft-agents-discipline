@@ -57,6 +57,24 @@ jobs:
         if: runner.os != 'Windows'
         run: npm run test:diff
 
+      # test:port runs the four AD_RUNTIME-aware .mjs suites against the Python PORT (AD_RUNTIME=python)
+      # -- the coverage the oracle-only `npm test` never gave them. Non-Windows for now (the platforms
+      # test:diff already covers and the port is verified green on); Windows port coverage is deferred to
+      # its own TRDD because the port is unverified there and a first Windows run could red CI. The script
+      # GUARDS its env: run without AD_RUNTIME=python and it refuses loudly rather than silently testing
+      # the oracle and reporting green.
+      - name: Run the AD_RUNTIME-aware suites against the Python port
+        if: runner.os != 'Windows'
+        env:
+          AD_RUNTIME: python
+        run: npm run test:port
+
+      # test:slow is one deterministic ~35s node-vs-python gate-timeout check (item 14's
+      # check-timeout-slow.sh) -- pinned to a single cell; node-version spread buys it nothing.
+      - name: Run the slow gate-timeout check (node vs python)
+        if: runner.os == 'Linux' && matrix.node == 20
+        run: npm run test:slow
+
   windows-node-22-14:
     name: windows-latest / node 22.14.0 (libuv 1.49.2)
     runs-on: windows-latest
