@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-09T11:55:59+0200
+updated: 2026-09-09T12:29:15+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -1298,8 +1298,11 @@ the observation alone.
 site is gated only at the position its writer pads; site 4's own comment concedes the edge
 positions are fixed but ungated. Do not read the site count as coverage.
 
-**ORDER IS NOT NUMBER.** Items 1, 2, 3, 4, 5, 7, 9, 10 and 14 are done; the order is **13 → 6** (6 is
-last by construction — it needs `JS_WS_CLASS_BODY` in its own commit). Renumbering would churn
+**ORDER IS NOT NUMBER.** Items 1, 2, 3, 4, 5, 6, 7, 9, 10 and 14 are done — the nine-script `\s`
+sweep is COMPLETE (`07a7d47` closed the last site). Remaining open: **item 13** (test:port chain vs
+CI matrix, needs the USER) and the unclassified observations **8** (`Date.now()` ms vs
+`time.monotonic()` sub-ms re-run-deadline race, NOT a `\s` site), **11** (two never-classified suite
+failures) and **12** (intermittent `hardening-tests.mjs` flake, cause open). Renumbering would churn
 every cross-reference, so the order lives here instead. A reader who takes the lowest open number
 takes item 2, and item 9's note then lands after the window it covers — which is precisely the
 defect item 9 exists to prevent, so it is written down rather than left to be noticed.
@@ -1466,9 +1469,12 @@ than commits that landed code.
    inside it); `AD_RUNTIME=python node tests/ledger-tests.mjs` 152 / 0 (the port run, standalone —
    a real gate; item 13's caveat is about `run-tests.mjs`); `test:diff` exit 0 at 22:32 (24 s, only
    the known `unicode property escape` divergence, set unchanged).
-6. **`CITATION` `:150`** — ×2 inside a NEGATED class, so it needs `JS_WS_CLASS_BODY` (the existing
-   `JS_WS_CLASS` is bracketed and closes the class early). **LAST**, and the constant must land IN
-   that commit or it is a dead symbol.
+6. **✅ DONE (`07a7d47`, 2026-09-09).** `CITATION`'s ×2 `\s` inside a NEGATED class → `JS_WS_CLASS_BODY`
+   (the unbracketed set; `JS_WS_CLASS` is bracketed and would close the class early), and the new
+   constant landed in the SAME commit. Tenth `citation` surface in whitespace-diff.sh: writer at the
+   padded name, `_control ... stays`, six cases, `CITATION_ORACLE_EFFECT` (differ on U+FEFF). Five rows
+   parity-only; liveness via the U+FEFF row + mutant. Measured: 84 checks, test:diff 0, npm test 261/0;
+   revert-mutant reds exactly the 6 citation rows, flip-mutant reds U+FEFF.
 7. **✅ DONE (`e3f7e94`, 2026-09-09).** `acceptance_command`'s `\s` → `JS_WS_CLASS` at `:594`, an ordinary row in this suite, NOT its own harness: a writer padding `false%sx`, a `_control ... stays` (ordinary pad must NOT move the verdict), and six interior rows. Five of the six are parity-only; liveness rides on the U+FEFF row plus the `:594`-revert mutant (both measured, exit 1). Spec below. The
    ordering dependency on item 1 that this line used to assert is RETRACTED there.
 8. **Re-run deadline resolution — `Date.now()` ms vs `time.monotonic()` sub-ms.** NOT a `\s` site.
