@@ -1280,20 +1280,24 @@ def main(argv):
             state["timed_out"] = True
             stop_child()
 
+        deadline = time.monotonic() + timeout_seconds
         timeout_timer = threading.Timer(timeout_seconds, on_timeout)
         timeout_timer.daemon = True
         timeout_timer.start()
 
-        # SIGKILL to the whole process group (stop_child, above) closes every inherited pipe
-        # almost immediately, so these joins return promptly on the overflow/timeout paths
-        # too; the bound below only guards the pathological case of a descendant that escaped
-        # the group and still holds a pipe open.
-        stdout_thread.join(timeout=5.0)
-        stderr_thread.join(timeout=5.0)
+        # The wait comes FIRST, bounded by the remaining budget to `timeout_seconds`, because
+        # the previous order -- both capture-thread joins, then this wait, each capped at a
+        # fixed 5.0s -- spent up to 15s before this wait ever ran, killing any CHECK past ~15s
+        # regardless of --timeout. Waiting on the child first means nothing SIGKILLs it before
+        # the Timer's own deadline gets a chance to. The wait expiring here IS the deadline --
+        # `deadline` is computed before `timeout_timer.start()`, so this branch always expires
+        # first, by microseconds, and with `stop_child()` alone would report SIGKILL with
+        # `timed_out` still False whenever the Timer has not fired by `cancel()`; `on_timeout()`
+        # sets the flag deterministically and calls the idempotent `stop_child()` itself.
         try:
-            exit_status = child.wait(timeout=5.0)
+            exit_status = child.wait(timeout=max(0.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
-            stop_child()
+            on_timeout()
             try:
                 exit_status = child.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
@@ -1301,6 +1305,13 @@ def main(argv):
                 # it in the background so it does not linger as a zombie (constraint 1).
                 threading.Thread(target=child.wait, daemon=True).start()
                 exit_status = None
+
+        # SIGKILL to the whole process group (stop_child, above) closes every inherited pipe
+        # almost immediately, so these joins return promptly on the overflow/timeout paths
+        # too; the bound below only guards the pathological case of a descendant that escaped
+        # the group and still holds a pipe open.
+        stdout_thread.join(timeout=5.0)
+        stderr_thread.join(timeout=5.0)
         timeout_timer.cancel()
 
         stdout_text = b"".join(chunks["stdout"]).decode("utf-8", errors="replace")
