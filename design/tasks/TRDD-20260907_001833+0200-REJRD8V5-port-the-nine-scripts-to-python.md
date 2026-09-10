@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: testing
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-10T09:52:15+0200
+updated: 2026-09-10T09:53:43+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -730,22 +730,31 @@ and `dispatch.py` (7 uses, `read_state` done) are what is left.
 > CI run; advance past `testing` only after that run has been read. The correction items (5, 6, …)
 > below remain valid reference.
 >
-> **Hardening pass 2026-09-10 (user: "ensure the skill is perfect and flawless") — outcomes:**
+> **Hardening pass 2026-09-10 (user asked: "ensure the skill is perfect and flawless") — outcomes,
+> NOT a verdict:**
 > (1) `d488e01` — REAL DEFECT: `ledger-check.mjs:58` held a raw NUL byte as the escaped-pipe
 > placeholder, so git classified the ORACLE as binary since 05b5620a (no reviewable diff, no EOL
 > normalization); replaced with a space (the port already used one; only `.split("|").length` reads
 > it), zero behavior change. Its commit body over-claims "escaped-pipe fixtures exercised": the row
 > path was, the HEADER path had no fixture until (3). (2) `c30665e` — `.gitattributes` pins LF on
-> every checkout (the windows-latest runner defaults to `core.autocrlf=true`); the CRLF fixture is
-> `-text`. Windows checkout behavior is UNMEASURED; the first windows-latest run is the proof.
+> every checkout (the windows-latest runner is REPORTED to default to `core.autocrlf=true`; not
+> measured here); the CRLF fixture is `-text`. Windows checkout behavior is UNMEASURED; the first
+> windows-latest run is the proof.
 > (3) `271fd00` — `header-escaped-pipe.md` + ledger-tests case covering the header placeholder
 > branch, one shape (`\|`), discrimination measured by unescaping the pipe (exit 2, both runtimes).
 > (4) Measured green locally: `npm test`, `test:diff` (14 suites, 1 KNOWN engine divergence
 > unchanged), `test:port`, `test:slow`; py_compile + `node --check` on every script; docs/parity
-> audit zero findings; shellcheck warnings are dead captures + one false positive (indirect
-> `printf -v`), no false greens. UNMEASURED locally: Windows, node 16 (only v20/v26 installed).
+> audit (DELEGATED to a sonnet worker, report under `reports/skill-audit/`) zero findings;
+> shellcheck warnings are dead captures + one false positive (indirect `printf -v`) — none of
+> THOSE hits is a comparator that cannot fail; the differential suites' completeness was NOT
+> audited (e.g. `approval-diff.sh` captures `--approve` stdout and the surrogate-case exit codes
+> and never compares them — a coverage gap, open). UNMEASURED locally: Windows, node 16 (only
+> v20/v26 installed).
 > Known, deliberately left: two fixtures cite `node test/run-tests.mjs` (a `test/` dir that does
-> not exist) in a prose evidence line the checker never resolves.
+> not exist) in a prose evidence line the checker never resolves. This card has no
+> `implementation-commits:` field (its code SHAs live in STATE prose, as above); starting one with
+> only today's three would misstate the history, so backtracking stays via `git log --grep
+> REJRD8V5`.
 
 ### ⚠ READ FIRST — THE ORACLE IS BINARY TO `grep`. A BARE GREP ON IT RETURNS SILENT ZERO.
 
