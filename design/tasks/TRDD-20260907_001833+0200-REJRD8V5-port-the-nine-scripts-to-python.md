@@ -747,9 +747,9 @@ and `dispatch.py` (7 uses, `read_state` done) are what is left.
 > audit (DELEGATED to a sonnet worker, report under `reports/skill-audit/`) zero findings;
 > shellcheck warnings are dead captures + one false positive (indirect `printf -v`) — none of
 > THOSE hits is a comparator that cannot fail; the differential suites' completeness was NOT
-> audited (e.g. `approval-diff.sh` captures `--approve` stdout and the surrogate-case exit codes
-> and never compares them — a coverage gap, open). UNMEASURED locally: Windows, node 16 (only
-> v20/v26 installed).
+> audited (e.g. `approval-diff.sh` case 1 captures `--approve` stdout and never compares it —
+> undocumented, open; the surrogate case's exit codes are deliberately NOT asserted, per its own
+> comment). UNMEASURED locally: Windows, node 16 (only v20/v26 installed).
 > Known, deliberately left: two fixtures cite `node test/run-tests.mjs` (a `test/` dir that does
 > not exist) in a prose evidence line the checker never resolves. This card has no
 > `implementation-commits:` field (its code SHAs live in STATE prose, as above); starting one with
