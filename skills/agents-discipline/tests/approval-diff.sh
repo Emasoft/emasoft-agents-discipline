@@ -109,18 +109,24 @@ echo "-- CASE 1: a fresh approve writes byte-identical (modulo approvedAt) recor
 REPO="$WORK/repo"; _write_ledger "$REPO"
 APPR_O="$WORK/appr-oracle"; APPR_P="$WORK/appr-port"
 
-_run_approve oracle "$REPO" "$APPR_O"; o_code=$g_code; o_out="$g_out"; o_err="$g_err"
+_run_approve oracle "$REPO" "$APPR_O"; o_code=$g_code; o_out="$g_out"
+# The oracle's run above flips G1/G2's "- [ ]" checkbox to "- [x]" in $REPO's ledger
+# (gate-check.mjs:846). Rewritten here before the port's run so the port sees the same
+# pristine "- [ ]" ledger the oracle just saw -- without this the port would print
+# "previously met reverified: 2" where the oracle's own stdout (against the unmodified
+# file) printed 0: an ordering artifact of sharing one ledger path, not a real divergence.
+_write_ledger "$REPO"
 _run_approve port   "$REPO" "$APPR_P"; p_code=$g_code; p_out="$g_out"; p_err="$g_err"
 
 if _crashed "approve one gate" "$p_err"; then
   :
 else
   ok=1
-  tok1_o="" tok1_p=""
+  tok1_o=""
   for gid in G1 G2; do
     tf_o="$(_token_for_gate "$APPR_O" "$gid")" || { ok=0; printf 'DIVERGE  %-42s oracle wrote no approval file for %s\n' "approve one gate" "$gid"; break; }
     tf_p="$(_token_for_gate "$APPR_P" "$gid")" || { ok=0; printf 'DIVERGE  %-42s port wrote no approval file for %s\n' "approve one gate" "$gid"; break; }
-    [ "$gid" = G1 ] && { tok1_o="$(basename "$tf_o")"; tok1_p="$(basename "$tf_p")"; }
+    [ "$gid" = G1 ] && tok1_o="$(basename "$tf_o")"
     if [ "$(basename "$tf_o")" != "$(basename "$tf_p")" ]; then
       ok=0
       printf 'DIVERGE  %-42s token filename differs for %s: %s vs %s\n' "approve one gate" "$gid" "$(basename "$tf_o")" "$(basename "$tf_p")"
@@ -139,6 +145,18 @@ else
     ok=0
     printf 'DIVERGE  %-42s port exit %s, expected %s (oracle)\n' "approve one gate" "$p_code" "$o_code"
   fi
+  # Apart from the approval-dir path baked into each "APPROVED: <dir>/<token>.json" line,
+  # --approve stdout must be byte-identical between runtimes. Scrub ONLY the two known dirs
+  # by exact string -- a wider scrub (e.g. any absolute path) would erase the exact defect
+  # this compare exists to catch.
+  # stderr is not compared here: only _crashed reads p_err, so a warning-line divergence is out of scope.
+  o_out_s="${o_out//"$APPR_O"/<APPR>}"
+  p_out_s="${p_out//"$APPR_P"/<APPR>}"
+  if [ "$o_out_s" != "$p_out_s" ]; then
+    ok=0
+    printf 'DIVERGE  %-42s --approve stdout differs\n' "approve one gate"
+    diff <(printf '%s\n' "$o_out_s") <(printf '%s\n' "$p_out_s")
+  fi
   if [ "$ok" = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); FAILED+=("approve one gate"); fi
 fi
 
@@ -146,7 +164,7 @@ echo "-- CASE 2: non-vacuity control -- a changed CHECK must yield a different t
 
 REPO_CTRL="$WORK/repo-ctrl"; _write_ledger "$REPO_CTRL" "printf helloX"
 APPR_CTRL="$WORK/appr-ctrl"
-_run_approve oracle "$REPO_CTRL" "$APPR_CTRL"; c_code=$g_code; c_err="$g_err"
+_run_approve oracle "$REPO_CTRL" "$APPR_CTRL"; c_err="$g_err"
 
 if _crashed "control: mutated CHECK" "$c_err"; then
   :
@@ -181,9 +199,10 @@ fi
 
 echo "-- CASE 4: re-approving an already-approved gate is a no-op in both runtimes --"
 
+# The ledger here carries the PORT's "- [x]" flips (case 1 rewrote it before the port's run), which is still the already-approved state this case asserts.
 before_o="$(cat "$(_token_for_gate "$APPR_O" G1)")"
 before_p="$(cat "$(_token_for_gate "$APPR_P" G1)")"
-_run_approve oracle "$REPO" "$APPR_O"; ro_code=$g_code; ro_err="$g_err"
+_run_approve oracle "$REPO" "$APPR_O"; ro_code=$g_code
 _run_approve port   "$REPO" "$APPR_P"; rp_code=$g_code; rp_err="$g_err"
 
 if _crashed "idempotent re-approve" "$rp_err"; then
@@ -230,10 +249,11 @@ REPO_SG="$WORK/repo-sg"; _write_ledger "$REPO_SG"
 APPR_SG_O="$WORK/appr-sg-oracle"; APPR_SG_P="$WORK/appr-sg-port"
 BADPATH="${PATH}:/opt/$(printf '\xff')junk"
 
-sg_o_out="$(cd "$WORK" && env PATH="$BADPATH" AGENTS_DISCIPLINE_APPROVAL_DIR="$APPR_SG_O" "$NODE_ABS" "$ORACLE" --approve --reverify --root "$REPO_SG" 2>"$WORK/sg-o.err")"
-sg_o_code=$?
-sg_p_out="$(cd "$WORK" && env PATH="$BADPATH" AGENTS_DISCIPLINE_APPROVAL_DIR="$APPR_SG_P" "$PY_ABS" -B "$PORT" --approve --reverify --root "$REPO_SG" 2>"$WORK/sg-p.err")"
-sg_p_code=$?
+# stdout and exit codes are deliberately not compared here (Node vs
+# CPython decode the invalid PATH byte to different scalars, so both differ regardless of
+# correctness) -- only the resulting approval files (checked below) matter for this case.
+(cd "$WORK" && env PATH="$BADPATH" AGENTS_DISCIPLINE_APPROVAL_DIR="$APPR_SG_O" "$NODE_ABS" "$ORACLE" --approve --reverify --root "$REPO_SG" >/dev/null 2>"$WORK/sg-o.err")
+(cd "$WORK" && env PATH="$BADPATH" AGENTS_DISCIPLINE_APPROVAL_DIR="$APPR_SG_P" "$PY_ABS" -B "$PORT" --approve --reverify --root "$REPO_SG" >/dev/null 2>"$WORK/sg-p.err")
 sg_p_err="$(cat "$WORK/sg-p.err")"
 
 sg_ok=1
@@ -242,10 +262,6 @@ if printf '%s' "$sg_p_err" | grep -q '^Traceback (most recent call last)'; then
   printf 'DIVERGE  %-42s port crashed serializing the approval record: %s\n' \
     "surrogate PATH byte" "$(printf '%s' "$sg_p_err" | tail -1)"
 else
-  # No exit-code assertion here: the note above already establishes that Node and CPython
-  # decode the invalid PATH byte to different scalars, so oracle.path (and everything hashed
-  # from it) genuinely differs across runtimes for this one vector -- this case asserts OUTCOME
-  # agreement (no crash, a valid approval file) rather than exit-code or byte agreement.
   if tf_sg_p="$(_token_for_gate "$APPR_SG_P" G1)"; then
     if ! grep -q '\\udcff' "$tf_sg_p"; then
       sg_ok=0
