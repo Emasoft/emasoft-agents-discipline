@@ -1,0 +1,8 @@
+# The GitHub windows-latest runner ships core.autocrlf=true, which would check every LF source
+# and fixture out as CRLF and turn a byte-comparing differential into a Windows-only red that
+# reads as a port finding. Pin LF everywhere instead. (`text=auto` keeps git's binary heuristic:
+# a file git DETECTS as binary -- a NUL in its first 8000 bytes -- is not converted; a binary it
+# cannot detect needs its own `-text` line, like the fixture below.)
+* text=auto eol=lf
+# CRLF by design -- the port's CRLF handling is what this fixture tests. Keep its bytes.
+skills/agents-discipline/tests/fixtures/port/crlf-duplicates.md -text
