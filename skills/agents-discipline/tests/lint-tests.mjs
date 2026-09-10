@@ -31,7 +31,10 @@ const LINT = join(HERE, "..", "scripts", "gate-lint.mjs");
 // IMPLEMENTATION varies, so a divergence is a porting defect rather than a re-specified test.
 // `AD_RUNTIME=python node tests/lint-tests.mjs` selects the port.
 const PY = process.env.AD_RUNTIME === "python";
-const RUNTIME_BIN = PY ? "python3" : process.execPath;
+// PYTHON overrides the interpreter name (`python` on Windows, `python3` elsewhere) -- the same
+// contract the other three AD_RUNTIME-aware suites honor; hardcoding `python3` here would red
+// the Windows CI cells for a config reason, not a port defect.
+const RUNTIME_BIN = PY ? (process.env.PYTHON || "python3") : process.execPath;
 const RUNTIME_ARGS = PY ? [join(HERE, "..", "scripts", "gate_lint.py")] : [LINT];
 // The ONE string that legitimately differs: a program names itself in its own usage line.
 // Everything else — every finding, every exit code, every LINT OK/FINDINGS line — must match

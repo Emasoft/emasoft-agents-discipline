@@ -30,6 +30,14 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ matrix.node }}
+      # setup-python pins ONE interpreter version on all three OSes -- the major.minor the port was
+      # verified under locally (3.12) -- so a Windows red cannot be an image-Python-version artifact.
+      # It also governs the `python3` that test:diff and test:slow resolve on Linux/macOS (previously
+      # the runner image's own), a deliberate determinism gain, not a side effect to undo.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
       - name: Run zero-dependency test suite
         run: npm test
 
@@ -45,10 +53,10 @@ jobs:
       # deliberate, not accidental. Reasoning and the darwin row-count baseline: TRDD-REJRD8V5.
       #
       # THE CONSEQUENCE, stated because the chmod reason above does not imply it: `npm test`
-      # leaves AD_RUNTIME unset and therefore runs the ORACLE only, so on Windows NOTHING in
-      # this workflow exercises the Python port. Port fidelity is gated on ubuntu and macos
-      # alone. That is a real coverage limit, not a technicality -- a Windows-only port defect
-      # (path separators, cmd quoting, CRLF) would pass this workflow green.
+      # leaves AD_RUNTIME unset and therefore runs the ORACLE only, so it contributes NOTHING to
+      # port coverage on any OS. The port's Windows coverage comes from the test:port step below,
+      # which runs the four AD_RUNTIME-aware node suites against the port on every cell; only the
+      # bash DIFFERENTIAL suites stay non-Windows.
       #
       # Making them Windows-tolerant would NOT make it safe to drop this `if:` -- npm's
       # script-shell defaults to cmd there, where this POSIX loop is not valid syntax (RECALLED,
@@ -58,15 +66,20 @@ jobs:
         run: npm run test:diff
 
       # test:port runs the four AD_RUNTIME-aware .mjs suites against the Python PORT (AD_RUNTIME=python)
-      # -- the coverage the oracle-only `npm test` never gave them. Non-Windows for now (the platforms
-      # test:diff already covers and the port is verified green on); Windows port coverage is deferred to
-      # its own TRDD because the port is unverified there and a first Windows run could red CI. The script
-      # GUARDS its env: run without AD_RUNTIME=python and it refuses loudly rather than silently testing
-      # the oracle and reporting green.
+      # -- the coverage the oracle-only `npm test` never gave them -- on EVERY matrix cell, Windows
+      # included. Windows is the port's first non-POSIX verification: the port was verified locally
+      # on macOS; 3a58d15 wired the ubuntu/macos cells; Windows had nothing. So read a red on a
+      # windows-latest cell as a port finding FIRST (path separators, cmd quoting, CRLF, the
+      # os.rename-on-existing-target divergence the card names) -- the config causes that would have
+      # reddened it for a non-port reason are handled here, not papered over: the interpreter is
+      # `python` on Windows and `python3` elsewhere (PYTHON below; every suite honors it -- the two
+      # that hardcoded `python3` are fixed in this same commit), and setup-python above pins one
+      # known version on all three OSes. The script GUARDS its env: run without AD_RUNTIME=python and
+      # it refuses loudly rather than silently testing the oracle and reporting green.
       - name: Run the AD_RUNTIME-aware suites against the Python port
-        if: runner.os != 'Windows'
         env:
           AD_RUNTIME: python
+          PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
         run: npm run test:port
 
       # test:slow is one deterministic ~35s node-vs-python gate-timeout check (item 14's
