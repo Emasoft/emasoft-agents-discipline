@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: testing
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-10T18:57:00+0200
+updated: 2026-09-10T19:12:00+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -747,15 +747,16 @@ and `dispatch.py` (7 uses, `read_state` done) are what is left.
 > audit (DELEGATED to a sonnet worker, report under `reports/skill-audit/`) zero findings;
 > shellcheck warnings are dead captures + one false positive (indirect `printf -v`) — none of
 > THOSE hits is a comparator that cannot fail; the differential suites' completeness was NOT
-> audited (the one gap found, `approval-diff.sh` case 1 capturing `--approve` stdout without
-> comparing it, is closed by (5); the surrogate case's exit codes are deliberately NOT asserted,
-> per its own comment). UNMEASURED locally: Windows, node 16 (only v20/v26 installed).
+> audited (the one gap NOTICED, `approval-diff.sh` case 1 capturing `--approve` stdout without
+> comparing it, is closed by (5); the suites' completeness is still unaudited; the surrogate
+> case's exit codes are deliberately NOT asserted, per its own comment). UNMEASURED locally: Windows, node 16 (only v20/v26 installed).
 > (5) `37aca2f` — approval-diff case 1 compares `--approve` stdout (only the two approval-dir
 > paths scrubbed, quoted so the mktemp path is literal); the ledger is rewritten between the
 > oracle and port runs, removing the "previously met reverified: 0 vs 2" ordering artifact;
 > dead captures dropped. Non-vacuity measured: one byte appended to the port's stdout ⇒
-> DIVERGE, exit 1. Written by a sonnet worker, verified first-hand: shellcheck clean, 5/5,
-> `test:diff` exit 0. stderr is NOT compared in that case (only `_crashed` reads it).
+> DIVERGE, exit 1. Written by a sonnet worker, verified first-hand on 37aca2f: shellcheck
+> clean, 5/5, `test:diff` exit 0 (14 suites, the 1 KNOWN engine divergence unchanged; counted
+> from the run's output). stderr is NOT compared in that case (only `_crashed` reads it).
 > Known, deliberately left: two fixtures cite `node test/run-tests.mjs` (a `test/` dir that does
 > not exist) in a prose evidence line the checker never resolves. This card has no
 > `implementation-commits:` field (its code SHAs live in STATE prose, as above); starting one with
