@@ -54,9 +54,10 @@ const cases = [
   { name: "truncated row fails loud", file: "tests/fixtures/truncated-row.md", want: 1 },
   { name: "aligned separators + piped cell", file: "tests/fixtures/aligned-and-piped.md", want: 0 },
   // Covers the HEADER's escaped-pipe placeholder branch of columnCount (the row splitter has its
-  // own, proven by the case above). Drop the header's `\|` replace and this header counts 7
-  // columns against a 6-cell row -- MEASURED with the pipe unescaped: "6 cells but the header
-  // declares 7", the ledger's only row is malformed, exit 2, in both runtimes. One shape: `\|`.
+  // own, proven by the case above). BY INSPECTION, dropping the header's `\|` replace makes this
+  // header count 7 against a 6-cell row. MEASURED (the pipe unescaped in a copy of this fixture):
+  // "6 cells but the header declares 7", the only row malformed, exit 2, both runtimes. The two
+  // mutations reach the same branch under today's code; only the second was run. One shape: `\|`.
   { name: "escaped pipe in the HEADER keeps the column count", file: "tests/fixtures/header-escaped-pipe.md", want: 0 },
   { name: "'verified' word is not evidence", file: "tests/fixtures/evidence-word-verified.md", want: 1 },
   { name: "backticked 'done' is not evidence", file: "tests/fixtures/evidence-backtick-done.md", want: 1 },
