@@ -3,7 +3,7 @@ trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
 column: dev
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-09T14:20:07+0200
+updated: 2026-09-10T09:12:05+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -709,12 +709,20 @@ and `dispatch.py` (7 uses, `read_state` done) are what is left.
 > as, the killed fork's own cwd bug pinned for the other four (the cause of these two was never
 > classified first-hand); de-queued. **#12 RELOCATED** to the LOCAL memory note
 > `hardening-tests-waitforpath-pid-absent-flake` (no repro in 5× `hardening-tests.mjs`; a JS-oracle
-> flake, not the port; cause still OPEN — recall-only); de-queued. **#13 Linux/macOS DONE** (`3a58d15`
-> — guarded `test:port` + `test:slow` wired non-Windows). The ONE remaining open item is
-> **#13-Windows**: running `test:port` on the Windows CI cells is deferred pending a USER decision
-> (offered 2026-09-09, not yet answered) — the port is unverified on Windows and a first run could
-> red CI. Card stays `column: dev` pending that call. The correction items (5, 6, …) below remain
-> valid reference.
+> flake, not the port; cause still OPEN — recall-only); de-queued. **#13 DONE** (`3a58d15` wired the
+> guarded `test:port` + `test:slow` on Linux/macOS; **`ebd37cb` (2026-09-10) wired `test:port` on the
+> Windows cells too** — the `if: runner.os != 'Windows'` is dropped; `lint-tests.mjs`/`ledger-tests.mjs`
+> now honor `PYTHON` like the other two suites (they hardcoded `python3`, a config red-in-waiting);
+> a SHA-pinned `setup-python` 3.12 pins the interpreter on all three OSes, and the step sets
+> `PYTHON=python` on Windows / `python3` elsewhere). Verified locally (macOS): actionlint clean;
+> override honored (lint 29/29, ledger all-pass); bogus `PYTHON` fails both suites (the override is
+> real); full `test:port` 11 s wall vs the 10-min job ceiling. **Windows itself is NOT yet verified**
+> — the only Windows proof is CI on the next push (nothing was pushed from this session); a Windows
+> red is the coverage this step exists to surface (this body already names candidates:
+> `os.rename`-on-existing-target ~639, UNC basename ~4442, `C:\` path reasoning ~4187) — read it as
+> a port finding first, not workflow breakage. Nothing remains queued for this card; `column: dev`
+> is untouched here — the column move is a separate call once CI has run the Windows cells. The
+> correction items (5, 6, …) below remain valid reference.
 
 ### ⚠ READ FIRST — THE ORACLE IS BINARY TO `grep`. A BARE GREP ON IT RETURNS SILENT ZERO.
 
