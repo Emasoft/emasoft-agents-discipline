@@ -30,15 +30,13 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: ${{ matrix.node }}
-      # setup-python pins ONE interpreter version on all three OSes -- the major.minor the port was
-      # verified under locally (3.12) -- so a Windows red cannot be a MAJOR.MINOR drift artifact. The
-      # patch level is whatever the image's newest 3.12.x is (pin "3.12.13" if a red ever looks
-      # patch-specific); a 3.12-specific Windows behavior is still possible and is a finding, not drift.
-      # Because it runs before `npm test`, it also governs the interpreter npm test's
-      # python-lib-checks.py step resolves -- `python3` on Linux/macOS, and on Windows only if
-      # setup-python puts a `python3` shim on PATH there (unverified here) -- plus the `python3` that
-      # test:diff and test:slow resolve on Linux/macOS (previously the runner image's own). A deliberate
-      # determinism gain, not a side effect to undo.
+      # setup-python pins ONE major.minor (3.12, the one the port was verified under locally) on all
+      # three OSes, so a Windows red cannot be major.minor drift; the patch level is the highest 3.12.x
+      # the runner can supply and may differ per OS (pin an exact patch from the setup-python
+      # versions-manifest if a red ever looks patch-specific). Placed before `npm test`, it also governs
+      # the interpreter that step's python-lib-checks.py resolves (`python3` on Linux/macOS; on Windows
+      # only if setup-python exposes a `python3` shim -- unverified here) and the `python3` test:diff /
+      # test:slow resolve on Linux/macOS. A deliberate determinism gain, not a side effect to undo.
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
