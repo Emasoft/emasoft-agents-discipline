@@ -31,9 +31,11 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       # setup-python pins ONE interpreter version on all three OSes -- the major.minor the port was
-      # verified under locally (3.12) -- so a Windows red cannot be an image-Python-version artifact.
-      # It also governs the `python3` that test:diff and test:slow resolve on Linux/macOS (previously
-      # the runner image's own), a deliberate determinism gain, not a side effect to undo.
+      # verified under locally (3.12) -- so a Windows red cannot be a Python-version-DRIFT artifact
+      # (a 3.12-specific Windows behavior is still possible; that is a finding, not drift). Because it
+      # runs before `npm test`, it also governs the `python3` that npm test's python-lib-checks.py step
+      # resolves on all three OSes, and the one test:diff and test:slow resolve on Linux/macOS
+      # (previously the runner image's own) -- a deliberate determinism gain, not a side effect to undo.
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -70,12 +72,16 @@ jobs:
       # included. Windows is the port's first non-POSIX verification: the port was verified locally
       # on macOS; 3a58d15 wired the ubuntu/macos cells; Windows had nothing. So read a red on a
       # windows-latest cell as a port finding FIRST (path separators, cmd quoting, CRLF, the
-      # os.rename-on-existing-target divergence the card names) -- the config causes that would have
+      # os.rename-on-existing-target divergence the card names) -- the config causes that could have
       # reddened it for a non-port reason are handled here, not papered over: the interpreter is
       # `python` on Windows and `python3` elsewhere (PYTHON below; every suite honors it -- the two
-      # that hardcoded `python3` are fixed in this same commit), and setup-python above pins one
-      # known version on all three OSes. The script GUARDS its env: run without AD_RUNTIME=python and
-      # it refuses loudly rather than silently testing the oracle and reporting green.
+      # that hardcoded `python3` were fixed in the commit that wired Windows, ebd37cb), and
+      # setup-python above pins one known version on all three OSes. "Could", not "would": no Windows
+      # cell has run the port yet, so whether a bare `python3` resolves there is unmeasured -- `npm
+      # test`'s own python-lib-checks.py step invokes `python3` on the same runner, so if a Windows
+      # red looks interpreter-specific, compare the two steps before blaming the port. The script
+      # GUARDS its env: run without AD_RUNTIME=python and it refuses loudly rather than silently
+      # testing the oracle and reporting green.
       - name: Run the AD_RUNTIME-aware suites against the Python port
         env:
           AD_RUNTIME: python

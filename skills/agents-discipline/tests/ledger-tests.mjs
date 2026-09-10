@@ -24,8 +24,8 @@ const checker = resolve(root, "scripts/ledger-check.mjs");
 // oracle fixed, vary only the implementation, so a divergence is a port bug and not a
 // re-specified test. `AD_RUNTIME=python node tests/ledger-tests.mjs` selects the port.
 // PYTHON overrides the interpreter name (`python` on Windows, `python3` elsewhere) -- the same
-// contract the other three AD_RUNTIME-aware suites honor; hardcoding `python3` here would red
-// the Windows CI cells for a config reason, not a port defect.
+// contract the other three AD_RUNTIME-aware suites honor; hardcoding `python3` here could red
+// the Windows CI cells for a config reason, not a port defect ("could": unmeasured on Windows).
 const runtime =
   process.env.AD_RUNTIME === "python"
     ? [process.env.PYTHON || "python3", [resolve(root, "scripts/ledger_check.py")]]

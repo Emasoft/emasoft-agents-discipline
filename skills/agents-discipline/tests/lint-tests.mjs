@@ -32,8 +32,8 @@ const LINT = join(HERE, "..", "scripts", "gate-lint.mjs");
 // `AD_RUNTIME=python node tests/lint-tests.mjs` selects the port.
 const PY = process.env.AD_RUNTIME === "python";
 // PYTHON overrides the interpreter name (`python` on Windows, `python3` elsewhere) -- the same
-// contract the other three AD_RUNTIME-aware suites honor; hardcoding `python3` here would red
-// the Windows CI cells for a config reason, not a port defect.
+// contract the other three AD_RUNTIME-aware suites honor; hardcoding `python3` here could red
+// the Windows CI cells for a config reason, not a port defect ("could": unmeasured on Windows).
 const RUNTIME_BIN = PY ? (process.env.PYTHON || "python3") : process.execPath;
 const RUNTIME_ARGS = PY ? [join(HERE, "..", "scripts", "gate_lint.py")] : [LINT];
 // The ONE string that legitimately differs: a program names itself in its own usage line.
