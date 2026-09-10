@@ -1,9 +1,9 @@
 ---
 trdd-id: REJRD8V5
 title: Port all nine agents-discipline scripts from JS to Python against the JS suite as oracle
-column: dev
+column: testing
 created: 2026-09-07T00:18:33+0200
-updated: 2026-09-10T09:12:05+0200
+updated: 2026-09-10T09:15:54+0200
 current-owner: main
 task-type: refactor
 scope: project
@@ -709,20 +709,26 @@ and `dispatch.py` (7 uses, `read_state` done) are what is left.
 > as, the killed fork's own cwd bug pinned for the other four (the cause of these two was never
 > classified first-hand); de-queued. **#12 RELOCATED** to the LOCAL memory note
 > `hardening-tests-waitforpath-pid-absent-flake` (no repro in 5× `hardening-tests.mjs`; a JS-oracle
-> flake, not the port; cause still OPEN — recall-only); de-queued. **#13 DONE** (`3a58d15` wired the
-> guarded `test:port` + `test:slow` on Linux/macOS; **`ebd37cb` (2026-09-10) wired `test:port` on the
-> Windows cells too** — the `if: runner.os != 'Windows'` is dropped; `lint-tests.mjs`/`ledger-tests.mjs`
-> now honor `PYTHON` like the other two suites (they hardcoded `python3`, a config red-in-waiting);
-> a SHA-pinned `setup-python` 3.12 pins the interpreter on all three OSes, and the step sets
-> `PYTHON=python` on Windows / `python3` elsewhere). Verified locally (macOS): actionlint clean;
-> override honored (lint 29/29, ledger all-pass); bogus `PYTHON` fails both suites (the override is
-> real); full `test:port` 11 s wall vs the 10-min job ceiling. **Windows itself is NOT yet verified**
-> — the only Windows proof is CI on the next push (nothing was pushed from this session); a Windows
-> red is the coverage this step exists to surface (this body already names candidates:
-> `os.rename`-on-existing-target ~639, UNC basename ~4442, `C:\` path reasoning ~4187) — read it as
-> a port finding first, not workflow breakage. Nothing remains queued for this card; `column: dev`
-> is untouched here — the column move is a separate call once CI has run the Windows cells. The
-> correction items (5, 6, …) below remain valid reference.
+> flake, not the port; cause still OPEN — recall-only); de-queued. **#13 WIRED on every cell — Windows
+> leg UNEXECUTED; proof = the CI run on the next push** (`3a58d15` wired the guarded `test:port` +
+> `test:slow` on Linux/macOS; **`ebd37cb` (2026-09-10) wired `test:port` on the Windows cells too**,
+> comments softened in `0e89d5f` — the `if: runner.os != 'Windows'` is dropped;
+> `lint-tests.mjs`/`ledger-tests.mjs` now honor `PYTHON` like the other two suites (they hardcoded
+> `python3`, which COULD red Windows for a config reason — unmeasured, since no Windows cell has run
+> the port); a SHA-pinned `setup-python` 3.12 pins the interpreter on all three OSes, including the
+> `python3` that `npm test`'s python-lib-checks.py step resolves; the step sets `PYTHON=python` on
+> Windows / `python3` elsewhere). Verified locally (macOS, `PYTHON=python3`): actionlint clean;
+> override honored (lint 29/29, ledger all pass); bogus `PYTHON` fails both suites (the override is
+> real); full `test:port` 11 s wall vs the job's `timeout-minutes: 10`. **Windows itself is NOT
+> verified** — the only Windows proof is CI on the next push (nothing was pushed from this session);
+> a Windows red is the coverage this step exists to surface (this body already names candidates:
+> `os.rename`-on-existing-target :639, UNC `js_basename` :4450, `isAbsolute("C:\\x")` :4196) — read
+> it as a port finding first, not workflow breakage; `npm test`'s own `python3` step runs on the
+> same runner, so an interpreter-looking red is compared against it before blaming the port.
+> Nothing remains queued for this card, so `column: dev` would be a lie: **moved `dev → testing`**
+> (mechanical, exempt) — the code is done and the only remaining act IS a test, the first Windows
+> CI run; advance past `testing` only after that run has been read. The correction items (5, 6, …)
+> below remain valid reference.
 
 ### ⚠ READ FIRST — THE ORACLE IS BINARY TO `grep`. A BARE GREP ON IT RETURNS SILENT ZERO.
 
