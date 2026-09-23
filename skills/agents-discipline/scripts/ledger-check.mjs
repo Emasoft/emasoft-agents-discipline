@@ -462,13 +462,15 @@ function wrapsWhole(s, open, close) {
   return false;
 }
 
-function isNoopAcceptance(raw) {
-  let s = String(raw).trim();
-  // `( true )` and `{ true }` wrap the same command. The balance check stays: I removed it
-  // once on the rationale that `;` can no longer appear, and that reasoning was wrong --
-  // `(echo a) && (echo b)` still mangles to `echo a) && (echo b` under an anchored
-  // `^\(...\)$`. It happened to fail SAFE (the fragments fail ALWAYS_TRUE, so nothing is
-  // falsely flagged), but it silently stopped catching two always-green forms.
+// `( true )` and `{ true }` wrap the same command. The balance check stays: I removed it
+// once on the rationale that `;` can no longer appear, and that reasoning was wrong --
+// `(echo a) && (echo b)` still mangles to `echo a) && (echo b` under an anchored
+// `^\(...\)$`. Shared between the whole-string call in isNoopAcceptance and the
+// per-fragment call after its `&&` split: a fragment like `(echo ok)` inside a real chain
+// is exactly as wrapped as the whole string is, and needs the same balance check for the
+// same reason -- see isNoopAcceptance for why skipping the fragment call was a live bug.
+function peelWrapping(input) {
+  let s = input;
   for (let i = 0; i < 4; i++) {
     const before = s;
     for (const [open, close] of [["(", ")"], ["{", "}"]]) {
@@ -478,9 +480,25 @@ function isNoopAcceptance(raw) {
     }
     if (s === before) break;
   }
+  return s;
+}
+
+function isNoopAcceptance(raw) {
+  const s = peelWrapping(String(raw).trim());
   if (!s) return false;
-  // Judged on the MASKED text: a quoted `&&` is an argument, not a link.
-  return maskQuoted(s).split("&&").map((p) => p.trim()).filter(Boolean).every((p) => ALWAYS_TRUE.test(p));
+  // Judged on the MASKED text: a quoted `&&` is an argument, not a link. Each fragment is
+  // peeled AGAIN after the split -- `true && (echo ok)` is exactly as always-green as
+  // `true && echo ok`, and ALWAYS_TRUE has no alternative that can match a `(...)`-wrapped
+  // fragment directly. Without this second peel the parenthesized form made this function
+  // return `false` (not a no-op), fell through to acceptanceCommand() and REAL execution,
+  // and really returned 0 -- the same fabricated-pass outcome as if this function had lied
+  // outright, just reached through real execution instead of a forged EVIDENCE line.
+  // Measured: `true && (echo ok)` re-ran and PASSED before this fix. This stays inside the
+  // peel/split-on-`&&` domain the checker already owns; it does not reopen the `;`/`||`
+  // status-propagation question the 2026-09-06 refuse-rather-than-parse decision closed --
+  // `&&` alone has no propagation ambiguity, every link must succeed.
+  return maskQuoted(s).split("&&").map((p) => peelWrapping(p.trim())).filter(Boolean)
+    .every((p) => ALWAYS_TRUE.test(p));
 }
 
 const reran = [];

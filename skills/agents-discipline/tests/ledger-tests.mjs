@@ -289,21 +289,35 @@ const cases = [
     // that matters most: `pytest -q || true` is the canonical always-pass idiom, it has a
     // real left half, and no whole-command regex can see it because the cheat lives in the
     // operator. `pipefail` does not help either -- `||` is not a pipe.
+    //
+    // Rows 10-11 guard a SEPARATE defect from the other nine: isNoopAcceptance only peeled a
+    // wrapping `()`/`{}` around the WHOLE command, never per-fragment after the `&&` split, so
+    // ALWAYS_TRUE -- which has no alternative that matches a `(...)`-wrapped fragment -- never
+    // saw a fragment like `(echo ok)`. Both rows are single-command no-ops (no `||`/`;`), so
+    // they reach isNoopAcceptance directly rather than being refused upstream like rows 4/6-9.
+    // MEASURED pre-fix: `AGENTS_DISCIPLINE_SKIP_RERUN=1` unset, row 10's `true && (echo ok)`
+    // was NOT flagged a no-op, fell through to acceptanceCommand() and real execution, really
+    // exited 0, and the row was certified `reran ... passed` -- the same fabricated-verified
+    // outcome the other nine rows exist to prevent, reached through real execution instead of
+    // a forged EVIDENCE line. `peelWrapping()` now runs on each split fragment too, closing it.
     name: "no-op acceptances are rejected",
     file: "tests/fixtures/noop-acceptance.md",
     want: 1,
     rerun: true,
-    artifacts: ["reports/noop-1.txt", "reports/noop-2.txt", "reports/noop-3.txt", "reports/noop-4.txt", "reports/noop-5.txt", "reports/noop-6.txt", "reports/noop-7.txt", "reports/noop-8.txt", "reports/noop-9.txt"],
-    // Two distinct verdicts, and the split matters. Rows 1-3 and 5 are single commands that
-    // happen to exit 0 always, so they are judged. Rows 4 and 6-9 carry `||` or `;` and are
-    // REFUSED before judgement -- which is the point of the USER's design decision: every one
-    // of those four was a defect that shipped, was found by adversarial review, and was fixed
-    // by a parser that then leaked somewhere else. Refusing the operators retires the class.
+    artifacts: ["reports/noop-1.txt", "reports/noop-2.txt", "reports/noop-3.txt", "reports/noop-4.txt", "reports/noop-5.txt", "reports/noop-6.txt", "reports/noop-7.txt", "reports/noop-8.txt", "reports/noop-9.txt", "reports/noop-10.txt", "reports/noop-11.txt"],
+    // Two distinct verdicts, and the split matters. Rows 1-3, 5, 10, 11 are single commands
+    // (possibly `&&`-chained) that happen to exit 0 always, so they are judged. Rows 4 and
+    // 6-9 carry `||` or `;` and are REFUSED before judgement -- which is the point of the
+    // USER's design decision: every one of those four was a defect that shipped, was found by
+    // adversarial review, and was fixed by a parser that then leaked somewhere else. Refusing
+    // the operators retires the class.
     expect: [
       "#1 $ : -> no-op acceptance",
       "#2 $ exit 0 -> no-op acceptance",
       "#3 $ /bin/true -> no-op acceptance",
       "#5 $ ( exit 0 ) -> no-op acceptance",
+      "#10 $ true && (echo ok) -> no-op acceptance",
+      "#11 $ (true) && (true) -> no-op acceptance",
       "#4 $ pytest -q || true -> acceptance uses `||` or `;`",
       "#6 $ true || pytest -q -> acceptance uses `||` or `;`",
       "#7 $ false; true -> acceptance uses `||` or `;`",
@@ -378,12 +392,23 @@ const cases = [
     // program body -- their `;` is an ARGUMENT, not a chain. The first version of the
     // refusal tested the raw span and rejected both, with advice ("chain with `&&`") that
     // does not even apply. Same false-positive class as flagging `[ -f x ]`.
-    artifacts: ["reports/weak-1.txt", "reports/weak-2.txt", "reports/weak-3.txt", "reports/weak-4.txt", "reports/weak-5.txt", "reports/weak-6.txt"],
+    //
+    // Row 7 is a CHARACTERIZATION guard (does not discriminate the peel-per-fragment fix
+    // added alongside the "no-op acceptances are rejected" case above -- `node` was never in
+    // ALWAYS_TRUE, so `.every()` already failed on the first fragment before or after that
+    // fix, for the same reason both times). It still earns its place standing guard on the
+    // opposite direction of that fix: a genuinely fallible first fragment (`node -e
+    // "process.exit(0)"`, itself containing a MASKED-quoted paren from `process.exit(0)`)
+    // combined with a real, parenthesized, always-true SECOND fragment (`(echo done)`) must
+    // still be judged NOT a no-op and really executed -- catching a FUTURE change to
+    // peelWrapping/ALWAYS_TRUE that widens per-fragment peeling into a false positive, which
+    // this row's own trace could not construct against the fix as it stands today.
+    artifacts: ["reports/weak-1.txt", "reports/weak-2.txt", "reports/weak-3.txt", "reports/weak-4.txt", "reports/weak-5.txt", "reports/weak-6.txt", "reports/weak-7.txt"],
     // `reject`, not `expect`: the property under test is an ABSENCE -- none of these three
     // is flagged a no-op. Asserting a re-ran COUNT instead would test something else and
     // did: `[ -f x ]` is not extracted as a runnable command at all (a separate, pre-existing
     // limitation of acceptanceCommand), so only two of the three ever execute.
-    expect: ["re-ran:      5 acceptance command(s), all passed"],
+    expect: ["re-ran:      6 acceptance command(s), all passed"],
     reject: ["no-op acceptance", "acceptance uses"],
   },
   {

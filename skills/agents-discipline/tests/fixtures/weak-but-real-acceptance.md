@@ -1,6 +1,6 @@
 # Delegation plan
 
-Units: 6
+Units: 7
 Created: 2020-01-01T00:00:00+0000
 
 | # | Unit | Files (mine) | Worker | Acceptance | Status |
@@ -11,6 +11,7 @@ Created: 2020-01-01T00:00:00+0000
 | 4 | and-chain | app/d.py | worker-4 | `echo checking && node -e "process.exit(0)"` | verified |
 | 5 | quoted-semi | app/e.py | worker-5 | `python3 -c "import sys; sys.exit(0)"` | verified |
 | 6 | awk-prog | app/f.py | worker-6 | `awk '{print;}' /etc/hosts` | verified |
+| 7 | paren-second-fragment | app/g.py | worker-7 | `node -e "process.exit(0)" && (echo done)` | verified |
 
 ## Evidence
 
@@ -25,3 +26,5 @@ Created: 2020-01-01T00:00:00+0000
 **Unit 5 —** ran it, output in `reports/weak-5.txt`.
 
 **Unit 6 —** ran it, output in `reports/weak-6.txt`.
+
+**Unit 7 —** ran it, output in `reports/weak-7.txt`.

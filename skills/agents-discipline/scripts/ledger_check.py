@@ -718,12 +718,12 @@ def wraps_whole(s, open_c, close_c):
     return False
 
 
-def is_noop_acceptance(raw):
-    """With `||` and `;` refused upstream, the only remaining shape is an `&&` chain, and it is
-    always-green exactly when EVERY link is."""
-    s = str(raw).strip(JS_TRIM)
-    # `( true )` and `{ true }` wrap the same command. The balance check is load-bearing:
-    # an anchored `^\(...\)$` mangles `(echo a) && (echo b)` into `echo a) && (echo b`.
+def peel_wrapping(s):
+    """`( true )` and `{ true }` wrap the same command. The balance check is load-bearing:
+    an anchored `^\\(...\\)$` mangles `(echo a) && (echo b)` into `echo a) && (echo b`.
+    Shared between the whole-string call in is_noop_acceptance and the per-fragment call
+    after its `&&` split -- see is_noop_acceptance for why skipping the fragment call was
+    a live bug."""
     for _ in range(4):
         before = s
         for open_c, close_c in (("(", ")"), ("{", "}")):
@@ -731,10 +731,22 @@ def is_noop_acceptance(raw):
                 s = s[1:-1].strip(JS_TRIM)
         if s == before:
             break
+    return s
+
+
+def is_noop_acceptance(raw):
+    """With `||` and `;` refused upstream, the only remaining shape is an `&&` chain, and it is
+    always-green exactly when EVERY link is."""
+    s = peel_wrapping(str(raw).strip(JS_TRIM))
     if not s:
         return False
-    # Judged on the MASKED text: a quoted `&&` is an argument, not a link.
-    parts = [p.strip(JS_TRIM) for p in mask_quoted(s).split("&&")]
+    # Judged on the MASKED text: a quoted `&&` is an argument, not a link. Each fragment is
+    # peeled AGAIN after the split -- `true && (echo ok)` is exactly as always-green as
+    # `true && echo ok`, and ALWAYS_TRUE has no alternative that matches a `(...)`-wrapped
+    # fragment directly. Without this second peel the parenthesized form made this function
+    # return False (not a no-op), fell through to real execution, and really returned 0 --
+    # ported unchanged from ledger-check.mjs's isNoopAcceptance, fixed the same turn.
+    parts = [peel_wrapping(p.strip(JS_TRIM)) for p in mask_quoted(s).split("&&")]
     return all(ALWAYS_TRUE.match(p) for p in parts if p)
 
 
