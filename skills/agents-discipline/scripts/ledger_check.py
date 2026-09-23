@@ -9,7 +9,8 @@ Usage:
 
 Exit codes:
   0  ledger complete (every row verified, evidence present)
-  1  ledger incomplete (pending/done rows, or missing evidence)
+  1  ledger incomplete (pending/done rows, or missing evidence), OR the ledger changed on
+     disk between the start of the run and the receipt write (verdict VOID, no receipt signed)
   2  not a ledger (no header, no rows, or unparseable)
 
 Port of ledger-check.mjs. The JavaScript test suite is the oracle: it runs unchanged
@@ -29,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from gates import (  # noqa: E402  # type: ignore[import-not-found]
-    node_fs_message, read_stable_regular_file)
+    node_fs_message, read_stable_regular_file, write_atomic)
 from jsapi import (  # noqa: E402  # type: ignore[import-not-found]
     force_utf8_streams, normalize_argv)
 
@@ -1030,10 +1031,22 @@ if prior and prior.group(2) != digest:
 elif prior:
     print(f"  receipt:     binds this exact content, last checked {prior.group(1)}")
 
+# The re-run can hold this process for the whole budget, and the receipt write below would
+# otherwise replace the file with the bytes read at START -- a lost update erasing any row or
+# evidence the coordinator edited in the meantime. Re-read BEFORE the verdict is printed (not
+# just before the write): a `complete`/`INCOMPLETE` line computed from `rows` parsed out of the
+# START bytes is a claim about content that may no longer be on disk. Skip the check when the
+# rerun itself was skipped -- that path already signs and verifies nothing, so there is nothing
+# for a mid-run edit to invalidate. Port of the same re-read guard in ledger-check.mjs.
+ledger_changed = not rerun_skipped and read_stable_regular_file(path, label="ledger") != text
+
 # Three-way, not two. An abandoned ledger is not "INCOMPLETE" -- that word promises the work is
 # still coming. It is terminal, and the exit code is unchanged (1 either way); only the claim
-# changes, which was the whole defect.
-if complete:
+# changes, which was the whole defect. A changed ledger outranks both: neither `complete` nor
+# `abandoned` describes bytes that are no longer the ones on disk, so the verdict is VOID.
+if ledger_changed:
+    print("  -> verdict VOID: the ledger changed while it was being checked; re-run the checker.")
+elif complete:
     print("  -> ledger complete: every unit verified.")
 # `and not unverified` is load-bearing: TERMINAL is a claim about the WHOLE ledger, and one
 # abandoned row among four pending ones does not make the ledger terminal. Without it this branch
@@ -1049,16 +1062,11 @@ else:
 
 # A run that SKIPPED the re-run did not verify anything, so it must not sign anything. Signing
 # it would mint exactly the artifact this receipt exists to make unforgeable: a PASS stamp on a
-# ledger nobody executed.
-if not rerun_skipped:
+# ledger nobody executed. Same for a ledger that changed mid-run: the digest below is over the
+# START bytes, and signing it would mint a receipt for content nobody's re-read just confirmed
+# is still on disk.
+if not rerun_skipped and not ledger_changed:
     try:
-        # The re-run can hold this process for the whole budget, and the write below replaces
-        # the file with the bytes read at START. Writing blind would silently erase any edit made
-        # in the meantime -- a lost update. Port of the same re-read guard in ledger-check.mjs.
-        if read_stable_regular_file(path, label="ledger") != text:
-            print("  receipt:     NOT WRITTEN — the ledger changed while it was being checked; "
-                  "re-run the checker")
-            raise OSError("changed")
         now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         stamp = (
             f"<!-- agents-discipline-check: {now} sha256:{digest} -->\n"
@@ -1066,10 +1074,14 @@ if not rerun_skipped:
             "which bytes were checked, never whether they passed. Re-run ledger-check.mjs on "
             "this file for a verdict. -->"
         )
-        with open(os.path.abspath(path), "w", encoding="utf-8") as fh:
-            fh.write(body_for_hash + stamp + "\n")
+        # Atomic write (write-to-temp + fsync + rename), not a truncating open(..., "w"): a
+        # crash or concurrent reader between truncate and write must never observe a
+        # half-written receipt.
+        write_atomic(os.path.abspath(path), body_for_hash + stamp + "\n")
     except OSError:
-        # A read-only ledger is not a verification failure — say nothing and keep the verdict.
+        # A read-only ledger, or any other write failure past the re-read above (permissions,
+        # disk full, a symlink swapped in), is not a verification failure -- say nothing and
+        # keep the verdict already printed.
         pass
 
-sys.exit(0 if complete else 1)
+sys.exit(0 if (not ledger_changed and complete) else 1)

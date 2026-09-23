@@ -10,14 +10,15 @@
  *
  * Exit codes:
  *   0  ledger complete (every row verified, evidence present)
- *   1  ledger incomplete (pending/done rows, or missing evidence)
+ *   1  ledger incomplete (pending/done rows, or missing evidence), OR the ledger changed on
+ *      disk between the start of the run and the receipt write (verdict VOID, no receipt signed)
  *   2  not a ledger (no header, no rows, or unparseable)
  */
 import * as fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as nodePath from "node:path";
-import { readStableRegularFile } from "./lib/gates.mjs";
+import { readStableRegularFile, writeAtomic } from "./lib/gates.mjs";
 const { resolve } = nodePath;
 // why: the same runner vocabulary as a word set — a regex alternation of shell names trips the
 // publish gate's injection scanner, and a dynamically built RegExp trips its ReDoS rule.
@@ -741,43 +742,58 @@ if (prior && prior[2] !== digest) {
   console.log(`  receipt:     binds this exact content, last checked ${prior[1]}`);
 }
 
+// The re-run can hold this process for the whole budget (600s by default), and the receipt write
+// below would otherwise replace the file with the bytes read at START -- a lost update erasing
+// any row or evidence the coordinator edited in the meantime. Re-read BEFORE the verdict is
+// printed (not just before the write): a `complete`/`INCOMPLETE` line computed from `rows`
+// parsed out of the START bytes is a claim about content that may no longer be on disk, and the
+// old code signed nothing but still exited 0 for a ledger nobody's re-read actually vouches for.
+// Skip the check when the rerun itself was skipped -- that path already signs and verifies
+// nothing, so there is nothing for a mid-run edit to invalidate.
+const ledgerChanged = !rerunSkipped && readStableRegularFile(path, { label: "ledger" }) !== text;
+
 // Three-way, not two. An abandoned ledger is not "INCOMPLETE" -- that word promises the work is
 // still coming. It is terminal: nobody is going to finish those units, and the honest line is the
 // handoff. Mirrors `gate-check`, which likewise never prints ALL MET when anything was abandoned.
-// The EXIT CODE is unchanged (1 either way) -- only the claim changes, which is the whole defect:
-// the semantics were already right, the presentation was not.
-if (complete) console.log("  -> ledger complete: every unit verified.");
-// `&& !unverified.length` is load-bearing. TERMINAL is a claim about the WHOLE ledger, and one
-// abandoned row among four pending ones does not make the ledger terminal -- somebody is still
-// working it. Without the conjunct this branch outranks every other incomplete reason and prints
-// TERMINAL over work in flight: the SAME over-claim as the `INCOMPLETE`-on-terminal-work defect
-// this whole change fixes, with the sign flipped. Both facts still reach the reader, on separate
-// lines -- the HANDOFF REQUIRED section above is printed unconditionally -- which is exactly
-// gate-check's shape (it prints HANDOFF REQUIRED and UNMET independently, never one instead of
-// the other). An earlier draft appended the unfinished count to the TERMINAL line instead; that
-// carried both facts but still LED with the contested word.
-else if (abandoned.length && !unverified.length) console.log("  -> ledger TERMINAL: HANDOFF REQUIRED — abandoned unit(s) will not be finished.");
-else console.log("  -> ledger INCOMPLETE.");
+// A changed ledger outranks both: neither `complete` nor `abandoned` describes bytes that are no
+// longer the ones on disk, so the verdict is VOID rather than a stale claim about either.
+if (ledgerChanged) {
+  console.log("  -> verdict VOID: the ledger changed while it was being checked; re-run the checker.");
+} else if (complete) {
+  console.log("  -> ledger complete: every unit verified.");
+  // `&& !unverified.length` is load-bearing. TERMINAL is a claim about the WHOLE ledger, and one
+  // abandoned row among four pending ones does not make the ledger terminal -- somebody is still
+  // working it. Without the conjunct this branch outranks every other incomplete reason and prints
+  // TERMINAL over work in flight: the SAME over-claim as the `INCOMPLETE`-on-terminal-work defect
+  // this whole change fixes, with the sign flipped. Both facts still reach the reader, on separate
+  // lines -- the HANDOFF REQUIRED section above is printed unconditionally -- which is exactly
+  // gate-check's shape (it prints HANDOFF REQUIRED and UNMET independently, never one instead of
+  // the other). An earlier draft appended the unfinished count to the TERMINAL line instead; that
+  // carried both facts but still LED with the contested word.
+} else if (abandoned.length && !unverified.length) {
+  console.log("  -> ledger TERMINAL: HANDOFF REQUIRED — abandoned unit(s) will not be finished.");
+} else {
+  console.log("  -> ledger INCOMPLETE.");
+}
 
 // A run that SKIPPED the re-run did not verify anything, so it must not sign anything.
 // Signing it would mint exactly the artifact this receipt exists to make unforgeable: a
-// PASS stamp on a ledger nobody executed.
-try {
-  if (rerunSkipped) throw new Error("skip");
-  // The re-run can hold this process for the whole budget (600s by default), and the write below
-  // replaces the file with the bytes read at START. Writing blind would silently erase any row or
-  // evidence edited in the meantime -- a lost update in the one file the coordinator keeps editing
-  // while workers return. Re-read, and refuse to sign bytes that are no longer on disk.
-  if (readStableRegularFile(path, { label: "ledger" }) !== text) {
-    console.log("  receipt:     NOT WRITTEN — the ledger changed while it was being checked; re-run the checker");
-    throw new Error("changed");
+// PASS stamp on a ledger nobody executed. Same for a ledger that changed mid-run: the digest
+// below is over the START bytes, and signing it would mint a receipt for content nobody's
+// re-read just confirmed is still on disk.
+if (!rerunSkipped && !ledgerChanged) {
+  try {
+    const stamp =
+      `<!-- agents-discipline-check: ${new Date().toISOString()} sha256:${digest} -->\n` +
+      `<!-- agents-discipline-check: this is a CONTENT BINDING, not a verdict. It records which bytes were ` +
+      `checked, never whether they passed. Re-run ledger-check.mjs on this file for a verdict. -->`;
+    // Atomic write (write-to-temp + fsync + rename), not a truncating writeFileSync: a crash or
+    // concurrent reader between truncate and write must never observe a half-written receipt.
+    writeAtomic(resolve(path), bodyForHash + stamp + "\n");
+  } catch {
+    // A read-only ledger, or any other write failure past the re-read above (permissions,
+    // disk full, a symlink swapped in), is not a verification failure -- say nothing and keep
+    // the verdict already printed.
   }
-  const stamp =
-    `<!-- agents-discipline-check: ${new Date().toISOString()} sha256:${digest} -->\n` +
-    `<!-- agents-discipline-check: this is a CONTENT BINDING, not a verdict. It records which bytes were ` +
-    `checked, never whether they passed. Re-run ledger-check.mjs on this file for a verdict. -->`;
-  fs.writeFileSync(resolve(path), bodyForHash + stamp + "\n");
-} catch {
-  // A read-only ledger is not a verification failure — say nothing and keep the verdict.
 }
-process.exit(complete ? 0 : 1);
+process.exit(!ledgerChanged && complete ? 0 : 1);

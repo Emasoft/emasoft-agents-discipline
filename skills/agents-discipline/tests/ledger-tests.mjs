@@ -43,6 +43,17 @@ function report(ok, name, detail) {
 // vulnerable to the very normalization pass it exists to catch.
 const FS = String.fromCharCode(0x1c);
 
+// `|&` needs bash >= 4.0. `ledger-check.mjs` hardcodes the literal path `/bin/bash` to run every
+// acceptance (`execFileSync("/bin/bash", ...)`), and on macOS that path is Apple's own build,
+// frozen at 3.2 for GPLv3 avoidance and never updated -- a permanent platform gap, not a defect
+// of this machine. Probe the EXACT binary the checker invokes, not whatever `bash` resolves to
+// on PATH, or this probe could pass on a machine where the checker itself still cannot.
+let bashSupportsPipeAmp = false;
+try {
+  execFileSync("/bin/bash", ["-c", "true |& cat >/dev/null"], { stdio: "ignore" });
+  bashSupportsPipeAmp = true;
+} catch { /* /bin/bash here predates 4.0 and cannot parse `|&` at all */ }
+
 const cases = [
   { name: "template (incomplete)", file: "templates/DELEGATION.md", want: 1 },
   { name: "partial ledger", file: "tests/fixtures/partial.md", want: 1 },
@@ -745,9 +756,77 @@ const cases = [
     expect: ["ACCEPTANCE DID NOT REPRODUCE", "$ kill -9 $$ -> exit 1"],
     reject: ["exit -9"],
   },
+  {
+    // Regression for the receipt guard added alongside 73b386b's `&` fix: that commit re-read
+    // the ledger before the WRITE but computed the printed verdict -- and the exit code -- from
+    // bytes captured at start-up, so a ledger edited mid-run still printed "ledger complete" and
+    // exited 0 while silently skipping the receipt. This row's own acceptance is the mutator: it
+    // appends to the ledger FILE ITSELF while the checker holds it open for the re-run, which is
+    // the cheapest reproduction of "the coordinator edited DELEGATION.md while a worker's check
+    // was still running" available inside a synchronous test. `tee -a ... <<< ...` is real and
+    // non-no-op (not in ALWAYS_TRUE, no `&&`/`;`/`||`/lone `&`), so it reaches BACKGROUND_OPERATOR
+    // and CHAIN_OPERATORS honestly and passes them -- the row would otherwise be `complete`.
+    name: "the ledger changing mid-run VOIDS the verdict and signs no receipt",
+    file: "tests/fixtures/mid-run-edit.md",
+    rerun: true,
+    artifacts: ["reports/mid-run-edit-1.txt"],
+    want: 1,
+    expect: [
+      "re-ran:      1 acceptance command(s), all passed",
+      "-> verdict VOID: the ledger changed while it was being checked; re-run the checker.",
+    ],
+    // The old code's line -- removed as redundant once the verdict itself says VOID -- and the
+    // claim a changed ledger must never make: that it is a finished, verified ledger. Whether a
+    // receipt got signed is not a stdout claim at all (the stamp is written to the FILE, never
+    // printed), so that half of the guard lives in `fileAfter` below, not here.
+    reject: ["receipt:     NOT WRITTEN", "ledger complete"],
+    // `agents-discipline-check:` is the receipt's own marker text -- it is written to the ledger
+    // FILE, never to stdout, so asserting its absence from `out` above was vacuous: it always
+    // passed, receipt or no receipt. Read the file the acceptance actually mutated (the tmp
+    // `target`, not the tracked fixture) and check both halves for real: the mutator's own edit
+    // ("appended", written by the fixture's `tee -a ... <<< appended`) must have landed --
+    // otherwise this case would prove nothing changed at all -- and the receipt marker must be
+    // absent, which is the fact `reject` above cannot see.
+    fileAfter: {
+      includes: ["appended"],
+      excludes: ["agents-discipline-check:"],
+    },
+  },
+  {
+    // Positive control for the SAME commit's `&` refusal, split off the `|&` half (below) so this
+    // one runs unconditionally: `2>&1`, `>&2` and `&>/dev/null` are all bash-3.2-safe (verified
+    // with `/bin/bash -c`), unlike `|&` which needs bash >= 4 and is never gated behind a probe
+    // here on purpose -- an always-run case is worth more than a needsPipeAmp-skipped one.
+    name: "the allowed & forms (2>&1, >&2, &>/dev/null) still pass BACKGROUND_OPERATOR",
+    file: "tests/fixtures/background-forms-safe.md",
+    rerun: true,
+    artifacts: ["reports/background-safe-1.txt"],
+    want: 0,
+    expect: ["re-ran:      1 acceptance command(s), all passed"],
+    reject: ["acceptance backgrounds a command with"],
+  },
+  {
+    // `|&` alone, isolated from the always-run case above because it needs bash >= 4 to even
+    // parse -- `/bin/bash` on macOS is Apple's own build, frozen at 3.2 for GPLv3 avoidance, and
+    // cannot run this command at all. `needsPipeAmp` gates it on the EXACT binary the checker
+    // invokes (`/bin/bash`), not whatever `bash` resolves to on PATH -- see the probe above;
+    // without the gate this case would falsely fail on every Apple-shipped bash.
+    name: "the allowed & form |& still passes BACKGROUND_OPERATOR",
+    file: "tests/fixtures/background-forms.md",
+    rerun: true,
+    needsPipeAmp: true,
+    artifacts: ["reports/background-1.txt"],
+    want: 0,
+    expect: ["re-ran:      1 acceptance command(s), all passed"],
+    reject: ["acceptance backgrounds a command with"],
+  },
 ];
 
 for (const c of cases) {
+  if (c.needsPipeAmp && !bashSupportsPipeAmp) {
+    report(true, `${c.name} (skipped: this machine's /bin/bash cannot run \`|&\`, e.g. Apple's frozen bash 3.2)`);
+    continue;
+  }
   let code = null;
   const env = { ...process.env };
   // AGENTS_DISCIPLINE_SKIP_RERUN: most fixtures are SYNTHETIC ledgers. Their acceptance cells name
@@ -842,6 +921,20 @@ for (const c of cases) {
   for (const want of c.expect ?? []) report(out.includes(want), `${c.name} -> ${want}`);
   // A negative assertion, for cases whose property is an ABSENCE.
   for (const no of c.reject ?? []) report(!out.includes(no), `${c.name} -/-> ${no}`);
+  // Some facts (the receipt stamp) are never printed -- they land on the ledger FILE, so a
+  // stdout `reject` for them is vacuous by construction. `fileAfter` reads the temp `target`
+  // the rerun actually mutated (never the tracked fixture at `c.file`, which the rerun branch
+  // above never touches) and checks it directly. Gated on `c.rerun` because only that branch
+  // copies the fixture to a real temp file first -- the plain path still points at `root`.
+  if (c.fileAfter && c.rerun) {
+    const fileContent = readFileSync(target, "utf8");
+    for (const want of c.fileAfter.includes ?? []) {
+      report(fileContent.includes(want), `${c.name} -> file has "${want}"`);
+    }
+    for (const no of c.fileAfter.excludes ?? []) {
+      report(!fileContent.includes(no), `${c.name} -/-> file has "${no}"`);
+    }
+  }
 }
 
 // Frontmatter regression guard: the skills CLI parses the description as YAML,
