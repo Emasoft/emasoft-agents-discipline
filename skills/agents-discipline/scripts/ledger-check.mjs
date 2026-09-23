@@ -405,6 +405,11 @@ const ALWAYS_TRUE =
 // parser was finally right; it is that reimplementing shell status semantics was the wrong
 // job to take on. USER decision, 2026-09-06.
 const CHAIN_OPERATORS = /\|\||;/;
+// A lone `&` backgrounds the command before it and discards its status, so `pytest -q & true`
+// is as always-green as `pytest -q || true` -- measured: `false & true` re-ran and PASSED.
+// The lookarounds keep the honest `&` forms legal: `&&`, and the redirections `2>&1`, `>&2`,
+// `&>f`, `|&`.
+const BACKGROUND_OPERATOR = /(?<![&<>|])&(?![&>])/;
 
 // Operators only count OUTSIDE quotes. `python3 -c "import sys; sys.exit(0)"` and
 // `awk '{print;}' f` are honest commands whose `;` is an ARGUMENT, not a chain -- refusing
@@ -534,6 +539,14 @@ if (!rerunSkipped) {
       reproFailed.push({
         unit: r.unit, cmd: chained,
         code: "acceptance uses `||` or `;` — those pass whatever the code does; chain with `&&` or put the steps in a script",
+      });
+      continue;
+    }
+    const backgrounded = spans.find((s) => BACKGROUND_OPERATOR.test(maskQuoted(s)));
+    if (backgrounded) {
+      reproFailed.push({
+        unit: r.unit, cmd: backgrounded,
+        code: "acceptance backgrounds a command with `&` — its status is discarded; drop the `&` or put the steps in a script",
       });
       continue;
     }
@@ -751,6 +764,14 @@ else console.log("  -> ledger INCOMPLETE.");
 // PASS stamp on a ledger nobody executed.
 try {
   if (rerunSkipped) throw new Error("skip");
+  // The re-run can hold this process for the whole budget (600s by default), and the write below
+  // replaces the file with the bytes read at START. Writing blind would silently erase any row or
+  // evidence edited in the meantime -- a lost update in the one file the coordinator keeps editing
+  // while workers return. Re-read, and refuse to sign bytes that are no longer on disk.
+  if (readStableRegularFile(path, { label: "ledger" }) !== text) {
+    console.log("  receipt:     NOT WRITTEN — the ledger changed while it was being checked; re-run the checker");
+    throw new Error("changed");
+  }
   const stamp =
     `<!-- agents-discipline-check: ${new Date().toISOString()} sha256:${digest} -->\n` +
     `<!-- agents-discipline-check: this is a CONTENT BINDING, not a verdict. It records which bytes were ` +

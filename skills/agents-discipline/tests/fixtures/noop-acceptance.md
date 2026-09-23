@@ -1,6 +1,6 @@
 # Delegation plan
 
-Units: 11
+Units: 12
 Created: 2020-01-01T00:00:00+0000
 
 | # | Unit | Files (mine) | Worker | Acceptance | Status |
@@ -16,6 +16,7 @@ Created: 2020-01-01T00:00:00+0000
 | 9 | two-groups | app/i.py | worker-9 | `(false) ; (true)` | verified |
 | 10 | paren-second-fragment | app/j.py | worker-10 | `true && (echo ok)` | verified |
 | 11 | paren-both-fragments | app/k.py | worker-11 | `(true) && (true)` | verified |
+| 12 | background-amp | app/l.py | worker-12 | `false & true` | verified |
 
 ## Evidence
 
@@ -40,3 +41,5 @@ Created: 2020-01-01T00:00:00+0000
 **Unit 10 —** ran it, output in `reports/noop-10.txt`.
 
 **Unit 11 —** ran it, output in `reports/noop-11.txt`.
+
+**Unit 12 —** ran it, output in `reports/noop-12.txt`.

@@ -18,7 +18,8 @@ Created: <ISO 8601, e.g. 2026-08-29T22:50:00+0200 — the checker dates artifact
   bare prose is never re-run, so a row backed by prose alone is unverified by construction.
 - **Do not chain an acceptance with `||` or `;`.** Both let a chain report success whatever the
   code did — `pytest -q || true` and `false; true` are green always — so the checker refuses
-  them outright rather than guessing which are honest. `&&` is fine: every link has to succeed,
+  them outright rather than guessing which are honest. A lone `&` is refused for the same
+  reason: `pytest -q & true` backgrounds pytest and reports `true`. `&&` is fine: every link has to succeed,
   so `cd packages/x && pytest -q` is exactly as strong as `pytest -q`. Need real sequencing? Put
   it in a script and name the script. Operators inside quotes are arguments, not chains, so
   `python3 -c "import sys; sys.exit(0)"` is fine.

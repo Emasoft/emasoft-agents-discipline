@@ -672,6 +672,11 @@ ALWAYS_TRUE = re.compile(
 # whoever writes the next one. `&&` stays legal because it cannot hide a failure.
 # USER decision, 2026-09-06.
 CHAIN_OPERATORS = re.compile(r"\|\||;")
+# A lone `&` backgrounds the command before it and discards its status, so `pytest -q & true`
+# is as always-green as `pytest -q || true` -- measured: `false & true` re-ran and PASSED.
+# The lookarounds keep the honest `&` forms legal: `&&`, and the redirections `2>&1`, `>&2`,
+# `&>f`, `|&`. Port of BACKGROUND_OPERATOR in ledger-check.mjs.
+BACKGROUND_OPERATOR = re.compile(r"(?<![&<>|])&(?![&>])")
 
 
 def mask_quoted(s):
@@ -816,6 +821,14 @@ if not rerun_skipped:
                 "unit": r["unit"], "cmd": chained,
                 "code": "acceptance uses `||` or `;` — those pass whatever the code does; "
                         "chain with `&&` or put the steps in a script",
+            })
+            continue
+        backgrounded = next((s for s in spans if BACKGROUND_OPERATOR.search(mask_quoted(s))), None)
+        if backgrounded:
+            repro_failed.append({
+                "unit": r["unit"], "cmd": backgrounded,
+                "code": "acceptance backgrounds a command with `&` — its status is discarded; "
+                        "drop the `&` or put the steps in a script",
             })
             continue
         noop = next((s for s in spans if is_noop_acceptance(s)), None)
@@ -1039,6 +1052,13 @@ else:
 # ledger nobody executed.
 if not rerun_skipped:
     try:
+        # The re-run can hold this process for the whole budget, and the write below replaces
+        # the file with the bytes read at START. Writing blind would silently erase any edit made
+        # in the meantime -- a lost update. Port of the same re-read guard in ledger-check.mjs.
+        if read_stable_regular_file(path, label="ledger") != text:
+            print("  receipt:     NOT WRITTEN — the ledger changed while it was being checked; "
+                  "re-run the checker")
+            raise OSError("changed")
         now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         stamp = (
             f"<!-- agents-discipline-check: {now} sha256:{digest} -->\n"

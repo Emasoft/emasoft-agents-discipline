@@ -304,7 +304,7 @@ const cases = [
     file: "tests/fixtures/noop-acceptance.md",
     want: 1,
     rerun: true,
-    artifacts: ["reports/noop-1.txt", "reports/noop-2.txt", "reports/noop-3.txt", "reports/noop-4.txt", "reports/noop-5.txt", "reports/noop-6.txt", "reports/noop-7.txt", "reports/noop-8.txt", "reports/noop-9.txt", "reports/noop-10.txt", "reports/noop-11.txt"],
+    artifacts: ["reports/noop-1.txt", "reports/noop-2.txt", "reports/noop-3.txt", "reports/noop-4.txt", "reports/noop-5.txt", "reports/noop-6.txt", "reports/noop-7.txt", "reports/noop-8.txt", "reports/noop-9.txt", "reports/noop-10.txt", "reports/noop-11.txt", "reports/noop-12.txt"],
     // Two distinct verdicts, and the split matters. Rows 1-3, 5, 10, 11 are single commands
     // (possibly `&&`-chained) that happen to exit 0 always, so they are judged. Rows 4 and
     // 6-9 carry `||` or `;` and are REFUSED before judgement -- which is the point of the
@@ -323,6 +323,9 @@ const cases = [
       "#7 $ false; true -> acceptance uses `||` or `;`",
       "#8 $ ;true -> acceptance uses `||` or `;`",
       "#9 $ (false) ; (true) -> acceptance uses `||` or `;`",
+      // A lone `&` discards the backgrounded command's status: `false & true` re-ran and
+      // PASSED before BACKGROUND_OPERATOR existed.
+      "#12 $ false & true -> acceptance backgrounds a command with `&`",
     ],
   },
   {
