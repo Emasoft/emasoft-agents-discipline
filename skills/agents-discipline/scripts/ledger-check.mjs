@@ -11,7 +11,7 @@
  * Exit codes:
  *   0  ledger complete (every row verified, evidence present)
  *   1  ledger incomplete (pending/done rows, or missing evidence), OR the ledger changed on
- *      disk between the start of the run and the receipt write (verdict VOID, no receipt signed)
+ *      disk before the verdict was printed (verdict VOID, no receipt signed)
  *   2  not a ledger (no header, no rows, or unparseable)
  */
 import * as fs from "node:fs";
@@ -750,7 +750,20 @@ if (prior && prior[2] !== digest) {
 // old code signed nothing but still exited 0 for a ledger nobody's re-read actually vouches for.
 // Skip the check when the rerun itself was skipped -- that path already signs and verifies
 // nothing, so there is nothing for a mid-run edit to invalidate.
-const ledgerChanged = !rerunSkipped && readStableRegularFile(path, { label: "ledger" }) !== text;
+//
+// A ledger deleted, replaced with something unreadable, or made unreadable mid-run makes
+// readStableRegularFile THROW rather than return unequal bytes -- an uncaught throw here would
+// crash with a stack trace and no verdict line at all. The bytes on disk are unknown, not equal,
+// which is exactly the "changed" case: treat the throw the same as a content mismatch so the
+// run still prints VOID, signs nothing, and exits 1.
+let ledgerChanged = false;
+if (!rerunSkipped) {
+  try {
+    ledgerChanged = readStableRegularFile(path, { label: "ledger" }) !== text;
+  } catch {
+    ledgerChanged = true;
+  }
+}
 
 // Three-way, not two. An abandoned ledger is not "INCOMPLETE" -- that word promises the work is
 // still coming. It is terminal: nobody is going to finish those units, and the honest line is the
@@ -782,18 +795,41 @@ if (ledgerChanged) {
 // below is over the START bytes, and signing it would mint a receipt for content nobody's
 // re-read just confirmed is still on disk.
 if (!rerunSkipped && !ledgerChanged) {
+  // PERMISSIONS. writeAtomic (lib/gates.mjs) creates its temp file 0o600 and renames it over
+  // the target -- correct for the coordination state it was built for, but a receipt write
+  // going through it would silently reset every ledger's mode to owner-only on every run, and
+  // would now succeed on a read-only ledger where the truncating write this replaced used to
+  // fail and get swallowed by the same catch. lstat + a writability probe BEFORE writing
+  // reproduces that old silent-skip for a ledger the user cannot write; a ledger the user CAN
+  // write gets its original mode bits restored after the atomic rename, so writeAtomic's
+  // internal 0o600 never leaks past this one caller. This guard belongs here, not inside
+  // writeAtomic itself, because dispatch state deliberately WANTS the 0o600 reset.
+  const target = resolve(path);
+  let originalMode = null;
   try {
-    const stamp =
-      `<!-- agents-discipline-check: ${new Date().toISOString()} sha256:${digest} -->\n` +
-      `<!-- agents-discipline-check: this is a CONTENT BINDING, not a verdict. It records which bytes were ` +
-      `checked, never whether they passed. Re-run ledger-check.mjs on this file for a verdict. -->`;
-    // Atomic write (write-to-temp + fsync + rename), not a truncating writeFileSync: a crash or
-    // concurrent reader between truncate and write must never observe a half-written receipt.
-    writeAtomic(resolve(path), bodyForHash + stamp + "\n");
+    originalMode = fs.lstatSync(target).mode & 0o777;
+    fs.accessSync(target, fs.constants.W_OK);
   } catch {
-    // A read-only ledger, or any other write failure past the re-read above (permissions,
-    // disk full, a symlink swapped in), is not a verification failure -- say nothing and keep
-    // the verdict already printed.
+    originalMode = null; // unreadable or unwritable -- treated as "cannot write" below
+  }
+  if (originalMode !== null) {
+    try {
+      const stamp =
+        `<!-- agents-discipline-check: ${new Date().toISOString()} sha256:${digest} -->\n` +
+        `<!-- agents-discipline-check: this is a CONTENT BINDING, not a verdict. It records which bytes were ` +
+        `checked, never whether they passed. Re-run ledger-check.mjs on this file for a verdict. -->`;
+      // Atomic write (write-to-temp + fsync + rename), not a truncating writeFileSync: a crash or
+      // concurrent reader between truncate and write must never observe a half-written receipt.
+      writeAtomic(target, bodyForHash + stamp + "\n");
+      // win32's chmod only toggles the read-only attribute and cannot express POSIX mode bits
+      // (group/other/setuid), so restoring `originalMode` there would be a no-op at best and a
+      // misleading one at worst -- skip it rather than pretend to restore something it can't.
+      if (process.platform !== "win32") fs.chmodSync(target, originalMode);
+    } catch {
+      // A read-only ledger (already excluded above), or any other write failure past the
+      // re-read (disk full, a symlink swapped in), is not a verification failure -- say nothing
+      // and keep the verdict already printed.
+    }
   }
 }
 process.exit(!ledgerChanged && complete ? 0 : 1);

@@ -4,7 +4,7 @@
  * Usage: node tests/ledger-tests.mjs
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, chmodSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, dirname, join, basename } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -788,7 +788,14 @@ const cases = [
     // otherwise this case would prove nothing changed at all -- and the receipt marker must be
     // absent, which is the fact `reject` above cannot see.
     fileAfter: {
-      includes: ["appended"],
+      // The bare word "appended" is VACUOUS: it already sits in the fixture's own Acceptance
+      // cell (`<<< appended >/dev/null`), so this assertion would pass even if the mutator's
+      // `tee -a` never ran at all -- it is a substring of the START bytes, the very thing this
+      // case exists to prove got overwritten by a lost update. `tee -a` appends "appended\n" as
+      // its OWN line at EOF, preceded by the newline that already ends the file; the cell text
+      // has "appended" flanked by spaces, never by newlines on both sides, so `\nappended\n`
+      // is absent from the start-of-run bytes and present only once the append has landed.
+      includes: ["\nappended\n"],
       excludes: ["agents-discipline-check:"],
     },
   },
@@ -820,11 +827,81 @@ const cases = [
     expect: ["re-ran:      1 acceptance command(s), all passed"],
     reject: ["acceptance backgrounds a command with"],
   },
+  {
+    // Regression for the PERMISSIONS defect in the receipt guard: writeAtomic's temp file is
+    // created 0o600 and renamed over the target, so a naive receipt write would silently reset
+    // every checked ledger's mode to owner-only on every passing run. `chmodBefore`/`modeAfter`
+    // (harness fields, see the loop below) set the temp copy to 0644 before the run and assert
+    // it is STILL 0644 after -- a receipt genuinely got written (this ledger passes and is
+    // writable) without leaking writeAtomic's internal temp-file mode past the caller.
+    // POSIX-only: win32 has no group/other mode bits to preserve or lose.
+    name: "receipt write preserves the ledger's own mode bits (0644)",
+    file: "tests/fixtures/background-forms-safe.md",
+    rerun: true,
+    posixOnly: true,
+    chmodBefore: 0o644,
+    modeAfter: 0o644,
+    artifacts: ["reports/background-safe-1.txt"],
+    want: 0,
+    fileAfter: { includes: ["agents-discipline-check:"] },
+  },
+  {
+    // The other half of the same PERMISSIONS defect: a read-only ledger (0444) used to get
+    // silently skipped by the OLD truncating write (it failed and the failure was swallowed),
+    // and writeAtomic's rename-over-target would now succeed regardless of the ledger's own
+    // mode -- turning a historically no-op write into a real one on a file the user marked
+    // read-only. The pre-write accessSync(W_OK) probe must refuse before writeAtomic ever runs,
+    // so the ledger is untouched: same mode, same bytes, no receipt.
+    name: "a read-only ledger (0444) gets no receipt and is left byte-for-byte unchanged",
+    file: "tests/fixtures/background-forms-safe.md",
+    rerun: true,
+    chmodBefore: 0o444,
+    modeAfter: 0o444,
+    artifacts: ["reports/background-safe-1.txt"],
+    want: 0,
+    fileAfter: { excludes: ["agents-discipline-check:"], unchanged: true },
+  },
+  {
+    // Regression for the RE-READ FAILURE defect: `ledgerChanged` used to be computed with no
+    // try/catch, so a ledger deleted mid-run made readStableRegularFile THROW instead of
+    // returning unequal bytes -- an uncaught exception (Node) / traceback (Python) and no
+    // verdict line at all. This row's own acceptance is the mutator: it deletes the ledger
+    // file itself (by the same fixed relative name the mid-run-edit.md case uses -- the
+    // checker's acceptance commands run with cwd = the ledger's own directory, so the fixture
+    // can name itself without knowing the mkdtempSync-generated temp path) while the checker
+    // still holds the pre-delete bytes in memory for the re-read.
+    name: "the ledger disappearing mid-run VOIDS the verdict instead of crashing",
+    file: "tests/fixtures/mid-run-delete.md",
+    rerun: true,
+    artifacts: ["reports/mid-run-delete-1.txt"],
+    want: 1,
+    expect: [
+      "re-ran:      1 acceptance command(s), all passed",
+      "-> verdict VOID: the ledger changed while it was being checked; re-run the checker.",
+    ],
+    // No stack trace / traceback text, and no receipt claim -- a crash would print neither the
+    // VOID line above nor a clean exit; these are the negative half of that same assertion.
+    reject: ["Traceback (most recent call last)", "Error:", "receipt:     NOT WRITTEN", "ledger complete"],
+  },
 ];
 
 for (const c of cases) {
   if (c.needsPipeAmp && !bashSupportsPipeAmp) {
     report(true, `${c.name} (skipped: this machine's /bin/bash cannot run \`|&\`, e.g. Apple's frozen bash 3.2)`);
+    continue;
+  }
+  // posixOnly: win32 has no group/other mode bits, and chmod there only toggles a single
+  // read-only attribute -- a POSIX mode-preservation assertion has nothing to preserve there.
+  if (c.posixOnly && process.platform === "win32") {
+    report(true, `${c.name} (skipped on win32: POSIX mode bits)`);
+    continue;
+  }
+  // A chmod-0444-then-assert-untouched case is meaningless run as root: POSIX access(2) grants
+  // W_OK to euid 0 regardless of the mode bits, so the checker's own write-guard would (rightly)
+  // decide the file IS writable and this case's premise never holds. Skip rather than red a
+  // correct implementation for a test environment it cannot control.
+  if (c.chmodBefore === 0o444 && typeof process.getuid === "function" && process.getuid() === 0) {
+    report(true, `${c.name} (skipped: running as root, W_OK is unconditional)`);
     continue;
   }
   let code = null;
@@ -888,6 +965,7 @@ for (const c of cases) {
   }
 
   let target = resolve(root, c.file);
+  let writtenContent = null;
   if (c.rerun || c.mutate) {
     const dir = mkdtempSync(join(tmpdir(), "ledger-rerun-"));
     target = join(dir, basename(c.file));
@@ -895,7 +973,8 @@ for (const c of cases) {
     // so the assertion keeps tracking that file as it changes. That is the point for the
     // template: a fixture snapshot would go on passing after the template drifted.
     const src = readFileSync(resolve(root, c.file), "utf8");
-    writeFileSync(target, c.mutate ? c.mutate(src) : src);
+    writtenContent = c.mutate ? c.mutate(src) : src;
+    writeFileSync(target, writtenContent);
     // Create the artifacts the fixture cites, INSIDE the temp dir. Without this the
     // citation would still resolve -- `bases` appends process.cwd(), so it would find
     // the real repo copy -- and the case would pass or fail for a reason that has
@@ -906,6 +985,10 @@ for (const c of cases) {
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, "unit 3 real output\n");
     }
+    // chmodBefore: set the temp copy's mode BEFORE the checker ever sees it, so the receipt
+    // guard's pre-write accessSync/os.access probe reads the mode the PERMISSIONS regression
+    // cases exist to exercise, not whatever mkdtempSync's default happens to be.
+    if (c.chmodBefore !== undefined) chmodSync(target, c.chmodBefore);
   }
   let out = "";
   try {
@@ -934,6 +1017,18 @@ for (const c of cases) {
     for (const no of c.fileAfter.excludes ?? []) {
       report(!fileContent.includes(no), `${c.name} -/-> file has "${no}"`);
     }
+    // `unchanged`: the PERMISSIONS regression's read-only half. writeAtomic must never have run
+    // at all, so the file on disk must equal the exact bytes written before the checker touched
+    // it -- not merely "no receipt marker substring", which a write that happened to omit the
+    // marker text could satisfy by accident.
+    if (c.fileAfter.unchanged) report(fileContent === writtenContent, `${c.name} -> file byte-for-byte unchanged`);
+  }
+  // modeAfter: the mode-preservation half of the same regression. Checked outside `fileAfter`
+  // because it reads filesystem metadata, not content, and must still run when the case has no
+  // `fileAfter` block of its own.
+  if (c.modeAfter !== undefined && c.rerun) {
+    const mode = statSync(target).mode & 0o777;
+    report(mode === c.modeAfter, `${c.name} -> ledger mode preserved`, `want 0${c.modeAfter.toString(8)}, got 0${mode.toString(8)}`);
   }
 }
 

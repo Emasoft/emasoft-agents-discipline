@@ -10,7 +10,7 @@ Usage:
 Exit codes:
   0  ledger complete (every row verified, evidence present)
   1  ledger incomplete (pending/done rows, or missing evidence), OR the ledger changed on
-     disk between the start of the run and the receipt write (verdict VOID, no receipt signed)
+     disk before the verdict was printed (verdict VOID, no receipt signed)
   2  not a ledger (no header, no rows, or unparseable)
 
 Port of ledger-check.mjs. The JavaScript test suite is the oracle: it runs unchanged
@@ -1038,7 +1038,18 @@ elif prior:
 # START bytes is a claim about content that may no longer be on disk. Skip the check when the
 # rerun itself was skipped -- that path already signs and verifies nothing, so there is nothing
 # for a mid-run edit to invalidate. Port of the same re-read guard in ledger-check.mjs.
-ledger_changed = not rerun_skipped and read_stable_regular_file(path, label="ledger") != text
+#
+# A ledger deleted, replaced with something unreadable, or made unreadable mid-run makes
+# read_stable_regular_file RAISE OSError rather than return unequal bytes -- an uncaught raise
+# here would crash with a traceback and no verdict line at all. The bytes on disk are unknown,
+# not equal, which is exactly the "changed" case: treat the raise the same as a content mismatch
+# so the run still prints VOID, signs nothing, and exits 1.
+ledger_changed = False
+if not rerun_skipped:
+    try:
+        ledger_changed = read_stable_regular_file(path, label="ledger") != text
+    except OSError:
+        ledger_changed = True
 
 # Three-way, not two. An abandoned ledger is not "INCOMPLETE" -- that word promises the work is
 # still coming. It is terminal, and the exit code is unchanged (1 either way); only the claim
@@ -1066,22 +1077,46 @@ else:
 # START bytes, and signing it would mint a receipt for content nobody's re-read just confirmed
 # is still on disk.
 if not rerun_skipped and not ledger_changed:
+    # PERMISSIONS. write_atomic (lib/gates.py) creates its temp file 0o600 and renames it over
+    # the target -- correct for the coordination state it was built for, but a receipt write
+    # going through it would silently reset every ledger's mode to owner-only on every run, and
+    # would now succeed on a read-only ledger where the truncating write this replaced used to
+    # fail and get swallowed by the same except. lstat + a writability probe BEFORE writing
+    # reproduces that old silent-skip for a ledger the user cannot write; a ledger the user CAN
+    # write gets its original mode bits restored after the atomic rename, so write_atomic's
+    # internal 0o600 never leaks past this one caller. This guard belongs here, not inside
+    # write_atomic itself, because dispatch state deliberately WANTS the 0o600 reset.
+    target = os.path.abspath(path)
+    original_mode = None
     try:
-        now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-        stamp = (
-            f"<!-- agents-discipline-check: {now} sha256:{digest} -->\n"
-            "<!-- agents-discipline-check: this is a CONTENT BINDING, not a verdict. It records "
-            "which bytes were checked, never whether they passed. Re-run ledger-check.mjs on "
-            "this file for a verdict. -->"
-        )
-        # Atomic write (write-to-temp + fsync + rename), not a truncating open(..., "w"): a
-        # crash or concurrent reader between truncate and write must never observe a
-        # half-written receipt.
-        write_atomic(os.path.abspath(path), body_for_hash + stamp + "\n")
+        original_mode = statmod.S_IMODE(os.lstat(target).st_mode)
+        if not os.access(target, os.W_OK):
+            original_mode = None
     except OSError:
-        # A read-only ledger, or any other write failure past the re-read above (permissions,
-        # disk full, a symlink swapped in), is not a verification failure -- say nothing and
-        # keep the verdict already printed.
-        pass
+        original_mode = None  # unreadable -- treated as "cannot write" below
+    if original_mode is not None:
+        try:
+            now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            stamp = (
+                f"<!-- agents-discipline-check: {now} sha256:{digest} -->\n"
+                "<!-- agents-discipline-check: this is a CONTENT BINDING, not a verdict. It records "
+                "which bytes were checked, never whether they passed. Re-run ledger-check.mjs on "
+                "this file for a verdict. -->"
+            )
+            # Atomic write (write-to-temp + fsync + rename), not a truncating open(..., "w"): a
+            # crash or concurrent reader between truncate and write must never observe a
+            # half-written receipt.
+            write_atomic(target, body_for_hash + stamp + "\n")
+            # win32's chmod only toggles the read-only attribute and cannot express POSIX mode
+            # bits (group/other/setuid), so restoring `original_mode` there would be a no-op at
+            # best and a misleading one at worst -- skip it rather than pretend to restore
+            # something it can't. Mirrors os.chmod's own documented win32 limitation.
+            if sys.platform != "win32":
+                os.chmod(target, original_mode)
+        except OSError:
+            # A read-only ledger (already excluded above), or any other write failure past the
+            # re-read (disk full, a symlink swapped in), is not a verification failure -- say
+            # nothing and keep the verdict already printed.
+            pass
 
 sys.exit(0 if (not ledger_changed and complete) else 1)
