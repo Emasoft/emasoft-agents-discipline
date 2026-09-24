@@ -568,14 +568,24 @@ if any(r["status"] == "verified" for r in rows):
         if m24:
             raw = (datetime.fromisoformat(m24.group(1)) + timedelta(days=1)).strftime("%Y-%m-%d") \
                 + "T00" + (m24.group(2) or "") + m24.group(3)
-        try:
-            dt = datetime.fromisoformat(raw)
-            # A bare datetime with no offset is local time in both runtimes.
-            if dt.tzinfo is None:
-                dt = dt.astimezone()
-            created_ms = dt.timestamp() * 1000
-        except ValueError:
-            created_ms = None
+        # Measured (parity.sh): fromisoformat accepts shapes Date.parse rejects as NaN --
+        # "T10:00.5Z" (fraction on minutes), "T10Z" and "T1000" (no minutes/seconds) all
+        # parse here but are NaN in the oracle. Gating on the oracle's own accepted shape
+        # first means an unparseable-by-Node stamp SKIPS staleness (created_ms stays None)
+        # instead of the port enforcing a rule the oracle never applies.
+        if re.match(
+            r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"
+            r"(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?$",
+            raw,
+        ):
+            try:
+                dt = datetime.fromisoformat(raw)
+                # A bare datetime with no offset is local time in both runtimes.
+                if dt.tzinfo is None:
+                    dt = dt.astimezone()
+                created_ms = dt.timestamp() * 1000
+            except ValueError:
+                created_ms = None
 
     for p in artifact_paths:
         cands = [p] if os.path.isabs(p) else [os.path.join(b, p) for b in bases]

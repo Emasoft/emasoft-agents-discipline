@@ -4,7 +4,7 @@ Units: 1
 
 | # | Unit | Files (mine) | Worker | Acceptance | Status |
 |---|------|--------------|--------|------------|--------|
-| 1 | stats | app/a.py | worker-1 | `python3 -c "import time; time.sleep(1)"` | verified |
+| 1 | stats | app/a.py | worker-1 | `node -e "setTimeout(()=>{},1000)"` | verified |
 
 ## Evidence
 

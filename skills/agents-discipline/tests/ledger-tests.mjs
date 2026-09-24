@@ -686,7 +686,7 @@ const cases = [
     // Guards the named-timeout fix (d1011f0): a re-run that is genuinely IN FLIGHT when the
     // budget runs out used to print bare `exit 1`, indistinguishable from a real acceptance
     // failure -- unlike the case above, where the row never starts at all. A 300ms budget on
-    // a `sleep 1` acceptance starts with `remaining > 0` (so it takes the execFileSync path,
+    // a `setTimeout(1000)` acceptance starts with `remaining > 0` (so it takes the execFileSync path,
     // not the pre-check above) and is killed mid-run by the child's own `timeout` option,
     // which is what raises Node's ETIMEDOUT / Python's TimeoutExpired this case pins.
     name: "an acceptance that sleeps past a small re-run budget is named 'timed out'",
@@ -774,10 +774,10 @@ const cases = [
     reject: ["older than the ledger"],
   },
   {
-    // Guards the port's fraction handling on the T24 rewrite (TRDD follow-up to d1011f0):
+    // Guards the port's fraction handling on the T24 rewrite:
     // `T24:00:00.000Z` is legal ISO 8601 -- hour 24 denotes exactly next-day midnight, and an
-    // all-zero fraction still means that same instant -- and Date.parse accepts it (measured
-    // above the fix). The old rewrite regex only recognised `T24`, `T24:00`, or `T24:00:00`
+    // all-zero fraction still means that same instant -- and Date.parse accepts it. The old
+    // rewrite regex only recognised `T24`, `T24:00`, or `T24:00:00`
     // with no fraction at all, so it failed to match and the whole `Created:` line fell
     // through unparsed -- the same silent-skip failure mode as the case above, reached by a
     // fraction instead of a bare hour 24. want:1 and the future date make an unfixed port's
@@ -790,10 +790,43 @@ const cases = [
     want: 1,
     expect: ["older than the ledger", "tests/fixtures/complete.md"],
   },
+  // Table-driven: every `Created:` stamp shape parity.sh measured Node's Date.parse against.
+  // Each stamp is dated 2099 so a parsed (non-NaN) stamp always makes `tests/fixtures/complete.md`
+  // read "older than the ledger", and an unparsed (NaN) stamp always leaves the rule skipped
+  // ("ledger complete") -- the same two-outcome probe the single-stamp cases above use, run
+  // over the full set parity.sh checked instead of one stamp at a time.
+  ...[
+    ["2099-09-24T24:00:00.000Z", "stale"],
+    ["2099-09-24T24:00:00.0Z", "stale"],
+    ["2099-09-24T24:00:00.0000000Z", "stale"],
+    ["2099-09-24T24:00:00.5Z", "skip"],
+    ["2099-09-24T24:00.000Z", "skip"],
+    ["2099-09-24T24:00:00.000+02:00", "stale"],
+    ["2099-09-24T24:00:00.000+0200", "stale"],
+    ["2099-09-24T24.000Z", "skip"],
+    ["2099-09-24T24:00:00", "stale"],
+    ["2099-09-24T24:00:00.000", "stale"],
+    ["2099-09-24T10:00:00.5Z", "stale"],
+    ["2099-09-24T10:00:00.1234567Z", "stale"],
+    ["2099-09-24T10:00:00.1234567", "stale"],
+    ["2099-09-24T10:00.5Z", "skip"],
+    ["2099-09-24T10:00:00.123+0200", "stale"],
+    ["2099-09-24T10:00:00+0200", "stale"],
+    ["2099-09-24 10:00:00.5Z", "stale"],
+    ["2099-09-24T10Z", "skip"],
+    ["2099-09-24T10:00Z", "stale"],
+  ].map(([stamp, outcome]) => ({
+    name: `Created stamp '${stamp}' ${outcome === "stale" ? "is parsed and enforces staleness" : "is skipped, as Date.parse does"}`,
+    file: "tests/fixtures/created-table-placeholder.md",
+    mutate: (t) => t.replace("CREATED_PLACEHOLDER", stamp),
+    want: outcome === "stale" ? 1 : 0,
+    expect: outcome === "stale" ? ["older than the ledger", "tests/fixtures/complete.md"] : ["ledger complete"],
+    reject: outcome === "stale" ? [] : ["older than the ledger"],
+  })),
   {
     // Guards the `Z`/fraction capture in `Created:` (d1011f0): dropping the `Z` made a UTC
     // stamp parse as LOCAL time, so west of UTC a fresh artifact could read "older than the
-    // ledger". TZ=America/New_York (UTC-4 in September) is the west-of-UTC probe; the
+    // ledger". TZ=America/New_York (UTC-4 or UTC-5 depending on DST, at least 4 hours either way) is the west-of-UTC probe; the
     // `Created:` stamp is generated an hour before "now" so a 4-hour misreading would place
     // the false Created time THREE HOURS AFTER the artifact that was just written into the
     // temp dir -- reddening `staleArtifacts` on the bug and staying green on the fix, which
