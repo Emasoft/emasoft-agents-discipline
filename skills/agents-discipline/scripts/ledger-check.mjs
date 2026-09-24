@@ -316,8 +316,14 @@ function existingArtifactsIn(block, bases) {
 // second regex re-parsed from a combined offset group -- a stamp that matched this grammar's
 // offset shape cannot then fail to match a laxer copy of the same shape, so the second parse
 // was always either redundant or (if it ever drifted from this one) a silent divergence.
+// No trailing `$`: this regex is `.exec()`-ed against the Created field's whole captured rest
+// (which may carry trailing prose after a valid stamp), so "did the match consume everything" is
+// checked explicitly by each caller instead of baked into the pattern -- parseCreatedStamp below
+// requires exactly that for its own "is this string, as a whole, a valid stamp" use; the
+// Created-field call site instead requires only that whatever follows the match is empty or
+// itself whitespace, which is what lets trailing prose ride along.
 const CREATED_STAMP_RE =
-  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:(Z)|([+-])(\d{2}):?(\d{2}))?$/;
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:(Z)|([+-])(\d{2}):?(\d{2}))?/;
 
 function isLeapYear(y) {
   return y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
@@ -335,7 +341,10 @@ function daysInMonth(y, m) {
 // `2026-02-30` into March) is exactly the engine quirk this function exists to remove.
 function parseCreatedStamp(raw) {
   const m = CREATED_STAMP_RE.exec(raw);
-  if (!m) return null;
+  // CREATED_STAMP_RE carries no trailing `$` (see its own comment) -- here, validating a whole
+  // candidate string as a stamp, requiring the match to consume it entirely is this caller's own
+  // job, not the pattern's.
+  if (!m || m[0].length !== raw.length) return null;
   const [, yS, moS, dS, hS, miS, sS, fracS, zFlag, offSign, offHS, offMS] = m;
   const year = Number(yS), month = Number(moS), day = Number(dS);
   const hour = Number(hS), minute = Number(miS), second = sS !== undefined ? Number(sS) : 0;
@@ -409,7 +418,12 @@ if (rows.some((r) => r.status === "verified")) {
   // `headerIdx` can never be -1 here: the `| # |` finder above already called `fail(2, ...)` and
   // exited the process when no table header exists, so by the time this line runs a table was
   // found. The old `headerIdx === -1 ? text : ...` fallback for "no table -> search the whole
-  // text" could therefore never execute; deleted rather than kept as inert insurance.
+  // text" could therefore never execute; deleted rather than kept as inert insurance. Asserted
+  // below, not just commented, so a future reordering that breaks the guarantee fails loudly
+  // instead of silently slicing `lines.slice(0, -1)` / `lines.slice(-1)`.
+  if (headerIdx < 0) {
+    throw new Error("agents-discipline: internal error: headerIdx is negative at Created-field lookup");
+  }
   const headerText = lines.slice(0, headerIdx).join("\n");
   // A `Created:` line's mandatory separator (`\s+` after the optional colon) is the anchor. An
   // explicit colon marks the field regardless of what follows -- that stays a named failure,
@@ -420,36 +434,42 @@ if (rows.some((r) => r.status === "verified")) {
   // (Python's `^`/`/m` can't be relied on to agree with JS's, see CREATED_FIELD's own comment in
   // ledger_check.py) -- if this line's anchor ever changes, change CREATED_FIELD the same commit.
   //
-  // CREATED_FIELD/CREATED_STAMP_PREFIX (ledger_check.py) stay TWO patterns, not one -- see the
-  // long comment above CREATED_FIELD there. Same trade here: `createdFieldM` must capture the
-  // FULL untrimmed rest for the "is not a real date" message, `stampM` below must stop at the
-  // first trailing whitespace so a well-formed stamp can carry trailing prose; folding the stamp
-  // shape into `createdFieldM`'s alternation would mean writing it twice more (once per
-  // colon/no-colon branch) instead of once, in both runtimes.
+  // ONE pattern, not two: `createdFieldM` captures the FULL untrimmed rest of the `Created` line
+  // (so the "is not a real date" message can name it verbatim), and the stamp candidate is
+  // CREATED_STAMP_RE's own match against that rest, from its start, kept only when whatever
+  // follows the match is empty or whitespace -- see CREATED_STAMP_RE's own comment for why this
+  // isn't a plain first-`\s`-token split (its `[T ]` separator can itself be an ordinary space,
+  // e.g. `Created: 2099-09-24 10:00Z`, which a token split would truncate before the time half).
+  // A prior version kept a second regex (`stampM`) that duplicated the whole date shape just to
+  // find this same boundary; matching CREATED_STAMP_RE itself finds it with no second copy of the
+  // grammar. Its Python mirror (ledger_check.py) makes the same simplification; keep both
+  // runtimes' split identical.
   const createdFieldM = headerText.match(/^Created(?::\s+(.*)|\s+(\d{4}-.*))$/m);
   let createdInstant = null;
   if (createdFieldM) {
     const rest = createdFieldM[1] !== undefined ? createdFieldM[1] : createdFieldM[2];
-    // The trailing `(?=\s|$)` is load-bearing: without it, `Created: 2099-09-24T10:00+2` captures
-    // only `2099-09-24T10:00` and silently drops `+2`, so a malformed stamp is read as a valid
-    // LOCAL time instead of being rejected. Stopping at the next whitespace (or end of line)
-    // also lets a `Created:` line carry trailing prose after a well-formed stamp.
-    const stampM = /^(\d{4}-\d{2}-\d{2}[T ][\d:]+(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)(?=\s|$)/.exec(rest);
-    const candidate = stampM ? stampM[1] : rest.trim();
-    createdInstant = stampM ? parseCreatedStamp(candidate) : null;
+    const stampM = CREATED_STAMP_RE.exec(rest);
+    let token = rest;
+    if (stampM) {
+      const tail = rest.slice(stampM[0].length);
+      if (tail === "" || /^\s/.test(tail)) token = stampM[0];
+    }
+    createdInstant = parseCreatedStamp(token);
     if (createdInstant === null) {
       // A `Created:` line that is present but not a real, in-grammar stamp used to be silently
       // treated the same as no line at all -- the staleness rule just went quiet. That let a
       // typo'd date defeat the one check that catches stale, re-cited evidence. A line that
-      // exists and is wrong is a ledger defect, not a shrug.
-      fail(1, `agents-discipline: Created: ${candidate} is not a real date -- fix it or remove the line`);
+      // exists and is wrong is a ledger defect, not a shrug. Naming the WHOLE rest (not just the
+      // first token) means a garbage first token still gets a message a coordinator can find in
+      // the file verbatim, trailing prose and all.
+      const bad = rest.trim();
+      fail(1, `agents-discipline: Created: ${bad} is not a real date -- fix it or remove the line`);
     }
   } else {
     // A `Created:` line written below the delegation table is invisible to the header-only
     // lookup above -- name that explicitly rather than leaving a coordinator to guess why the
     // staleness check stayed off after they typed a date that looks perfectly fine.
-    // Same unreachable-`headerIdx === -1` reasoning as `headerText` above -- a table is
-    // guaranteed to exist by this point, so there is no "no table" fallback to write here either.
+    // `headerIdx` was already asserted non-negative above; no repeat check needed here.
     const lateHit = /^Created:?\s+\d{4}-/m.test(lines.slice(headerIdx).join("\n"));
     // stdout, not stderr: this is a successful run's own report (like the summary below), not
     // a failure -- a warning that only showed up on stderr would be invisible to a caller that

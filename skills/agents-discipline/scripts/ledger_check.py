@@ -245,28 +245,22 @@ PRIOR_RECEIPT = re.compile(r"<!-- agents-discipline-check: ([^ ]+) sha256:([0-9a
 # stamp followed by one of those and more prose used to name the WHOLE tail in Python's error
 # message and only the short candidate in Node's.
 #
-# CREATED_FIELD and CREATED_STAMP_PREFIX (below) stay TWO patterns, not one, even though a merge
-# was considered: CREATED_FIELD must capture the FULL untrimmed rest so the "is not a real date"
-# message can name it verbatim when the shape check fails, while CREATED_STAMP_PREFIX must STOP
-# at the first trailing whitespace so a well-formed stamp can carry trailing prose. Folding the
-# stamp shape into CREATED_FIELD's alternation to get both in one match would mean embedding that
-# shape TWICE more (once per colon/no-colon branch, as a "valid" alternative ahead of the existing
-# raw-capture fallback) instead of once here -- more copies of the grammar to keep in sync, not
-# fewer. The oracle (ledger-check.mjs, createdFieldM + stampM) makes the same trade for the same
-# reason; keep both runtimes' split identical rather than diverging one of them to look merged.
+# ONE pattern, not two: CREATED_FIELD captures the FULL untrimmed rest of the `Created` line (so
+# the "is not a real date" message can name it verbatim), and the stamp candidate is derived from
+# THAT captured text at the call site by matching CREATED_STAMP_RE itself against it (no `$`,
+# see that regex's own comment) and requiring whatever follows the match to be empty or start
+# with whitespace -- so a well-formed stamp can carry trailing prose. NOT a plain "first
+# whitespace-delimited token" split: CREATED_STAMP_RE's own `[T ]` separator can itself BE an
+# ordinary space (`Created: 2099-09-24 10:00Z`), so splitting rest on the first whitespace
+# character would truncate a valid space-separated stamp before its time half. A prior version
+# kept a second regex (CREATED_STAMP_PREFIX) that duplicated the whole date shape just to find
+# this same boundary; matching CREATED_STAMP_RE itself finds it with no second copy of the
+# grammar. The oracle (ledger-check.mjs, createdFieldM) makes the same simplification; keep both
+# runtimes' split identical.
 CREATED_FIELD = re.compile(
     r"(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]))Created"
     r"(?::" + JS_WS_CLASS + r"+(" + JS_DOT_CLASS + r"*)|"
     + JS_WS_CLASS + r"+([0-9]{4}-" + JS_DOT_CLASS + r"*))"
-)
-# Extracts the stamp-shaped PREFIX of a field's `rest` text, mirroring the oracle's own second
-# regex (stampM): stopping at the next whitespace (or end) lets a `Created:` line carry trailing
-# prose after a well-formed stamp, and WITHOUT the trailing lookahead a malformed offset
-# (`Created: 2099-09-24T10:00+2`) silently drops the `+2` and is read as a valid LOCAL time
-# instead of being rejected. Kept SEPARATE from CREATED_FIELD -- see the comment above it.
-CREATED_STAMP_PREFIX = re.compile(
-    r"^([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)"
-    r"(?=" + JS_WS_CLASS + r"|$)"
 )
 # A bare presence check for a `Created:`-shaped line ANYWHERE past the delegation table, used
 # only to name the "you put it in the wrong place" hint on the missing-date warning -- never to
@@ -305,9 +299,15 @@ CREATED_LATE_HINT = re.compile(
 # second regex re-parsed from group 8's text -- a stamp that matched this grammar's offset shape
 # cannot then fail to match a laxer copy of the same shape, so the second parse was always
 # either redundant or (if it ever drifted from this one) a silent source of divergence.
+# No trailing `$`: this regex is `.match()`-ed against the Created field's whole captured rest
+# (which may carry trailing prose after a valid stamp), so "did the match consume everything" is
+# checked explicitly by each caller instead of baked into the pattern -- parse_created_stamp below
+# requires exactly that for its own "is this string, as a whole, a valid stamp" use; the
+# Created-field call site (ledger_check.py's created lookup) instead requires only that whatever
+# follows the match is empty or itself whitespace, which is what lets trailing prose ride along.
 CREATED_STAMP_RE = re.compile(
     r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{2}):([0-9]{2})"
-    r"(?::([0-9]{2})(?:\.([0-9]+))?)?(?:(Z)|([+-])([0-9]{2}):?([0-9]{2}))?$"
+    r"(?::([0-9]{2})(?:\.([0-9]+))?)?(?:(Z)|([+-])([0-9]{2}):?([0-9]{2}))?"
 )
 
 
@@ -329,7 +329,10 @@ def parse_created_stamp(raw):
     `2026-02-30` outright, where Node rolls it over) is exactly the engine quirk this function
     exists to remove."""
     m = CREATED_STAMP_RE.match(raw)
-    if not m:
+    # CREATED_STAMP_RE carries no trailing `$` (see its own comment) -- here, validating a whole
+    # candidate string as a stamp, requiring the match to consume it entirely is this caller's own
+    # job, not the pattern's.
+    if not m or m.end() != len(raw):
         return None
     y_s, mo_s, d_s, h_s, mi_s, s_s, frac_s, z_flag, off_sign, oh_s, om_s = m.groups()
     year, month, day = int(y_s), int(mo_s), int(d_s)
@@ -719,18 +722,29 @@ if any(r["status"] == "verified" for r in rows):
     # `header_idx` can never be -1 here: the `| # |` finder above already called `fail(2, ...)`
     # and exited when no table header exists, so a table is guaranteed found by this point. The
     # old `text if header_idx == -1 else ...` fallback for "no table -> search the whole text"
-    # could therefore never execute; deleted rather than kept as inert insurance.
+    # could therefore never execute; deleted rather than kept as inert insurance. Asserted below,
+    # not just commented, so a future reordering that breaks the guarantee fails loudly with an
+    # internal-error exit instead of silently slicing `lines[:-1]` / `lines[-1:]`.
+    if header_idx < 0:
+        fail(2, "agents-discipline: internal error: header_idx is negative at Created-field lookup")
     header_text = "\n".join(lines[:header_idx])
     created_field_m = CREATED_FIELD.search(header_text)
     if created_field_m:
         rest = created_field_m.group(1)
         if rest is None:
             rest = created_field_m.group(2)
-        # Both runtimes now validate against the ONE declared grammar (CREATED_STAMP_RE, above)
-        # instead of each engine's own date parser, so parity no longer depends on fromisoformat
-        # and Date.parse happening to agree on which stamps are real.
-        stamp_m = CREATED_STAMP_PREFIX.match(rest)
-        created_ms = parse_created_stamp(stamp_m.group(1)) if stamp_m else None
+        # The stamp candidate is CREATED_STAMP_RE's own match against `rest`, from its start, kept
+        # only when whatever follows that match is empty or whitespace -- see CREATED_STAMP_RE's
+        # and CREATED_FIELD's own comments for why this isn't a plain first-token split. Validated
+        # against the ONE declared grammar instead of each engine's own date parser, so parity no
+        # longer depends on fromisoformat and Date.parse happening to agree on which stamps are real.
+        stamp_m = CREATED_STAMP_RE.match(rest)
+        token = rest
+        if stamp_m:
+            tail = rest[stamp_m.end():]
+            if tail == "" or re.match(JS_WS_CLASS, tail):
+                token = stamp_m.group(0)
+        created_ms = parse_created_stamp(token)
         if created_ms is None:
             # A `Created:` line that is present but not a real, in-grammar stamp used to be
             # silently treated the same as no line at all -- the staleness rule just went quiet.
@@ -740,15 +754,16 @@ if any(r["status"] == "verified" for r in rows):
             # `.trim()` set disagree in BOTH directions (see JS_TRIM's own definition, above) --
             # a bare `.strip()` here would silently remove a pad character (e.g. U+001C) that
             # ledger-check.mjs's `.trim()` leaves in place, so the two runtimes would name a
-            # DIFFERENT bad stamp for byte-identical input.
-            bad = stamp_m.group(1) if stamp_m else rest.strip(JS_TRIM)
+            # DIFFERENT bad stamp for byte-identical input. Naming the WHOLE rest (not just the
+            # first token) means a garbage first token still gets a message a coordinator can
+            # find in the file verbatim, trailing prose and all.
+            bad = rest.strip(JS_TRIM)
             fail(1, f"agents-discipline: Created: {bad} is not a real date -- fix it or remove the line")
     else:
         # A `Created:` line written below the delegation table is invisible to the header-only
         # lookup above -- name that explicitly rather than leaving a coordinator to guess why
         # the staleness check stayed off after they typed a date that looks perfectly fine.
-        # Same unreachable-`header_idx == -1` reasoning as `header_text` above -- no "no table"
-        # fallback to write here either.
+        # `header_idx` was already asserted non-negative above; no repeat check needed here.
         late_text = "\n".join(lines[header_idx:])
         late_hit = bool(CREATED_LATE_HINT.search(late_text))
         # stdout, not stderr: this is a successful run's own report (like the summary below), not

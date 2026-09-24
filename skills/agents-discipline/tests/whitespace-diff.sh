@@ -880,11 +880,16 @@ done
 # `CASE_ORACLE_EFFECT`, same as `_write_ledger_created` above it and for the same reason: the
 # HEADER FIELD itself is invisible past the table regardless of the pad (that never changes,
 # whichever of the six lands there), but the printed VERDICT this suite compares also carries the
-# missing-date warning's move-above-the-table HINT, and that hint only fires when the line still
-# looks stamp-shaped under plain (not JS_WS_CLASS) `\s` -- so a pad JS's own `\s` does not
-# recognize (all five besides FEFF) breaks the shape and the hint text drops out, moving the
-# verdict exactly as it does on `_write_ledger_created`'s line before the table. A `same` row for
-# those five would mean the hint's shape-check is silently ignoring an intervening ordinary
+# missing-date warning's move-above-the-table HINT, and the pad sits in the one spot that decides
+# whether the hint fires: right where the shape (`^Created:?\s+\d{4}-`) demands a DIGIT
+# immediately after the mandatory whitespace run. FEFF IS whitespace under this set (both
+# runtimes' hint regex and CREATED_FIELD read the identical set -- JS_WS_CLASS is defined AS
+# ECMAScript's `\s`, not a narrower stand-in for it), so it is absorbed into that run and the
+# digit still follows immediately: shape intact, hint still fires, verdict `same`. The other five
+# are ORDINARY characters under that same set, so each occupies the digit's own position instead
+# of vanishing into the whitespace run, the shape breaks, and the hint text drops out -- moving
+# the verdict exactly as it does on `_write_ledger_created`'s line before the table. A `same` row
+# for those five would mean the hint's shape-check is silently ignoring an intervening ordinary
 # byte -- looser than `^Created:?\s+\d{4}-` actually is, not a defect this fix removes.
 # shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
 _write_ledger_created_after_table() {
@@ -904,10 +909,10 @@ _write_ledger_created_after_table() {
     printf '**Unit 1 —** ran the suite by hand; wrote `art/created.md`.\n'
   } > "$dest"
 }
-# `moves`, like every writer above except acceptance-command's: the missing-date warning's hint
-# only fires on a line SHAPED like a stamp (`^Created:?\s+\d{4}-`, checked with a plain -- not
-# JS_WS_CLASS -- `\s`), so `X` landing between the separator and the digits breaks that shape and
-# the hint text disappears from the verdict. That is a REAL effect, not a harness bug: it is what
+# `moves`, like every writer above except acceptance-command's: the control byte `X` is an
+# ORDINARY character, not whitespace under either runtime's `\s` set, so it lands in the one
+# position the hint's shape (`^Created:?\s+\d{4}-`) requires a digit, breaking that shape, and the
+# hint text disappears from the verdict. That is a REAL effect, not a harness bug: it is what
 # proves the pad reached this exact position rather than, say, the line above or below it.
 # MEASURED: an earlier `stays` here reported "ordinary-character pad moved the verdict" -- true,
 # and exactly the confirmation a `moves` control exists to make.

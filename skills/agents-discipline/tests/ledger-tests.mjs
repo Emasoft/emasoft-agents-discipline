@@ -912,6 +912,30 @@ const cases = [
     expect: outcome === "stale" ? ["older than the ledger", "tests/fixtures/complete.md"] : ["is not a real date"],
     reject: outcome === "stale" ? ["is not a real date"] : ["older than the ledger"],
   })),
+  {
+    // Single-pattern derivation (TRDD: CREATED_STAMP_PREFIX/stampM deleted, the stamp candidate
+    // is now `rest`'s own first whitespace-delimited token): a well-formed stamp followed by
+    // prose on the SAME line must still be accepted and still enforce staleness -- the token
+    // split, not a second grammar-shaped regex, is what lets trailing prose ride along.
+    name: "a valid Created stamp followed by trailing prose on the same line is accepted",
+    file: "tests/fixtures/created-table-placeholder.md",
+    mutate: (t) => t.replace("CREATED_PLACEHOLDER", "2099-09-24T10:00:00Z see the delegation table"),
+    want: 1,
+    expect: ["older than the ledger", "tests/fixtures/complete.md"],
+    reject: ["is not a real date"],
+  },
+  {
+    // The mirror case: a bad FIRST token followed by a valid-looking second token must still
+    // fail, and the failure message must name the WHOLE captured rest (not just the bad first
+    // token) -- pinning that the message is no longer built from a second, shape-only regex that
+    // could stop early at the first token boundary.
+    name: "a bad first token before a valid-looking second token fails naming the whole rest",
+    file: "tests/fixtures/created-table-placeholder.md",
+    mutate: (t) => t.replace("CREATED_PLACEHOLDER", "not-a-date 2099-09-24T10:00:00Z"),
+    want: 1,
+    expect: ["is not a real date", "not-a-date 2099-09-24T10:00:00Z"],
+    reject: ["older than the ledger"],
+  },
   // HEADER-SCOPING SURFACE: the `Created:` field is now looked up ONLY in the header (the text
   // before the delegation table's `| # |` line), and the field/prose split (CREATED_FIELD) is
   // one merged regex instead of the old CREATED + CREATED_LINE pair. Each case below pins one
@@ -1059,7 +1083,7 @@ const cases = [
   },
   ...[
     ["\r", "bare CR"],
-    [" ", "U+2028 LINE SEPARATOR"],
+    ["\u2028", "U+2028 LINE SEPARATOR"],
   ].map(([term, label]) => ({
     // (i) The pad sits between the previous line's own `\n` and "Created:", so `lines` (both
     // runtimes split on `\n` alone) still holds it as PART OF the "Created:" line's string, and
