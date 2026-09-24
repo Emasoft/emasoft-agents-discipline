@@ -1097,6 +1097,75 @@ const cases = [
     want: 1,
     reject: ["is not a real date"],
   },
+  // U+2028/U+2029 spelled via String.fromCharCode, never typed as a literal character or a
+  // \u escape in this file -- a literal is invisible in review and can be silently destroyed by
+  // an editor or a normalizing paste; JS_TRIM's own comment in ledger_check.py states the same
+  // rule for the port side. Shared by BOTH the colon and no-colon rows below, so the two forms
+  // are exercised against the exact same four separators rather than a hand-copied second list.
+  ...(() => {
+    const DOT_SEPS = [
+      ["\r", "bare CR", true],
+      [String.fromCharCode(0x2028), "U+2028 LINE SEPARATOR", true],
+      [String.fromCharCode(0x2029), "U+2029 PARAGRAPH SEPARATOR", true],
+      ["\u0085", "U+0085 NEL (not a JS line terminator)", false],
+    ];
+    return [
+      ...DOT_SEPS.map(([sep, label, isTerminator]) => ({
+        // (k) An INVALID `Created:` stamp, then a line-terminator-shaped byte, then more prose,
+        // all on the same `\n`-delimited "line" (both runtimes split lines on `\n` alone -- see
+        // the header-scoping comment above). ECMAScript's `.` (no `/s` flag) excludes exactly
+        // LF, CR, U+2028 and U+2029, so the oracle's captured "rest" stops at CR/U+2028/U+2029
+        // and the error message names only "garbage". Python's `.` (no re.DOTALL) excludes
+        // ONLY `\n`, so before the JS_DOT_CLASS fix it kept going and named the WHOLE tail --
+        // "garbage<sep>more text" -- a longer and different candidate for byte-identical input.
+        // U+0085 (NEL) is not one of JS's four LineTerminators, so BOTH runtimes' dot already
+        // crosses it: that row is a CONTROL proving the fix does not touch what was already
+        // correct.
+        name: `an invalid Created: stamp followed by a ${label} and more text names the same candidate in both runtimes`,
+        rawBytes: Buffer.from(
+          "# Delegation plan\nUnits: 1\nCreated: garbage" + sep + "more text\n\n" +
+            "| # | Unit | Files (mine) | Worker | Acceptance | Status |\n" +
+            "|---|------|--------------|--------|------------|--------|\n" +
+            "| 1 | stats | app/stats.py | worker-1 | ran tests | verified |\n\n" +
+            "Ran app/stats.py, 10 tests passed.\n",
+          "utf8"
+        ),
+        want: 1,
+        expect: [
+          isTerminator
+            ? "Created: garbage is not a real date -- fix it or remove the line"
+            : `Created: garbage${sep}more text is not a real date -- fix it or remove the line`,
+        ],
+      })),
+      // (k2) Same four separators, but on the NO-COLON branch of CREATED_FIELD (`Created ` +
+      // a bare `\d{4}-...` instead of `Created:`). CREATED_FIELD's second alternative captures
+      // `([0-9]{4}-` + JS_DOT_CLASS + `*)`, a SEPARATE capture group from the colon branch's --
+      // both had to gain the same dot-class fix, and this is the only coverage that would catch
+      // one of them being missed (e.g. a copy-paste that dropped the trailing `*`).
+      // `9999-01-01`, never `9999-99-99`: the fixture must be invalid for exactly ONE isolated
+      // reason -- no `[T ]`-plus-time component -- so this row cannot be satisfied by
+      // CREATED_STAMP_PREFIX's shape check for the wrong reason (an out-of-range month/day would
+      // also make it "not a real date", but would no longer prove the shape check itself, only a
+      // calendar check downstream of it).
+      ...DOT_SEPS.map(([sep, label, isTerminator]) => ({
+        name: `an invalid no-colon Created stamp followed by a ${label} and more text names the same candidate in both runtimes`,
+        rawBytes: Buffer.from(
+          "# Delegation plan\nUnits: 1\nCreated 9999-01-01" + sep + "more text\n\n" +
+            "| # | Unit | Files (mine) | Worker | Acceptance | Status |\n" +
+            "|---|------|--------------|--------|------------|--------|\n" +
+            "| 1 | stats | app/stats.py | worker-1 | ran tests | verified |\n\n" +
+            "Ran app/stats.py, 10 tests passed.\n",
+          "utf8"
+        ),
+        want: 1,
+        expect: [
+          isTerminator
+            ? "Created: 9999-01-01 is not a real date -- fix it or remove the line"
+            : `Created: 9999-01-01${sep}more text is not a real date -- fix it or remove the line`,
+        ],
+      })),
+    ];
+  })(),
   {
     // Guards the `Z`/fraction capture in `Created:` (d1011f0): dropping the `Z` made a UTC
     // stamp parse as LOCAL time, so west of UTC a fresh artifact could read "older than the

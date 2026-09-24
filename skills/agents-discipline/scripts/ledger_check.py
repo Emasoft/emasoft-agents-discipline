@@ -104,6 +104,18 @@ JS_TRIM = "".join(map(chr, _JS_TRIM_CODEPOINTS))
 # consumer is byte-identical. TRDD-REJRD8V5 item 6.
 JS_WS_CLASS_BODY = "".join(map(re.escape, JS_TRIM))
 JS_WS_CLASS = "[" + JS_WS_CLASS_BODY + "]"
+
+# ECMAScript's `.` (no `/s` flag) excludes exactly the four LineTerminators -- LF, CR, U+2028,
+# U+2029 -- while Python's `.` (no re.DOTALL) excludes ONLY `\n`. A pattern that ports JS's `.*`
+# as Python's `.*` therefore keeps matching past a bare CR/U+2028/U+2029 where the oracle already
+# stopped: on `Created: garbage\rmore text`, CREATED_FIELD's captured "rest" used to be
+# `garbage\rmore text` in Python and only `garbage` in Node, so the "is not a real date" message
+# named a different (and longer) candidate in each runtime for byte-identical input.
+# NEL (U+0085) is deliberately ABSENT from this class: it is not one of JS's four
+# LineTerminators, so JS's own dot already crosses it too -- adding it here would be a NEW
+# divergence, not a fix. Gated by ledger-tests.mjs's per-terminator "invalid Created: stamp"
+# rows (CR, U+2028, U+2029 must shorten; NEL is the control that must NOT).
+JS_DOT_CLASS = r"[^\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]"
 CODE_SPAN = re.compile(r"`[^`]+`")
 FILENAME_SHAPED = re.compile(r"\b[A-Za-z0-9_./-]+\.[a-z0-9]{2,5}\b", re.I | re.A)
 # TWO divergences on one line, and they must be fixed TOGETHER in this order -- MEASURED.
@@ -227,15 +239,31 @@ PRIOR_RECEIPT = re.compile(r"<!-- agents-discipline-check: ([^ ]+) sha256:([0-9a
 # are prose and simply don't match, so the search (a plain leftmost `.search`, which -- because
 # every candidate is anchored at its own line start -- finds exactly the FIRST matching line)
 # falls through to a later, genuine line instead of stopping on prose.
+#
+# The captured "rest" uses JS_DOT_CLASS, never a bare `.*` -- see JS_DOT_CLASS's own comment: a
+# bare Python `.` crosses CR/U+2028/U+2029 where the oracle's dot already stopped, so an invalid
+# stamp followed by one of those and more prose used to name the WHOLE tail in Python's error
+# message and only the short candidate in Node's.
+#
+# CREATED_FIELD and CREATED_STAMP_PREFIX (below) stay TWO patterns, not one, even though a merge
+# was considered: CREATED_FIELD must capture the FULL untrimmed rest so the "is not a real date"
+# message can name it verbatim when the shape check fails, while CREATED_STAMP_PREFIX must STOP
+# at the first trailing whitespace so a well-formed stamp can carry trailing prose. Folding the
+# stamp shape into CREATED_FIELD's alternation to get both in one match would mean embedding that
+# shape TWICE more (once per colon/no-colon branch, as a "valid" alternative ahead of the existing
+# raw-capture fallback) instead of once here -- more copies of the grammar to keep in sync, not
+# fewer. The oracle (ledger-check.mjs, createdFieldM + stampM) makes the same trade for the same
+# reason; keep both runtimes' split identical rather than diverging one of them to look merged.
 CREATED_FIELD = re.compile(
     r"(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]))Created"
-    r"(?::" + JS_WS_CLASS + r"+(.*)|" + JS_WS_CLASS + r"+([0-9]{4}-.*))"
+    r"(?::" + JS_WS_CLASS + r"+(" + JS_DOT_CLASS + r"*)|"
+    + JS_WS_CLASS + r"+([0-9]{4}-" + JS_DOT_CLASS + r"*))"
 )
 # Extracts the stamp-shaped PREFIX of a field's `rest` text, mirroring the oracle's own second
 # regex (stampM): stopping at the next whitespace (or end) lets a `Created:` line carry trailing
 # prose after a well-formed stamp, and WITHOUT the trailing lookahead a malformed offset
 # (`Created: 2099-09-24T10:00+2`) silently drops the `+2` and is read as a valid LOCAL time
-# instead of being rejected.
+# instead of being rejected. Kept SEPARATE from CREATED_FIELD -- see the comment above it.
 CREATED_STAMP_PREFIX = re.compile(
     r"^([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)"
     r"(?=" + JS_WS_CLASS + r"|$)"
@@ -676,10 +704,10 @@ if any(r["status"] == "verified" for r in rows):
     # would fail honest ledgers, and a gate that cries wolf gets deleted.
     created_ms = None
     # The field is looked up ONLY in the header -- the text before the first delegation-table
-    # header line (the same `| # |` line header_idx already found), or the whole text when
-    # there is no table. An example `| # |` table pasted into the header prose would itself end
-    # the header under this rule, which is consistent with the row parser above already taking
-    # the FIRST such line as the delegation table, not just the real one.
+    # header line (the same `| # |` line header_idx already found). An example `| # |` table
+    # pasted into the header prose would itself end the header under this rule, which is
+    # consistent with the row parser above already taking the FIRST such line as the delegation
+    # table, not just the real one.
     # why: `CREATED.search(text)` / `CREATED_LINE.search(text)` used to search the WHOLE ledger
     # independently of each other, so an evidence line like "Created the parser in
     # src/parse.py." (prose, not a field) was taken as the field by CREATED_LINE and failed an
@@ -688,7 +716,11 @@ if any(r["status"] == "verified" for r in rows):
     # CREATED.search disagreed on WHICH line they matched -- CREATED_LINE stopped at the prose
     # while CREATED kept scanning to the later real stamp -- so this port passed a ledger the
     # oracle (whose single `.match()` call can only ever see the first hit) failed on.
-    header_text = text if header_idx == -1 else "\n".join(lines[:header_idx])
+    # `header_idx` can never be -1 here: the `| # |` finder above already called `fail(2, ...)`
+    # and exited when no table header exists, so a table is guaranteed found by this point. The
+    # old `text if header_idx == -1 else ...` fallback for "no table -> search the whole text"
+    # could therefore never execute; deleted rather than kept as inert insurance.
+    header_text = "\n".join(lines[:header_idx])
     created_field_m = CREATED_FIELD.search(header_text)
     if created_field_m:
         rest = created_field_m.group(1)
@@ -715,7 +747,9 @@ if any(r["status"] == "verified" for r in rows):
         # A `Created:` line written below the delegation table is invisible to the header-only
         # lookup above -- name that explicitly rather than leaving a coordinator to guess why
         # the staleness check stayed off after they typed a date that looks perfectly fine.
-        late_text = "" if header_idx == -1 else "\n".join(lines[header_idx:])
+        # Same unreachable-`header_idx == -1` reasoning as `header_text` above -- no "no table"
+        # fallback to write here either.
+        late_text = "\n".join(lines[header_idx:])
         late_hit = bool(CREATED_LATE_HINT.search(late_text))
         # stdout, not stderr: this is a successful run's own report (like the summary below), not
         # a failure -- a warning that only showed up on stderr would be invisible to a caller

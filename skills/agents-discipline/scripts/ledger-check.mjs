@@ -406,15 +406,26 @@ if (rows.some((r) => r.status === "verified")) {
   // field and failed an honest ledger; and a header line that was only prose ("Created the
   // parser first.") shadowed a genuine `Created:` stamp written after the table, which this
   // runtime never even looked at again once .match() returned its first hit.
-  const headerText = headerIdx === -1 ? text : lines.slice(0, headerIdx).join("\n");
+  // `headerIdx` can never be -1 here: the `| # |` finder above already called `fail(2, ...)` and
+  // exited the process when no table header exists, so by the time this line runs a table was
+  // found. The old `headerIdx === -1 ? text : ...` fallback for "no table -> search the whole
+  // text" could therefore never execute; deleted rather than kept as inert insurance.
+  const headerText = lines.slice(0, headerIdx).join("\n");
   // A `Created:` line's mandatory separator (`\s+` after the optional colon) is the anchor. An
   // explicit colon marks the field regardless of what follows -- that stays a named failure,
   // not a shrug. Without a colon, only a line that continues straight into what looks like a
   // date (`\d{4}-`) counts as the field; "Created 3 files" and "Created the parser" are prose
   // and are skipped, letting the search fall through to a later, genuine line. Its Python
   // mirror is CREATED_FIELD, a SEPARATE regex with the same anchor written out longhand
-  // (Python's `^`/`/m` can't be relied on to agree with JS's, see CREATED's own comment) -- if
-  // this line's anchor ever changes, change CREATED_FIELD the same commit.
+  // (Python's `^`/`/m` can't be relied on to agree with JS's, see CREATED_FIELD's own comment in
+  // ledger_check.py) -- if this line's anchor ever changes, change CREATED_FIELD the same commit.
+  //
+  // CREATED_FIELD/CREATED_STAMP_PREFIX (ledger_check.py) stay TWO patterns, not one -- see the
+  // long comment above CREATED_FIELD there. Same trade here: `createdFieldM` must capture the
+  // FULL untrimmed rest for the "is not a real date" message, `stampM` below must stop at the
+  // first trailing whitespace so a well-formed stamp can carry trailing prose; folding the stamp
+  // shape into `createdFieldM`'s alternation would mean writing it twice more (once per
+  // colon/no-colon branch) instead of once, in both runtimes.
   const createdFieldM = headerText.match(/^Created(?::\s+(.*)|\s+(\d{4}-.*))$/m);
   let createdInstant = null;
   if (createdFieldM) {
@@ -437,7 +448,9 @@ if (rows.some((r) => r.status === "verified")) {
     // A `Created:` line written below the delegation table is invisible to the header-only
     // lookup above -- name that explicitly rather than leaving a coordinator to guess why the
     // staleness check stayed off after they typed a date that looks perfectly fine.
-    const lateHit = /^Created:?\s+\d{4}-/m.test(headerIdx === -1 ? "" : lines.slice(headerIdx).join("\n"));
+    // Same unreachable-`headerIdx === -1` reasoning as `headerText` above -- a table is
+    // guaranteed to exist by this point, so there is no "no table" fallback to write here either.
+    const lateHit = /^Created:?\s+\d{4}-/m.test(lines.slice(headerIdx).join("\n"));
     // stdout, not stderr: this is a successful run's own report (like the summary below), not
     // a failure -- a warning that only showed up on stderr would be invisible to a caller that
     // pipes just stdout, which is exactly the audience this line exists to reach.
