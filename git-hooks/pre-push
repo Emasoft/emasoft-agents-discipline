@@ -1,127 +1,232 @@
-#!/usr/bin/env sh
-# Pre-push hook — branch-aware gate (see gen_pre_push_hook docstring).
-#   * default branch (main/master) or any tag -> full publish.py --gate
-#     (release gate: publish.py process ancestry + lint/validate/tests)
-#   * any other (feature) branch -> allowed, but ONLY after a passing
-#     secret scan of the pushed commits (trufflehog). trufflehog absent =>
-#     FAIL CLOSED (an unscanned push is never silently allowed).
-# POSIX sh, fail-fast, single code path.
-#
-# Auto-generated from claude-plugins-validation's gen_pre_push_hook template.
-# In THIS repo it is rewritten only by cpv-standardize (standardize_plugin.py's
-# forced-template set) — publish.py does NOT regenerate it. Do NOT edit by hand:
-# the next standardize run overwrites your change. (Issue #214: the old header
-# named publish.py as the writer, and two sessions built a fix path on that
-# claim instead of grepping for the real write site.)
-set -u
+#!/usr/bin/env python
+"""Pre-push hook — branch-aware gate (see gen_pre_push_hook docstring).
 
-# POSIX-only, LOUDLY (audit row 2). This hook and publish.py's gate both rely on
-# POSIX process ancestry (`ps -p`), which does not exist on Windows. Refusing
-# with an explicit message is the honest outcome; silently failing the ancestry
-# probe would block every push including publish.py's own, with no reason given.
-case "$(uname -s 2>/dev/null || echo unknown)" in
-    Linux|Darwin|*BSD|DragonFly|SunOS|AIX|CYGWIN*|MSYS*|MINGW*) : ;;
-    *)
-        echo "publish.py canon is POSIX-only (macOS/Linux); Windows is unsupported" >&2
-        exit 1
-        ;;
-esac
+  * default branch (main/master) or any tag -> full publish.py --gate
+    (release gate: publish.py process ancestry + lint/validate/tests)
+  * any other (feature) branch -> allowed, but ONLY after a passing
+    secret scan of the pushed commits (trufflehog). trufflehog absent =>
+    FAIL CLOSED (an unscanned push is never silently allowed).
 
-REPO_ROOT="$(git rev-parse --show-toplevel)" || exit 1
-cd "$REPO_ROOT" || exit 1
+Python (stdlib only), fail-fast, single code path — no bash/sh anywhere,
+so this dispatches on Windows via Git for Windows' own shebang parsing
+(there is no python3.exe on a stock Windows install, hence `python` above,
+not `python3`).
 
-ZERO=0000000000000000000000000000000000000000
+Auto-generated from claude-plugins-validation's gen_pre_push_hook template.
+In THIS repo it is rewritten only by cpv-standardize (standardize_plugin.py's
+forced-template set) — publish.py does NOT regenerate it. Do NOT edit by hand:
+the next standardize run overwrites your change. (Issue #214: the old header
+named publish.py as the writer, and two sessions built a fix path on that
+claim instead of grepping for the real write site.)
+"""
 
-# Default branch name from origin/HEAD (e.g. "main"/"master"), or empty.
-default_branch="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##')"
+from __future__ import annotations
 
-# Full release gate: only publish.py may push the default branch / tags.
-run_release_gate() {
-    if command -v uv >/dev/null 2>&1; then
-        uv run python scripts/publish.py --gate
-    else
-        python3 scripts/publish.py --gate
-    fi
-}
+import fnmatch
+import os
+import shutil
+import subprocess
+import sys
 
-# Secret-scan ONLY the new commits of a feature-branch push.
-#   $1 local sha   $2 remote sha   $3 short branch name
-# Returns 0 (clean -> allow) or non-zero (secret found / cannot scan -> block).
-secret_scan_range() {
-    if ! command -v trufflehog >/dev/null 2>&1; then
-        echo "BLOCKED: trufflehog is not installed — a feature-branch push must be" >&2
-        echo "         secret-scanned first. Install trufflehog" >&2
-        echo "         (https://github.com/trufflesecurity/trufflehog)" >&2
-        echo "         or push through scripts/publish.py." >&2
+ZERO = "0" * 40
+
+# POSIX-only patterns matching the old bash `case "$(uname -s)"` list exactly
+# (fnmatch so the trailing `*` wildcards on CYGWIN/MSYS/MINGW still work).
+_POSIX_UNAME_PATTERNS = [
+    "Linux", "Darwin", "*BSD", "DragonFly", "SunOS", "AIX",
+    "CYGWIN*", "MSYS*", "MINGW*",
+]
+
+
+def _uname_s() -> str:
+    """Return `uname -s` output, or "unknown" if uname is unavailable/fails."""
+    try:
+        result = subprocess.run(
+            ["uname", "-s"], capture_output=True, text=True, check=False
+        )
+    except OSError:
+        return "unknown"
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    return "unknown"
+
+
+def _git_rev_parse_verify(ref: str) -> str | None:
+    """`git rev-parse --verify --quiet <ref>` — the resolved sha, or None."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", ref],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+    return None
+
+
+def run_release_gate() -> int:
+    """Full release gate: only publish.py may push the default branch / tags."""
+    if shutil.which("uv"):
+        cmd = ["uv", "run", "python", "scripts/publish.py", "--gate"]
+    else:
+        cmd = ["python3", "scripts/publish.py", "--gate"]
+    return subprocess.run(cmd, check=False).returncode
+
+
+def secret_scan_range(
+    local_sha: str,
+    remote_sha: str,
+    short_branch: str,
+    default_branch: str,
+    repo_root: str,
+) -> int:
+    """Secret-scan ONLY the new commits of a feature-branch push.
+
+    Returns 0 (clean -> allow) or non-zero (secret found / cannot scan -> block).
+    """
+    if shutil.which("trufflehog") is None:
+        print(
+            "BLOCKED: trufflehog is not installed — a feature-branch push must be",
+            file=sys.stderr,
+        )
+        print("         secret-scanned first. Install trufflehog", file=sys.stderr)
+        print(
+            "         (https://github.com/trufflesecurity/trufflehog)",
+            file=sys.stderr,
+        )
+        print("         or push through scripts/publish.py.", file=sys.stderr)
         return 1
-    fi
+
     # Scan from the commit already on the remote (nothing new before it). For a
     # brand-new branch (remote side all-zeros) start from the default branch tip
     # so inherited history is not re-scanned; if none resolves, scan the whole
     # branch (a fresh repo has no inherited content to false-positive on).
-    base=""
-    if [ "$2" != "$ZERO" ]; then
-        base="$2"
-    elif [ -n "$default_branch" ]; then
-        base="$(git rev-parse --verify --quiet "origin/$default_branch" 2>/dev/null              || git rev-parse --verify --quiet "$default_branch" 2>/dev/null || true)"
-    fi
-    # Issue #213 — `$3` is the branch name on the REMOTE side, which need not
-    # exist locally: `git push origin HEAD:refs/heads/some-name` makes
+    base = ""
+    if remote_sha != ZERO:
+        base = remote_sha
+    elif default_branch:
+        base = (
+            _git_rev_parse_verify(f"origin/{default_branch}")
+            or _git_rev_parse_verify(default_branch)
+            or ""
+        )
+
+    # Issue #213 — `short_branch` is the branch name on the REMOTE side, which
+    # need not exist locally: `git push origin HEAD:refs/heads/some-name` makes
     # trufflehog log "unable to resolve ref", scan 0 chunks / 0 bytes, and exit
     # 0. `--fail` only fires on a secret FOUND, so a scan that never looked was
     # indistinguishable from a clean one and the push was allowed. Resolve the
     # ref ourselves first and fail closed, which is what the header promises.
-    if ! git rev-parse --verify --quiet "$3" >/dev/null 2>&1; then
-        echo "BLOCKED: cannot secret-scan this push — the pushed branch name '$3'" >&2
-        echo "         does not resolve to a local ref, so trufflehog would scan" >&2
-        echo "         0 bytes and exit 0 (an unscanned push, not a clean one)." >&2
-        echo "         Push a real local branch (git push origin <branch>), or" >&2
-        echo "         push through scripts/publish.py." >&2
+    if _git_rev_parse_verify(short_branch) is None:
+        print(
+            f"BLOCKED: cannot secret-scan this push — the pushed branch name "
+            f"'{short_branch}'",
+            file=sys.stderr,
+        )
+        print(
+            "         does not resolve to a local ref, so trufflehog would scan",
+            file=sys.stderr,
+        )
+        print(
+            "         0 bytes and exit 0 (an unscanned push, not a clean one).",
+            file=sys.stderr,
+        )
+        print(
+            "         Push a real local branch (git push origin <branch>), or",
+            file=sys.stderr,
+        )
+        print("         push through scripts/publish.py.", file=sys.stderr)
         return 1
-    fi
-    if [ -n "$base" ]; then
-        trufflehog git "file://$REPO_ROOT" --since-commit "$base" --branch "$3" --no-update --fail
-    else
-        trufflehog git "file://$REPO_ROOT" --branch "$3" --no-update --fail
-    fi
-}
 
-release_push=0
-saw_feature=0
-scan_failed=0
+    cmd = ["trufflehog", "git", f"file://{repo_root}"]
+    if base:
+        cmd += ["--since-commit", base]
+    cmd += ["--branch", short_branch, "--no-update", "--fail"]
+    return subprocess.run(cmd, check=False).returncode
 
-# git feeds "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin.
-while read -r localref localsha remoteref remotesha; do
-    [ -z "$localref" ] && continue
-    [ "$localsha" = "$ZERO" ] && continue    # ref deletion — nothing to gate/scan
-    case "$remoteref" in
-        refs/tags/*|refs/heads/main|refs/heads/master)
-            release_push=1
-            ;;
-        refs/heads/*)
-            short=${remoteref#refs/heads/}
-            if [ -n "$default_branch" ] && [ "$short" = "$default_branch" ]; then
-                release_push=1
-            else
-                saw_feature=1
-                secret_scan_range "$localsha" "$remotesha" "$short" || scan_failed=1
-            fi
-            ;;
-        *)
-            release_push=1    # unknown ref shape — gate conservatively
-            ;;
-    esac
-done
 
-# A release ref is present, or nothing parsed -> enforce the full release gate.
-if [ "$release_push" -eq 1 ] || [ "$saw_feature" -eq 0 ]; then
-    run_release_gate
-    exit $?
-fi
+def main() -> int:
+    # POSIX-only, LOUDLY (audit row 2). This hook and publish.py's gate both
+    # rely on POSIX process ancestry (`ps -p`), which does not exist on
+    # Windows. Refusing with an explicit message is the honest outcome;
+    # silently failing the ancestry probe would block every push including
+    # publish.py's own, with no reason given.
+    if not any(fnmatch.fnmatch(_uname_s(), p) for p in _POSIX_UNAME_PATTERNS):
+        print(
+            "publish.py canon is POSIX-only (macOS/Linux); Windows is unsupported",
+            file=sys.stderr,
+        )
+        return 1
 
-# Feature-branch-only push: allowed iff every secret scan passed.
-if [ "$scan_failed" -eq 1 ]; then
-    echo "BLOCKED: secret scan failed for a feature-branch push (see above)." >&2
-    exit 1
-fi
-exit 0
+    repo_root_result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, check=False,
+    )
+    if repo_root_result.returncode != 0:
+        return 1
+    repo_root = repo_root_result.stdout.strip()
+
+    try:
+        os.chdir(repo_root)
+    except OSError:
+        return 1
+
+    # Default branch name from origin/HEAD (e.g. "main"/"master"), or empty.
+    default_branch = ""
+    dbr = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+        capture_output=True, text=True, check=False,
+    )
+    if dbr.returncode == 0:
+        default_branch = dbr.stdout.strip()
+        if default_branch.startswith("origin/"):
+            default_branch = default_branch[len("origin/"):]
+
+    release_push = False
+    saw_feature = False
+    scan_failed = False
+
+    # git feeds "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin.
+    for raw_line in sys.stdin:
+        fields = raw_line.split()
+        fields += [""] * (4 - len(fields))
+        localref, localsha, remoteref, remotesha = fields[:4]
+        if not localref:
+            continue
+        if localsha == ZERO:
+            continue  # ref deletion — nothing to gate/scan
+        if remoteref.startswith("refs/tags/") or remoteref in (
+            "refs/heads/main",
+            "refs/heads/master",
+        ):
+            release_push = True
+        elif remoteref.startswith("refs/heads/"):
+            short = remoteref[len("refs/heads/"):]
+            if default_branch and short == default_branch:
+                release_push = True
+            else:
+                saw_feature = True
+                if (
+                    secret_scan_range(
+                        localsha, remotesha, short, default_branch, repo_root
+                    )
+                    != 0
+                ):
+                    scan_failed = True
+        else:
+            release_push = True  # unknown ref shape — gate conservatively
+
+    # A release ref is present, or nothing parsed -> enforce the full release gate.
+    if release_push or not saw_feature:
+        return run_release_gate()
+
+    # Feature-branch-only push: allowed iff every secret scan passed.
+    if scan_failed:
+        print(
+            "BLOCKED: secret scan failed for a feature-branch push (see above).",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
