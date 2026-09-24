@@ -226,6 +226,99 @@ CREATED = re.compile(
     + r"+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)"
 )
 
+# Created-stamp grammar, declared ONCE and ported line-for-line to ledger-check.mjs's
+# CREATED_STAMP_RE, because leaving calendar validity to fromisoformat/Date.parse made parity
+# an accident of engine leniency: fromisoformat rejects an impossible date outright
+# ("day is out of range for month"), Date.parse instead rolls it over (`2026-02-30T10:00Z` ->
+# March 2), and Date.parse alone also accepts a non-ES `+0200` offset. Shape: YYYY-MM-DD, `T`
+# or a space, HH:mm, optional :ss with optional .fraction, optional Z/+HH:mm/+HHmm. Hour 24
+# legal ONLY as exactly 24:00[:00[.0...]] (next-day midnight) -- checked separately below,
+# never by the shape alone.
+# `re.ASCII` is load-bearing, not decoration: without it Python's `\d` matches every Unicode
+# decimal digit (Arabic-Indic, full-width, ...) while JS's `\d` in ledger-check.mjs is
+# ASCII-only, so a stamp built from non-ASCII digits would parse here and be rejected there --
+# the exact class of engine-quirk divergence this whole grammar exists to remove.
+CREATED_STAMP_RE = re.compile(
+    r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{2}):([0-9]{2})"
+    r"(?::([0-9]{2})(?:\.([0-9]+))?)?(Z|[+-][0-9]{2}:?[0-9]{2})?$",
+    re.ASCII,
+)
+_OFFSET_RE = re.compile(r"^([+-])([0-9]{2}):?([0-9]{2})$", re.ASCII)
+
+
+def _is_leap_year(y):
+    return y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+
+
+_DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+
+def _days_in_month(y, m):
+    return 29 if m == 2 and _is_leap_year(y) else _DAYS_IN_MONTH[m - 1]
+
+
+def parse_created_stamp(raw):
+    """Validate a `Created:` stamp against the declared grammar above and return the instant
+    it denotes, in epoch ms -- or None when the stamp is out of shape or not a real calendar
+    date/time. Never falls back to fromisoformat on the raw text: its strictness (rejecting
+    `2026-02-30` outright, where Node rolls it over) is exactly the engine quirk this function
+    exists to remove."""
+    m = CREATED_STAMP_RE.match(raw)
+    if not m:
+        return None
+    y_s, mo_s, d_s, h_s, mi_s, s_s, frac_s, off_s = m.groups()
+    year, month, day = int(y_s), int(mo_s), int(d_s)
+    hour, minute = int(h_s), int(mi_s)
+    second = int(s_s) if s_s is not None else 0
+    # `\d{4}` alone lets `year` through as low as 0; both `datetime(0, ...)` (Python: raises
+    # ValueError) and `new Date(0, ...)` (JS: silently maps years 0-99 to 1900-1999, a documented
+    # `Date` legacy footgun) disagree on what a low 4-digit year even means, so this grammar
+    # excludes the ambiguous range instead of letting either engine guess.
+    if year < 100:
+        return None
+    if not (1 <= month <= 12):
+        return None
+    if not (1 <= day <= _days_in_month(year, month)):
+        return None
+    if minute > 59 or second > 59:
+        return None
+    next_day = False
+    if hour == 24:
+        # Hour 24 denotes next-day midnight and is legal ONLY as exactly 24:00, 24:00:00, or
+        # 24:00:00 with an all-zero fraction -- any non-zero minute/second/fraction is out of shape.
+        if minute != 0:
+            return None
+        if s_s is not None and second != 0:
+            return None
+        if frac_s is not None and any(c != "0" for c in frac_s):
+            return None
+        next_day = True
+    elif hour > 23:
+        return None
+    offset_minutes = None
+    if off_s == "Z":
+        offset_minutes = 0
+    elif off_s:
+        om = _OFFSET_RE.match(off_s)
+        assert om is not None  # off_s already matched CREATED_STAMP_RE's offset group, so this always matches
+        oh, omin = int(om.group(2)), int(om.group(3))
+        if oh > 23 or omin > 59:
+            return None
+        offset_minutes = (-1 if om.group(1) == "-" else 1) * (oh * 60 + omin)
+    frac_ms = float("0." + frac_s) * 1000 if frac_s else 0.0
+    dt = datetime(year, month, day, 0 if next_day else hour, minute, second)
+    if next_day:
+        dt += timedelta(days=1)
+    if offset_minutes is None:
+        # No offset: local time, built from validated components -- never fromisoformat on raw
+        # text. A naive datetime's .timestamp() already assumes local time (Python docs), so no
+        # extra conversion is needed here.
+        return dt.timestamp() * 1000 + frac_ms
+    # `Z` or an explicit offset: an absolute instant computed from the UTC components.
+    dt = dt.replace(tzinfo=timezone(timedelta(minutes=offset_minutes)))
+    return dt.timestamp() * 1000 + frac_ms
+
+
 path = sys.argv[1] if len(sys.argv) > 1 else "DELEGATION.md"
 
 
@@ -550,42 +643,10 @@ if any(r["status"] == "verified" for r in rows):
     created_ms = None
     cm = CREATED.search(text)
     if cm:
-        raw = cm.group(1).replace(" ", "T")
-        # `T24:00` is legal ISO 8601 and Date.parse accepts it; fromisoformat raises on it
-        # ("hour must be in 0..23"). Left unhandled, the ValueError below swallows the failure
-        # and the staleness rule is SILENTLY SKIPPED -- a gate that quietly stops running is
-        # worse than one that complains. Rewrite it to the midnight it denotes.
-        # Only the forms ISO 8601 actually permits, because hour 24 is legal ONLY as exactly
-        # 24:00:00. Measured: Date.parse("2020-01-01T24:00:00") is next-day local midnight,
-        # and Date.parse("2020-01-01T24:00:01") is NaN. A loose `(:.*)?` rewrote the second
-        # into a parseable datetime, so the port ENFORCED staleness where the oracle skips it
-        # — the opposite direction from the bug this fix is for, and just as silent.
-        # Fractions are captured too: Date.parse("...T24:00:00.000Z") is legal (all-zero
-        # fraction denotes exact midnight) but Date.parse("...T24:00:00.5Z") is NaN, so
-        # only an all-zero fraction may match here -- a loose `.*` would accept a fraction
-        # the oracle rejects, enforcing staleness where the oracle silently skips it.
-        m24 = re.match(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})T24(:00(?::00(?:\.0+)?)?)?((?:[+-].*|Z)?)$", raw)
-        if m24:
-            raw = (datetime.fromisoformat(m24.group(1)) + timedelta(days=1)).strftime("%Y-%m-%d") \
-                + "T00" + (m24.group(2) or "") + m24.group(3)
-        # Measured (parity.sh): fromisoformat accepts shapes Date.parse rejects as NaN --
-        # "T10:00.5Z" (fraction on minutes), "T10Z" and "T1000" (no minutes/seconds) all
-        # parse here but are NaN in the oracle. Gating on the oracle's own accepted shape
-        # first means an unparseable-by-Node stamp SKIPS staleness (created_ms stays None)
-        # instead of the port enforcing a rule the oracle never applies.
-        if re.match(
-            r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"
-            r"(?::[0-9]{2}(?:\.[0-9]+)?)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?$",
-            raw,
-        ):
-            try:
-                dt = datetime.fromisoformat(raw)
-                # A bare datetime with no offset is local time in both runtimes.
-                if dt.tzinfo is None:
-                    dt = dt.astimezone()
-                created_ms = dt.timestamp() * 1000
-            except ValueError:
-                created_ms = None
+        # Both runtimes now validate against the ONE declared grammar (CREATED_STAMP_RE, above)
+        # instead of each engine's own date parser, so parity no longer depends on fromisoformat
+        # and Date.parse happening to agree on which stamps are real.
+        created_ms = parse_created_stamp(cm.group(1).replace(" ", "T"))
 
     for p in artifact_paths:
         cands = [p] if os.path.isabs(p) else [os.path.join(b, p) for b in bases]

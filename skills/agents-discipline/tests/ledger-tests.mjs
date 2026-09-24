@@ -815,6 +815,45 @@ const cases = [
     ["2099-09-24 10:00:00.5Z", "stale"],
     ["2099-09-24T10Z", "skip"],
     ["2099-09-24T10:00Z", "stale"],
+    // Calendar-validity probes (TRDD: the Created grammar is now declared once and validated
+    // the same way in both runtimes, instead of leaning on fromisoformat/Date.parse -- Node's
+    // Date.parse used to roll an impossible date over instead of rejecting it).
+    ["2026-02-30T10:00Z", "skip"], // February never has a 30th
+    ["2026-04-31T10:00Z", "skip"], // April has 30 days
+    ["2026-02-29T10:00Z", "skip"], // 2026 is not a leap year
+    ["2028-02-29T10:00Z", "stale"], // 2028 is a leap year (divisible by 4, not a century)
+    ["2026-13-01T10:00Z", "skip"], // month 13 does not exist
+    // Shape probes: single-digit hour/minute/second, a double colon, an extra field, hour 24
+    // without its mandatory minute, and malformed offsets -- each must be skipped, never guessed.
+    ["2099-09-24T25:00Z", "skip"],
+    ["2099-09-24T10:60Z", "skip"],
+    ["2099-09-24T1:00Z", "skip"],
+    ["2099-09-24T10:0Z", "skip"],
+    ["2099-09-24T10:00:0Z", "skip"],
+    ["2099-09-24T10::00Z", "skip"],
+    ["2099-09-24T10:00:00:00", "skip"],
+    ["2099-09-24T24Z", "skip"],
+    ["2099-09-24T24", "skip"],
+    // A malformed 1-digit offset never reaches the grammar at all: the CREATED extraction
+    // regex's offset group requires 2 digits and, unanchored, simply stops capturing before
+    // the "+2" it can't match -- leaving the bare, VALID "...T10:00" behind. Same truncation
+    // in both runtimes (measured), so this is parity, not a hole the grammar needs to close.
+    ["2099-09-24T10:00+2", "stale"],
+    ["2099-09-24T10:00+25:00", "skip"],
+    ["2099-09-24T10:00+0200", "stale"],
+    ["2099-09-24T10:00+02:00", "stale"],
+    ["2099-09-24T10", "skip"],
+    ["2099-09-24T1000", "skip"],
+    ["2099-09-24T10:00", "stale"],
+    // Review-flagged gaps (ADVERSARIAL-REVIEW on this TRDD): a year below 100 is ambiguous
+    // between engines (JS's `new Date(0, ...)` legacy-maps years 0-99 to 1900-1999; Python's
+    // `datetime(0, ...)` raises) so the grammar now excludes it outright rather than letting
+    // either engine guess.
+    ["0000-01-01T10:00Z", "skip"],
+    // A non-ASCII decimal digit (Arabic-Indic zero, U+0660) in place of the hour's leading "1":
+    // Python's `\d` matches it without `re.ASCII` while JS's `\d` never does, so this row pins
+    // the `re.ASCII` fix -- both runtimes must reject it identically.
+    [`2099-09-24T٠0:00Z`, "skip"],
   ].map(([stamp, outcome]) => ({
     name: `Created stamp '${stamp}' ${outcome === "stale" ? "is parsed and enforces staleness" : "is skipped, as Date.parse does"}`,
     file: "tests/fixtures/created-table-placeholder.md",

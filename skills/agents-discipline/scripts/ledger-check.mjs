@@ -290,6 +290,74 @@ function existingArtifactsIn(block, bases) {
     });
 }
 
+// Created-stamp grammar, declared ONCE and ported line-for-line to ledger_check.py's
+// CREATED_STAMP_RE, because leaving calendar validity to Date.parse/fromisoformat made parity
+// an accident of engine leniency: Date.parse rolls an impossible date over instead of rejecting
+// it (`2026-02-30T10:00Z` -> March 2), fromisoformat rejects it outright, and Date.parse alone
+// also accepts a non-ES `+0200` offset. Shape: YYYY-MM-DD, `T` or a space, HH:mm, optional
+// :ss with optional .fraction, optional Z/+HH:mm/+HHmm. Hour 24 legal ONLY as exactly
+// 24:00[:00[.0...]] (next-day midnight) -- checked separately below, never by the shape alone.
+const CREATED_STAMP_RE =
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|[+-]\d{2}:?\d{2})?$/;
+
+function isLeapYear(y) {
+  return y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
+}
+
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function daysInMonth(y, m) {
+  return m === 2 && isLeapYear(y) ? 29 : DAYS_IN_MONTH[m - 1];
+}
+
+// Validates a `Created:` stamp against the declared grammar above and returns the instant it
+// denotes, in epoch ms -- or null when the stamp is out of shape or not a real calendar
+// date/time. Never falls back to Date.parse on the raw text: that leniency (rolling
+// `2026-02-30` into March) is exactly the engine quirk this function exists to remove.
+function parseCreatedStamp(raw) {
+  const m = CREATED_STAMP_RE.exec(raw);
+  if (!m) return null;
+  const [, yS, moS, dS, hS, miS, sS, fracS, offS] = m;
+  const year = Number(yS), month = Number(moS), day = Number(dS);
+  const hour = Number(hS), minute = Number(miS), second = sS !== undefined ? Number(sS) : 0;
+  // `\d{4}` alone lets `year` through as low as 0; `new Date(0, ...)` silently maps years 0-99
+  // to 1900-1999 (a documented `Date` legacy footgun), while Python's `datetime(0, ...)` raises.
+  // Excluded here instead of letting either engine guess what a low 4-digit year means.
+  if (year < 100) return null;
+  if (month < 1 || month > 12) return null;
+  if (day < 1 || day > daysInMonth(year, month)) return null;
+  if (minute > 59 || second > 59) return null;
+  let nextDay = false;
+  if (hour === 24) {
+    // Hour 24 denotes next-day midnight and is legal ONLY as exactly 24:00, 24:00:00, or
+    // 24:00:00 with an all-zero fraction -- any non-zero minute/second/fraction is out of shape.
+    if (minute !== 0) return null;
+    if (sS !== undefined && second !== 0) return null;
+    if (fracS !== undefined && /[1-9]/.test(fracS)) return null;
+    nextDay = true;
+  } else if (hour > 23) {
+    return null;
+  }
+  let offsetMinutes = null;
+  if (offS === "Z") {
+    offsetMinutes = 0;
+  } else if (offS) {
+    const om = /^([+-])(\d{2}):?(\d{2})$/.exec(offS);
+    const oh = Number(om[2]), omin = Number(om[3]);
+    if (oh > 23 || omin > 59) return null;
+    offsetMinutes = (om[1] === "-" ? -1 : 1) * (oh * 60 + omin);
+  }
+  const fracMs = fracS ? Number(`0.${fracS}`) * 1000 : 0;
+  const wallHour = nextDay ? 0 : hour;
+  const wallDay = day + (nextDay ? 1 : 0);
+  if (offsetMinutes === null) {
+    // No offset: local time, built from validated components -- never Date.parse on raw text.
+    return new Date(year, month - 1, wallDay, wallHour, minute, second).getTime() + fracMs;
+  }
+  // `Z` or an explicit offset: an absolute instant computed from the UTC components.
+  return Date.UTC(year, month - 1, wallDay, wallHour, minute, second) - offsetMinutes * 60000 + fracMs;
+}
+
 const bases = [];
 for (let d = nodePath.dirname(nodePath.resolve(path)); ; d = nodePath.dirname(d)) {
   bases.push(d);
@@ -311,7 +379,7 @@ if (rows.some((r) => r.status === "verified")) {
   // so on a machine west of UTC every artifact produced in the first hours read "older than the
   // ledger" and an honest ledger failed.
   const createdM = text.match(/^Created:?\s+(\d{4}-\d{2}-\d{2}[T ][\d:]+(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/m);
-  const createdMs = createdM ? Date.parse(createdM[1].replace(" ", "T")) : NaN;
+  const createdInstant = createdM ? parseCreatedStamp(createdM[1].replace(" ", "T")) : null;
 
   // Resolution walks UP from the ledger, because a cited path is written relative to the
   // PROJECT, not to wherever the ledger happens to sit. `reports/agents-discipline/DELEGATION.md`
@@ -328,7 +396,7 @@ if (rows.some((r) => r.status === "verified")) {
     }
     const st = fs.statSync(hit);
     if (st.isFile() && st.size === 0) emptyArtifacts.push(p);
-    else if (Number.isFinite(createdMs) && st.mtimeMs < createdMs) staleArtifacts.push(p);
+    else if (createdInstant !== null && st.mtimeMs < createdInstant) staleArtifacts.push(p);
   }
   artifactsOk =
     missingArtifacts.length === 0 && emptyArtifacts.length === 0 && staleArtifacts.length === 0;
