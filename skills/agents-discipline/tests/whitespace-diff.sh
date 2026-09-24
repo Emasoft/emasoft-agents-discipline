@@ -248,7 +248,8 @@ _write_ledger_exit() {
 # command here would satisfy the evidence check by that route instead, `EXIT_CODE` would stop
 # being the sole path, and all six rows would go green while testing nothing.
 
-# SIXTH SURFACE: `CREATED` (oracle `:303`). Unlike the exit-code surface this one IS reached by
+# SIXTH SURFACE: the `Created:` field regex (oracle's `createdFieldM`, `:418`; port's
+# CREATED_FIELD). Unlike the exit-code surface this one IS reached by
 # ordinary inputs -- 16 of the 31 `ledger-tests.mjs` drives carry a `Created:` line -- so `npm
 # test` is already a real gate for its ORDINARY-INPUT behaviour. What no test reached is its
 # whitespace class: not one writer in this file emitted a `Created:` line before this one, so the
@@ -868,6 +869,54 @@ for i in "${!LT_NAME[@]}"; do
   _case "created-lt ${LT_NAME[$i]}" "${LT_BYTES[$i]}" _write_ledger_created_lt "${LT_EFFECT[$i]}"
 done
 
+# HEADER-SCOPING SURFACE, added alongside CREATED_FIELD (the merge of the old CREATED +
+# CREATED_LINE into one field/prose-discriminating regex): the field is now looked up ONLY in
+# the header, the text before the delegation table's `| # |` line. `_write_ledger_created`
+# above proves the six whitespace vectors on a `Created:` line BEFORE the table; this writer is
+# the SAME line, byte for byte, moved to AFTER the table, to prove the header/no-header boundary
+# holds under every one of those vectors too -- not just the plain-ASCII placements
+# ledger-tests.mjs covers (cases c/e there use one fixed date, never a `\s`-class byte).
+#
+# `CASE_ORACLE_EFFECT`, same as `_write_ledger_created` above it and for the same reason: the
+# HEADER FIELD itself is invisible past the table regardless of the pad (that never changes,
+# whichever of the six lands there), but the printed VERDICT this suite compares also carries the
+# missing-date warning's move-above-the-table HINT, and that hint only fires when the line still
+# looks stamp-shaped under plain (not JS_WS_CLASS) `\s` -- so a pad JS's own `\s` does not
+# recognize (all five besides FEFF) breaks the shape and the hint text drops out, moving the
+# verdict exactly as it does on `_write_ledger_created`'s line before the table. A `same` row for
+# those five would mean the hint's shape-check is silently ignoring an intervening ordinary
+# byte -- looser than `^Created:?\s+\d{4}-` actually is, not a defect this fix removes.
+# shellcheck disable=SC2329  # invoked indirectly, as "$writer" from _case and _control
+_write_ledger_created_after_table() {
+  local dest="$1" ws="$2" pad
+  pad="$(printf '%b' "$ws")"
+  mkdir -p "$(dirname "$dest")/art"
+  printf 'ran it\n' > "$(dirname "$dest")/art/created.md"
+  {
+    printf '# Delegation plan\n'
+    printf 'Units: 1\n\n'
+    printf '| # | Unit | Files (mine) | Worker | Acceptance | Status |\n'
+    printf '|---|------|--------------|--------|------------|--------|\n'
+    printf '| 1 | stats | app/stats.py | worker-1 | tests pass | verified |\n'
+    printf '\n## Evidence\n\n'
+    printf 'Created: %s2099-01-01T00:00:00+0000\n\n' "$pad"
+    # shellcheck disable=SC2016  # the backticks are a literal markdown code span, not a command
+    printf '**Unit 1 —** ran the suite by hand; wrote `art/created.md`.\n'
+  } > "$dest"
+}
+# `moves`, like every writer above except acceptance-command's: the missing-date warning's hint
+# only fires on a line SHAPED like a stamp (`^Created:?\s+\d{4}-`, checked with a plain -- not
+# JS_WS_CLASS -- `\s`), so `X` landing between the separator and the digits breaks that shape and
+# the hint text disappears from the verdict. That is a REAL effect, not a harness bug: it is what
+# proves the pad reached this exact position rather than, say, the line above or below it.
+# MEASURED: an earlier `stays` here reported "ordinary-character pad moved the verdict" -- true,
+# and exactly the confirmation a `moves` control exists to make.
+_control _write_ledger_created_after_table "control: created-after-table writer" 'Created: [^ 0-9][^ 0-9]*[0-9]' moves
+for i in "${!CASE_NAME[@]}"; do
+  _case "created-after-table ${CASE_NAME[$i]}" "${CASE_BYTES[$i]}" _write_ledger_created_after_table \
+        "${CASE_ORACLE_EFFECT[$i]}"
+done
+
 # Position-anchored, same forced choice the exit-code and created controls document: a correctly
 # placed pad DESTROYS the token it sits in front of, so anchoring on the surviving token would
 # fail in the red and green states alike. `Rules` is the token the pad precedes.
@@ -1061,7 +1110,7 @@ if [ "$fail" = 0 ]; then
   # controls, and a control does not assert identity -- it asserts a count, and now also that the
   # padded verdict DIFFERS from the unpadded one. A summary line that calls every check an
   # identity is the kind of over-claim this suite exists to catch.
-  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + created-lt + rules-heading + heading-finder + strong-span + acceptance-command + citation surfaces) ---"
+  echo "--- $pass check(s) passed (cell + header + evidence-header + header-finder + exit-code + created + created-lt + created-after-table + rules-heading + heading-finder + strong-span + acceptance-command + citation surfaces) ---"
   exit 0
 fi
 printf -- '--- %s DIVERGENCE(S): %s ---\n' "$fail" "${FAILED[*]}"

@@ -297,17 +297,20 @@ function existingArtifactsIn(block, bases) {
 // also accepts a non-ES `+0200` offset. Shape: YYYY-MM-DD, `T` or a space, HH:mm, optional
 // :ss with optional .fraction, optional Z/+HH:mm/+HHmm. Hour 24 legal ONLY as exactly
 // 24:00[:00[.0...]] (next-day midnight) -- checked separately below, never by the shape alone.
-// Year must be 1970-2999 inclusive, else the stamp is skipped -- checked separately below,
+// Year must be 1971-2999 inclusive, else the stamp is skipped -- checked separately below,
 // never by the shape alone. Two reasons: (1) Python's next-day rollover on 24:00 does
 // `dt += timedelta(days=1)`, which raises an uncaught OverflowError once `dt` is already
 // datetime.max's day (year 9999); (2) a naive (no-offset) datetime's `.timestamp()` goes
-// through the platform C `mktime`/`localtime`, which raises OSError on Windows for years well
-// before 1970 or past roughly 3000, while Node's `Date` has no such limit -- so without a
-// shared cap the two runtimes would diverge by engine instead of agreeing the stamp is invalid.
+// through the platform C `mktime`/`localtime`, which probes local time at t +/- 24h -- on
+// Windows, any no-offset stamp within about 38h of the epoch reaches localtime_s with a
+// negative value and raises OSError, so the floor is 1971, not 1970, to keep every stamp at
+// least 24h clear of that boundary; the 2999 ceiling plus 24h plus a 14h offset stays inside
+// Windows' 3000-12-31 limit. Node's `Date` has no such limit, so without a shared cap the two
+// runtimes would diverge by engine instead of agreeing the stamp is invalid.
 // This range also replaces (not stacks on top of) the old bare `year < 100` guard: `\d{4}`
 // alone let `year` through as low as 0, where `new Date(0, ...)` (JS: silently maps years 0-99
 // to 1900-1999, a documented `Date` legacy footgun) and `datetime(0, ...)` (Python: raises)
-// disagree on what a low 4-digit year even means -- 1970-2999 already excludes that whole
+// disagree on what a low 4-digit year even means -- 1971-2999 already excludes that whole
 // ambiguous range, so a second, narrower guard added nothing.
 // The offset sign, hours and minutes are captured directly here (groups 8-10) instead of via a
 // second regex re-parsed from a combined offset group -- a stamp that matched this grammar's
@@ -336,10 +339,10 @@ function parseCreatedStamp(raw) {
   const [, yS, moS, dS, hS, miS, sS, fracS, zFlag, offSign, offHS, offMS] = m;
   const year = Number(yS), month = Number(moS), day = Number(dS);
   const hour = Number(hS), minute = Number(miS), second = sS !== undefined ? Number(sS) : 0;
-  // See the grammar comment above CREATED_STAMP_RE: outside 1970-2999 either runtime can
+  // See the grammar comment above CREATED_STAMP_RE: outside 1971-2999 either runtime can
   // raise on a stamp that is otherwise well-formed, so the range is part of the grammar
   // rather than a try/catch bolted around the arithmetic below.
-  if (year < 1970 || year > 2999) return null;
+  if (year < 1971 || year > 2999) return null;
   if (month < 1 || month > 12) return null;
   if (day < 1 || day > daysInMonth(year, month)) return null;
   if (minute > 59 || second > 59) return null;
@@ -393,16 +396,29 @@ if (rows.some((r) => r.status === "verified")) {
   // both, `date -u +%FT%TZ` writes the `Z` alone; dropping the `Z` made a UTC stamp parse as LOCAL time,
   // so on a machine west of UTC every artifact produced in the first hours read "older than the
   // ledger" and an honest ledger failed.
-  // A `Created:` line's mandatory separator (`\s+` after the optional colon) is the anchor: a
-  // line that doesn't even have that shape is not a `Created:` line at all, and falls into the
-  // "no Created: line" branch below rather than erroring on something that was never meant to
-  // be a date. Its Python mirror is CREATED_LINE, a SEPARATE regex with the same anchor written
-  // out longhand (Python's `^`/`/m` can't be relied on to agree with JS's, see CREATED's own
-  // comment) -- if this line's anchor ever changes, change CREATED_LINE the same commit.
-  const createdLineM = text.match(/^Created:?\s+(.*)$/m);
+  // The field is looked up ONLY in the header -- the text before the first delegation-table
+  // header line (the same `| # |` line headerIdx already found), or the whole text when there
+  // is no table. An example `| # |` table pasted into the header prose would itself end the
+  // header under this rule, which is consistent with the row parser above already taking the
+  // FIRST such line as the delegation table, not just the real one.
+  // why: `text.match(/^Created:?\s+(.*)$/m)` used to search the WHOLE ledger, so an evidence
+  // line like "Created the parser in src/parse.py." (prose, not a field) was taken as the
+  // field and failed an honest ledger; and a header line that was only prose ("Created the
+  // parser first.") shadowed a genuine `Created:` stamp written after the table, which this
+  // runtime never even looked at again once .match() returned its first hit.
+  const headerText = headerIdx === -1 ? text : lines.slice(0, headerIdx).join("\n");
+  // A `Created:` line's mandatory separator (`\s+` after the optional colon) is the anchor. An
+  // explicit colon marks the field regardless of what follows -- that stays a named failure,
+  // not a shrug. Without a colon, only a line that continues straight into what looks like a
+  // date (`\d{4}-`) counts as the field; "Created 3 files" and "Created the parser" are prose
+  // and are skipped, letting the search fall through to a later, genuine line. Its Python
+  // mirror is CREATED_FIELD, a SEPARATE regex with the same anchor written out longhand
+  // (Python's `^`/`/m` can't be relied on to agree with JS's, see CREATED's own comment) -- if
+  // this line's anchor ever changes, change CREATED_FIELD the same commit.
+  const createdFieldM = headerText.match(/^Created(?::\s+(.*)|\s+(\d{4}-.*))$/m);
   let createdInstant = null;
-  if (createdLineM) {
-    const rest = createdLineM[1];
+  if (createdFieldM) {
+    const rest = createdFieldM[1] !== undefined ? createdFieldM[1] : createdFieldM[2];
     // The trailing `(?=\s|$)` is load-bearing: without it, `Created: 2099-09-24T10:00+2` captures
     // only `2099-09-24T10:00` and silently drops `+2`, so a malformed stamp is read as a valid
     // LOCAL time instead of being rejected. Stopping at the next whitespace (or end of line)
@@ -418,10 +434,17 @@ if (rows.some((r) => r.status === "verified")) {
       fail(1, `agents-discipline: Created: ${candidate} is not a real date -- fix it or remove the line`);
     }
   } else {
+    // A `Created:` line written below the delegation table is invisible to the header-only
+    // lookup above -- name that explicitly rather than leaving a coordinator to guess why the
+    // staleness check stayed off after they typed a date that looks perfectly fine.
+    const lateHit = /^Created:?\s+\d{4}-/m.test(headerIdx === -1 ? "" : lines.slice(headerIdx).join("\n"));
     // stdout, not stderr: this is a successful run's own report (like the summary below), not
     // a failure -- a warning that only showed up on stderr would be invisible to a caller that
     // pipes just stdout, which is exactly the audience this line exists to reach.
-    console.log("agents-discipline: no Created: date -- the file-age check was skipped");
+    console.log(
+      "agents-discipline: no Created: date -- the file-age check was skipped" +
+        (lateHit ? " (a Created: line after the delegation table is not read -- move it above the table)" : "")
+    );
   }
 
   // Resolution walks UP from the ledger, because a cited path is written relative to the

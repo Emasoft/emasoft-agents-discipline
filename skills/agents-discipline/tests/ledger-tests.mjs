@@ -887,9 +887,17 @@ const cases = [
     // Review-flagged gaps (ADVERSARIAL-REVIEW on this TRDD): a year below 1970 is ambiguous
     // between engines (JS's `new Date(0, ...)` legacy-maps years 0-99 to 1900-1999; Python's
     // `datetime(0, ...)` raises) or can crash the arithmetic below (Python's next-day rollover,
-    // a naive `.timestamp()` on Windows), so the grammar excludes the whole 1970-2999 border
+    // a naive `.timestamp()` on Windows), so the grammar excludes the whole 1971-2999 border
     // outright rather than letting either engine guess or fault.
     ["0000-01-01T10:00Z", "invalid"],
+    // The 1971 floor itself, both sides of it: these are naive (no offset) stamps within the
+    // ~38h window either side of the epoch where Python's `.timestamp()` probes local time at
+    // t +/- 24h and, on Windows, `localtime_s` goes negative and raises OSError -- see the
+    // grammar comment above CREATED_STAMP_RE. Both are still in year 1970, so both fail
+    // regardless of the hour; a year of exactly 1971 is not tested here because it is simply
+    // valid, nothing new to pin.
+    ["1970-12-31T23:00", "invalid"],
+    ["1970-01-02T10:00", "invalid"],
     // A non-ASCII decimal digit (Arabic-Indic zero, U+0660) in place of the hour's leading "1":
     // the CREATED extraction regex only ever captures ASCII `[0-9]`/`\d` characters in EITHER
     // runtime, so this digit never reaches CREATED_STAMP_RE at all -- this row pins that
@@ -904,6 +912,191 @@ const cases = [
     expect: outcome === "stale" ? ["older than the ledger", "tests/fixtures/complete.md"] : ["is not a real date"],
     reject: outcome === "stale" ? ["is not a real date"] : ["older than the ledger"],
   })),
+  // HEADER-SCOPING SURFACE: the `Created:` field is now looked up ONLY in the header (the text
+  // before the delegation table's `| # |` line), and the field/prose split (CREATED_FIELD) is
+  // one merged regex instead of the old CREATED + CREATED_LINE pair. Each case below pins one
+  // combination the merge could get wrong: prose that starts with "Created" but isn't a field,
+  // a genuine stamp placed on the wrong side of the table boundary, and the two runtimes'
+  // differing `.`/line-terminator semantics around the header cut.
+  {
+    // (a) No header field at all, and an EVIDENCE line beginning "Created the parser" -- prose,
+    // not a field, and outside the header besides. Must warn and still pass.
+    name: "no header Created field, evidence prose starting 'Created the parser': warns, still passes",
+    rawBytes: Buffer.from(
+      "# Delegation plan\nUnits: 1\n\n" +
+        "| # | Unit | Files (mine) | Worker | Acceptance | Status |\n" +
+        "|---|------|--------------|--------|------------|--------|\n" +
+        "| 1 | stats | app/stats.py | worker-1 | ran tests | verified |\n\n" +
+        "Created the parser in app/stats.py, ran it, 93 tests passed.\n",
+      "utf8"
+    ),
+    want: 0,
+    expect: ["no Created: date", "file-age check was skipped"],
+    reject: ["is not a real date", "move it above the table"],
+  },
+  {
+    // (b) A VALID header field, plus the same "Created the parser" evidence prose -- the field
+    // is governed by the header alone; the evidence-section "Created" never reaches the lookup
+    // at all (it is past the table), so the ledger reads the real header date and neither
+    // warns nor fails.
+    name: "valid header Created field is governed by the header even with 'Created the parser' evidence",
+    rawBytes: Buffer.from(
+      "# Delegation plan\nUnits: 1\nCreated: 2020-01-01T00:00:00Z\n\n" +
+        "| # | Unit | Files (mine) | Worker | Acceptance | Status |\n" +
+        "|---|------|--------------|--------|------------|--------|\n" +
+        "| 1 | stats | app/stats.py | worker-1 | ran tests | verified |\n\n" +
+        "Created the parser in app/stats.py, ran it, 93 tests passed.\n",
+      "utf8"
+    ),
+    want: 0,
+    reject: ["no Created: date", "is not a real date", "move it above the table"],
+  },
+  {
+    // (c) Header is PURE PROSE that itself starts with "Created" ("Created the parser first.",
+    // no digits), and a genuine `Created:` stamp is written after the table instead. Neither
+    // runtime may read the post-table stamp as the field -- it is invisible by construction --
+    // so both must warn, and name the same move-above-the-table hint, byte for byte.
+    name: "header prose 'Created the parser first.' plus a later real Created: line reads identically in both runtimes",
+    rawBytes: Buffer.from(
+      "# Delegation plan\nUnits: 1\nCreated the parser first.\n\n" +
+        "| # | Unit | Files (mine) | Worker | Acceptance | Status |\n" +
+        "|---|------|--------------|--------|------------|--------|\n" +
+        "| 1 | stats | app/stats.py | worker-1 | ran tests | verified |\n\n" +
+        "Created: 2020-01-01T00:00:00Z\n\n" +
+        "Ran app/stats.py, 10 tests passed.\n",
+      "utf8"
+    ),
+    want: 0,
+    expect: ["no Created: date", "file-age check was skipped", "move it above the table"],
+    reject: ["is not a real date"],
+  },
+  {
+    // (d) No delegation table at all. The `| # |` finder already fails the whole ledger (exit 2,
+    // "no unit table header") before the Created lookup is ever reached, so a stray
+    // `Created: reports/out.txt with the results` line -- itself not stamp-shaped -- changes
+    // nothing; both runtimes must agree on the SAME early exit.
+    name: "no table at all: fails before the Created lookup runs, identically in both runtimes",
+    rawBytes: Buffer.from(
+      "# Delegation plan\nUnits: 1\nCreated: reports/out.txt with the results\n\nNo table here.\n",
+      "utf8"
+    ),
+    want: 2,
+    expect: ["not a DELEGATION.md ledger", "no unit table header"],
+  },
+  {
+    // (e) No header field, and a line after the table that DOES look like a Created stamp
+    // (`Created:` + a 4-digit year) -- the missing-date warning must name the reason: it was
+    // written on the wrong side of the table.
+    name: "a Created: line only after the table gets the move-above-the-table hint",
+    rawBytes: Buffer.from(
+      "# Delegation plan\nUnits: 1\n\n" +
+        "| # | Unit | Files (mine) | Worker | Acceptance | Status |\n" +
+        "|---|------|--------------|--------|------------|--------|\n" +
+        "| 1 | stats | app/stats.py | worker-1 | ran tests | verified |\n\n" +
+        "Created: 2099-01-01T00:00:00Z\n\n" +
+        "Ran app/stats.py, 10 tests passed.\n",
+      "utf8"
+    ),
+    want: 0,
+    expect: ["no Created: date", "file-age check was skipped", "move it above the table"],
+    reject: ["is not a real date"],
+  },
+  {
+    // (f) A stamp immediately followed by a period, no space -- the mandatory
+    // `(?=whitespace|$)` after the stamp already refuses this in both runtimes (nothing new to
+    // build), so this pins the named-failure behavior stays put under the merged regex too.
+    name: "a Created: stamp immediately followed by '.' is an invalid stamp, not a truncated valid one",
+    rawBytes: Buffer.from(
+      "# Delegation plan\nUnits: 1\nCreated: 2099-01-01T00:00:00Z.\n\n" +
+        "| # | Unit | Files (mine) | Worker | Acceptance | Status |\n" +
+        "|---|------|--------------|--------|------------|--------|\n" +
+        "| 1 | stats | app/stats.py | worker-1 | ran tests | verified |\n\n" +
+        "Ran app/stats.py, 10 tests passed.\n",
+      "utf8"
+    ),
+    want: 1,
+    expect: ["is not a real date"],
+    reject: ["no Created: date"],
+  },
+  {
+    // (g) "Created 3 files" -- no colon, and the word right after "Created" is a bare
+    // single-digit count, not a 4-digit year: prose, must not be read as a field.
+    name: "'Created 3 files' in the header is prose, not a field",
+    rawBytes: Buffer.from(
+      "# Delegation plan\nUnits: 1\nCreated 3 files.\n\n" +
+        "| # | Unit | Files (mine) | Worker | Acceptance | Status |\n" +
+        "|---|------|--------------|--------|------------|--------|\n" +
+        "| 1 | stats | app/stats.py | worker-1 | ran tests | verified |\n\n" +
+        "Ran app/stats.py, 10 tests passed.\n",
+      "utf8"
+    ),
+    want: 0,
+    expect: ["no Created: date", "file-age check was skipped"],
+    reject: ["is not a real date", "move it above the table"],
+  },
+  {
+    // (h) The same valid header stamp, but the whole ledger uses CRLF line endings -- the
+    // header cut and the field regex must both still see one `Created:` line, not a line plus
+    // a stray `\r`.
+    name: "a valid header Created field survives a CRLF ledger",
+    rawBytes: Buffer.from(
+      [
+        "# Delegation plan",
+        "Units: 1",
+        "Created: 2020-01-01T00:00:00Z",
+        "",
+        "| # | Unit | Files (mine) | Worker | Acceptance | Status |",
+        "|---|------|--------------|--------|------------|--------|",
+        "| 1 | stats | app/stats.py | worker-1 | ran tests | verified |",
+        "",
+        "Ran app/stats.py, 10 tests passed.",
+        "",
+      ].join("\r\n"),
+      "utf8"
+    ),
+    want: 0,
+    reject: ["no Created: date", "is not a real date"],
+  },
+  ...[
+    ["\r", "bare CR"],
+    [" ", "U+2028 LINE SEPARATOR"],
+  ].map(([term, label]) => ({
+    // (i) The pad sits between the previous line's own `\n` and "Created:", so `lines` (both
+    // runtimes split on `\n` alone) still holds it as PART OF the "Created:" line's string, and
+    // only the regex's own line-terminator anchor decides whether `^Created` fires right after
+    // it. Node's `^` under `/m` fires after CR and U+2028 same as after LF; CREATED_FIELD's
+    // Python anchor spells the same set out longhand. Both runtimes must pick this exact same
+    // line as the field, byte for byte.
+    name: `a Created: line preceded by a ${label} is still read as the field, identically in both runtimes`,
+    rawBytes: Buffer.from(
+      "# Delegation plan\nUnits: 1\n" +
+        term +
+        "Created: 2020-01-01T00:00:00Z\n\n" +
+        "| # | Unit | Files (mine) | Worker | Acceptance | Status |\n" +
+        "|---|------|--------------|--------|------------|--------|\n" +
+        "| 1 | stats | app/stats.py | worker-1 | ran tests | verified |\n\n" +
+        "Ran app/stats.py, 10 tests passed.\n",
+      "utf8"
+    ),
+    want: 0,
+    reject: ["no Created: date", "is not a real date"],
+  })),
+  {
+    // (j) The live template, not a fixture: fill in its placeholder `Created:` line with a real
+    // stamp (the ONLY edit to that line) and flip one row to `verified`. The template's OWN
+    // prose -- "Rules of this ledger", the placeholder cells, the embedded example date inside
+    // the (now replaced) placeholder text itself -- must not be mistaken for the field. Shares
+    // the "copy the template and flip every status" case's exact mutate lambda (same TRDD), but
+    // asserts only the Created-field outcome, not the evidence verdict that case already pins.
+    name: "the live template's own Created: field is read correctly once filled in, unconfused by its surrounding prose",
+    file: "templates/DELEGATION.md",
+    mutate: (t) =>
+      t
+        .replace(/\| pending \|/g, "| verified |")
+        .replace(/^Created:.*$/m, "Created: 2020-01-01T00:00:00Z"),
+    want: 1,
+    reject: ["is not a real date"],
+  },
   {
     // Guards the `Z`/fraction capture in `Created:` (d1011f0): dropping the `Z` made a UTC
     // stamp parse as LOCAL time, so west of UTC a fresh artifact could read "older than the

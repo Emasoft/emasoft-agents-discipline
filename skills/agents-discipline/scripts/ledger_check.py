@@ -210,39 +210,44 @@ SEPARATOR_CELL = re.compile(r"^:?-+:?$")
 RECEIPT_RE = re.compile(r"\n?<!-- agents-discipline-check: [^>]*-->\n?")
 PRIOR_RECEIPT = re.compile(r"<!-- agents-discipline-check: ([^ ]+) sha256:([0-9a-f]+) -->")
 # TWO AXES ON ONE REGEX, both converted: the whitespace class (`\s` -> JS_WS_CLASS) and the LINE
-# ANCHOR. The oracle is `/^Created:?\s+.../m`, and ECMAScript's `^` under `/m` fires after ANY
-# LineTerminator -- LF, CR, U+2028, U+2029 -- while Python's `re.M` fires after LF alone. So
-# `re.M` is NOT the port of `/m`: on `x<CR>Created: 2099-...` the oracle reads a Created date and
-# the port reads none, the staleness rule is silently skipped, and a stale artifact passes. The
-# alternative below spells the four terminators and drops `re.M`; `^` without it is
+# ANCHOR. The oracle is `/^Created(?::\s+(.*)|\s+(\d{4}-.*))$/m`, and ECMAScript's `^` under `/m`
+# fires after ANY LineTerminator -- LF, CR, U+2028, U+2029 -- while Python's `re.M` fires after LF
+# alone. So `re.M` is NOT the port of `/m`: on `x<CR>Created: 2099-...` the oracle reads a Created
+# date and the port reads none, the staleness rule is silently skipped, and a stale artifact
+# passes. The alternative below spells the four terminators and drops `re.M`; `^` without it is
 # start-of-string, the fifth position `/m` fires at. The two non-ASCII terminators are `\N{...}`
 # escapes, never literal characters, so they survive an editor, a paste and a normalizing diff.
 # Gated by whitespace-diff.sh's `created` surface (the `\s` axis) and `created-lt` surface (the
 # anchor axis, in BOTH directions: one `same` row per terminator against a narrowed anchor, and
 # a NEL row against a widened one -- U+0085 breaks lines to Python and not to ECMAScript).
-CREATED = re.compile(
-    r"(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]))Created:?" + JS_WS_CLASS
-    # Fraction and `Z` captured, mirroring the oracle: a dropped `Z` read a UTC stamp as local.
-    + r"+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)"
-    # Mirrors the oracle's trailing `(?=\s|$)`: without it, `Created: 2099-...T10:00+2` captures
-    # only up to `10:00` and silently drops `+2`, reading a malformed stamp as a valid LOCAL
-    # time. JS_WS_CLASS already contains every character JS's `\s` does (including the four
-    # line terminators used above), so reusing it here -- rather than a bare `$` -- gives the
-    # same "ends at whitespace or end of text" semantics the oracle gets from `\s` under `/m`.
-    + r"(?=" + JS_WS_CLASS + r"|$)"
+#
+# An explicit colon ("Created:") marks the field regardless of what follows it -- that stays a
+# named failure, not a shrug. Without a colon, only a line that continues straight into what
+# looks like a date (`\d{4}-`) counts as the field; "Created 3 files" and "Created the parser"
+# are prose and simply don't match, so the search (a plain leftmost `.search`, which -- because
+# every candidate is anchored at its own line start -- finds exactly the FIRST matching line)
+# falls through to a later, genuine line instead of stopping on prose.
+CREATED_FIELD = re.compile(
+    r"(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]))Created"
+    r"(?::" + JS_WS_CLASS + r"+(.*)|" + JS_WS_CLASS + r"+([0-9]{4}-.*))"
 )
-# Same anchor as CREATED, above, but capturing whatever follows the mandatory separator instead
-# of requiring it to already look like a stamp -- this is what tells a `Created:` line that
-# exists but is garbage ("Created: not-a-date") apart from no `Created:` line at all. The former
-# is a ledger defect (fail loud); the latter just means the staleness rule has nothing to check
-# (warn and move on). Reusing CREATED's exact anchor keeps the "is there a Created: line" verdict
-# identical to the one CREATED itself would reach, rather than a second guess at the same anchor.
-# ADVERSARIAL-REVIEW: this anchor is copy-pasted from CREATED's, not shared code -- a future fix
-# to CREATED's line-terminator or whitespace handling (the kind d1011f0/17dd2de made) that does
-# not touch this regex too silently reintroduces a presence/extraction disagreement. If CREATED's
-# anchor ever changes, change this one in the same commit.
-CREATED_LINE = re.compile(
-    r"(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]))Created:?" + JS_WS_CLASS + r"+(.*)"
+# Extracts the stamp-shaped PREFIX of a field's `rest` text, mirroring the oracle's own second
+# regex (stampM): stopping at the next whitespace (or end) lets a `Created:` line carry trailing
+# prose after a well-formed stamp, and WITHOUT the trailing lookahead a malformed offset
+# (`Created: 2099-09-24T10:00+2`) silently drops the `+2` and is read as a valid LOCAL time
+# instead of being rejected.
+CREATED_STAMP_PREFIX = re.compile(
+    r"^([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)"
+    r"(?=" + JS_WS_CLASS + r"|$)"
+)
+# A bare presence check for a `Created:`-shaped line ANYWHERE past the delegation table, used
+# only to name the "you put it in the wrong place" hint on the missing-date warning -- never to
+# read a date from it. Deliberately looser than CREATED_FIELD (no colon-vs-prose split): a
+# coordinator who wrote `Created 2099-...` without a colon below the table gets the same hint as
+# one who wrote `Created:`.
+CREATED_LATE_HINT = re.compile(
+    r"(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]))Created:?" + JS_WS_CLASS
+    + r"+[0-9]{4}-"
 )
 
 # Created-stamp grammar, declared ONCE and ported line-for-line to ledger-check.mjs's
@@ -253,17 +258,20 @@ CREATED_LINE = re.compile(
 # or a space, HH:mm, optional :ss with optional .fraction, optional Z/+HH:mm/+HHmm. Hour 24
 # legal ONLY as exactly 24:00[:00[.0...]] (next-day midnight) -- checked separately below,
 # never by the shape alone.
-# Year must be 1970-2999 inclusive, else the stamp is skipped -- checked separately below,
+# Year must be 1971-2999 inclusive, else the stamp is skipped -- checked separately below,
 # never by the shape alone. Two reasons: (1) the next-day rollover on 24:00 does
 # `dt += timedelta(days=1)`, which raises an uncaught OverflowError once `dt` is already
 # datetime.max's day (year 9999); (2) a naive (no-offset) datetime's `.timestamp()` goes
-# through the platform C `mktime`/`localtime`, which raises OSError on Windows for years well
-# before 1970 or past roughly 3000, while Node's `Date` has no such limit -- so without a
-# shared cap the two runtimes would diverge by engine instead of agreeing the stamp is invalid.
+# through the platform C `mktime`/`localtime`, which probes local time at t +/- 24h -- on
+# Windows, any no-offset stamp within about 38h of the epoch reaches localtime_s with a
+# negative value and raises OSError, so the floor is 1971, not 1970, to keep every stamp at
+# least 24h clear of that boundary; the 2999 ceiling plus 24h plus a 14h offset stays inside
+# Windows' 3000-12-31 limit. Node's `Date` has no such limit, so without a shared cap the two
+# runtimes would diverge by engine instead of agreeing the stamp is invalid.
 # This range also replaces (not stacks on top of) the old bare `year < 100` guard: `\d{4}`
 # alone let `year` through as low as 0, where `datetime(0, ...)` (Python: raises ValueError) and
 # `new Date(0, ...)` (JS: silently maps years 0-99 to 1900-1999, a documented `Date` legacy
-# footgun) disagree on what a low 4-digit year even means -- 1970-2999 already excludes that
+# footgun) disagree on what a low 4-digit year even means -- 1971-2999 already excludes that
 # whole ambiguous range, so a second, narrower guard added nothing.
 # The offset sign, hours and minutes are captured directly here (groups 9-11) instead of via a
 # second regex re-parsed from group 8's text -- a stamp that matched this grammar's offset shape
@@ -299,10 +307,10 @@ def parse_created_stamp(raw):
     year, month, day = int(y_s), int(mo_s), int(d_s)
     hour, minute = int(h_s), int(mi_s)
     second = int(s_s) if s_s is not None else 0
-    # See the grammar comment above CREATED_STAMP_RE: outside 1970-2999 either runtime can
+    # See the grammar comment above CREATED_STAMP_RE: outside 1971-2999 either runtime can
     # raise on a stamp that is otherwise well-formed, so the range is part of the grammar
     # rather than a try/except bolted around the arithmetic below.
-    if year < 1970 or year > 2999:
+    if year < 1971 or year > 2999:
         return None
     if not (1 <= month <= 12):
         return None
@@ -667,13 +675,30 @@ if any(r["status"] == "verified" for r in rows):
     # staleness rule is skipped rather than guessed -- a check that invents its own baseline
     # would fail honest ledgers, and a gate that cries wolf gets deleted.
     created_ms = None
-    created_line_m = CREATED_LINE.search(text)
-    if created_line_m:
+    # The field is looked up ONLY in the header -- the text before the first delegation-table
+    # header line (the same `| # |` line header_idx already found), or the whole text when
+    # there is no table. An example `| # |` table pasted into the header prose would itself end
+    # the header under this rule, which is consistent with the row parser above already taking
+    # the FIRST such line as the delegation table, not just the real one.
+    # why: `CREATED.search(text)` / `CREATED_LINE.search(text)` used to search the WHOLE ledger
+    # independently of each other, so an evidence line like "Created the parser in
+    # src/parse.py." (prose, not a field) was taken as the field by CREATED_LINE and failed an
+    # honest ledger; and worse, when the header held ONLY prose ("Created the parser first.")
+    # ahead of a genuine `Created:` stamp written after the table, CREATED_LINE.search and
+    # CREATED.search disagreed on WHICH line they matched -- CREATED_LINE stopped at the prose
+    # while CREATED kept scanning to the later real stamp -- so this port passed a ledger the
+    # oracle (whose single `.match()` call can only ever see the first hit) failed on.
+    header_text = text if header_idx == -1 else "\n".join(lines[:header_idx])
+    created_field_m = CREATED_FIELD.search(header_text)
+    if created_field_m:
+        rest = created_field_m.group(1)
+        if rest is None:
+            rest = created_field_m.group(2)
         # Both runtimes now validate against the ONE declared grammar (CREATED_STAMP_RE, above)
         # instead of each engine's own date parser, so parity no longer depends on fromisoformat
         # and Date.parse happening to agree on which stamps are real.
-        cm = CREATED.search(text)
-        created_ms = parse_created_stamp(cm.group(1)) if cm else None
+        stamp_m = CREATED_STAMP_PREFIX.match(rest)
+        created_ms = parse_created_stamp(stamp_m.group(1)) if stamp_m else None
         if created_ms is None:
             # A `Created:` line that is present but not a real, in-grammar stamp used to be
             # silently treated the same as no line at all -- the staleness rule just went quiet.
@@ -684,13 +709,22 @@ if any(r["status"] == "verified" for r in rows):
             # a bare `.strip()` here would silently remove a pad character (e.g. U+001C) that
             # ledger-check.mjs's `.trim()` leaves in place, so the two runtimes would name a
             # DIFFERENT bad stamp for byte-identical input.
-            bad = cm.group(1) if cm else created_line_m.group(1).strip(JS_TRIM)
+            bad = stamp_m.group(1) if stamp_m else rest.strip(JS_TRIM)
             fail(1, f"agents-discipline: Created: {bad} is not a real date -- fix it or remove the line")
     else:
+        # A `Created:` line written below the delegation table is invisible to the header-only
+        # lookup above -- name that explicitly rather than leaving a coordinator to guess why
+        # the staleness check stayed off after they typed a date that looks perfectly fine.
+        late_text = "" if header_idx == -1 else "\n".join(lines[header_idx:])
+        late_hit = bool(CREATED_LATE_HINT.search(late_text))
         # stdout, not stderr: this is a successful run's own report (like the summary below), not
         # a failure -- a warning that only showed up on stderr would be invisible to a caller
         # that pipes just stdout, which is exactly the audience this line exists to reach.
-        print("agents-discipline: no Created: date -- the file-age check was skipped")
+        hint = (
+            " (a Created: line after the delegation table is not read -- move it above the table)"
+            if late_hit else ""
+        )
+        print("agents-discipline: no Created: date -- the file-age check was skipped" + hint)
 
     for p in artifact_paths:
         cands = [p] if os.path.isabs(p) else [os.path.join(b, p) for b in bases]
