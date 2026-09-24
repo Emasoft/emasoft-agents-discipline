@@ -40,7 +40,7 @@ Every worker brief is a written contract. Template in [templates/worker-brief.md
 - **Context.** Dependencies pasted in full, pointers to specs and upstream reports. Never "see my other worker's output". The worker cannot.
 - **Acceptance.** The checkable criteria from the ledger row.
 - **Verify.** The exact commands the worker runs before reporting done.
-- **Isolation.** Shared repo → one worktree or branch per worker (`git worktree add -b agent/<slug> ../wt-<slug> main`). One writer per worktree.
+- **Isolation.** Shared repo → one worktree per worker (`git worktree add -b agent/<slug> ../wt-<slug> HEAD`). One writer per worktree.
 
 You are the coordinator. You do not do the workers' work. If you catch yourself implementing a unit you assigned, either reassign it or change the ledger to name you as the worker, never hold it invisibly.
 

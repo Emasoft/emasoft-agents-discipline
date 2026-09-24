@@ -270,7 +270,10 @@ const evidenceBlocks = new Map();
     // Case-insensitive: `**unit 1 —**` is the same header a human meant to write, and
     // matching it case-sensitively would silently yield an empty block and report the row
     // UNBACKED for a reason no message names.
-    const m = /^\*\*unit\s+([0-9]+)\b/i.exec(line);
+    // Dotted ids (`1.2`, `1.2.1`) are captured whole: the Depth Tree numbers leaves that way, and
+    // `[0-9]+` alone keyed `**Unit 1.2 —**` as unit `1` -- row `1.2` then read UNBACKED while
+    // row `1` was credited with evidence that was never about it.
+    const m = /^\*\*unit\s+([0-9]+(?:\.[0-9]+)*)\b/i.exec(line);
     if (m) current = m[1];
     if (current) evidenceBlocks.set(current, (evidenceBlocks.get(current) ?? "") + line + "\n");
   }
@@ -303,7 +306,11 @@ if (rows.some((r) => r.status === "verified")) {
   // The ledger's own start time, so "newer than the ledger" is answerable. Absent it,
   // the staleness rule is skipped rather than guessed — a check that invents its own
   // baseline would fail honest ledgers, and a gate that cries wolf gets deleted.
-  const createdM = text.match(/^Created:?\s+(\d{4}-\d{2}-\d{2}[T ][\d:]+(?:[+-]\d{2}:?\d{2})?)/m);
+  // Fractional seconds and a `Z` designator are captured: `new Date().toISOString()` and
+  // `date -u +%FT%TZ` both write them, and dropping the `Z` made a UTC stamp parse as LOCAL time,
+  // so on a machine west of UTC every artifact produced in the first hours read "older than the
+  // ledger" and an honest ledger failed.
+  const createdM = text.match(/^Created:?\s+(\d{4}-\d{2}-\d{2}[T ][\d:]+(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/m);
   const createdMs = createdM ? Date.parse(createdM[1].replace(" ", "T")) : NaN;
 
   // Resolution walks UP from the ledger, because a cited path is written relative to the
@@ -602,7 +609,14 @@ if (!rerunSkipped) {
       execFileSync("/bin/bash", ["-o", "pipefail", "-c", cmd], { cwd: runCwd, stdio: "ignore", timeout: remaining });
       code = 0;
     } catch (err) {
-      code = typeof err.status === "number" ? err.status : 1;
+      // Name the two failures that are NOT the acceptance failing: a timeout (the budget ran out
+      // mid-command) and a missing /bin/bash (Windows, NixOS). Both used to print `exit 1`,
+      // indistinguishable from a real test failure. Verdict unchanged: both still fail the row.
+      code = err.code === "ETIMEDOUT"
+        ? "timed out — the re-run budget ran out while this acceptance was running"
+        : err.code === "ENOENT"
+          ? "cannot run /bin/bash — the ledger re-run requires it (see SECURITY.md)"
+          : typeof err.status === "number" ? err.status : 1;
     }
     (code === 0 ? reran : reproFailed).push({ unit: r.unit, cmd, code });
   }
@@ -687,7 +701,7 @@ if (abandoned.length) {
     // emptiness alone let a bare `**Unit 1 —**` silence this marker at six keystrokes. Strip the
     // marker and test what is left, which is the reason itself. `[ \t]` rather than `\s` because
     // this same expression is ported to Python, whose `\s` excludes U+FEFF where JS's includes it.
-    const reason = evidenceBlockFor(r.unit).replace(/^\*\*unit[ \t]+[0-9]+[ \t]*[-—–:]*[ \t]*\*\*/i, "").trim();
+    const reason = evidenceBlockFor(r.unit).replace(/^\*\*unit[ \t]+[0-9]+(?:\.[0-9]+)*[ \t]*[-—–:]*[ \t]*\*\*/i, "").trim();
     // "found in a **Unit N** block" and not "no reason given": a pooled paragraph or a `#1`-style
     // header carries a real reason this predicate cannot see, and the ledger's output is read by
     // a human who would take the stronger claim as an accusation.

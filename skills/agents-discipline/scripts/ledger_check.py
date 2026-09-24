@@ -179,7 +179,11 @@ CITATION = re.compile(
 # only valid while the quantifier is `+`. `\b` is two-sided; the lookahead is one-sided, and
 # they agree solely because `[0-9]+` guarantees a word char to the left. Change it to `*` and
 # `**Unit ` with no number matches here and not in node.
-UNIT_HEADER = re.compile(r"^\*\*unit" + JS_WS_CLASS + r"+([0-9]+)" + NOT_WORD_AFTER, re.I | re.A)
+# Dotted ids (`1.2`, `1.2.1`) are captured whole, mirroring the oracle: `[0-9]+` alone keyed
+# `**Unit 1.2 —**` as unit `1`. The group still ends on a digit, so NOT_WORD_AFTER stays valid.
+UNIT_HEADER = re.compile(
+    r"^\*\*unit" + JS_WS_CLASS + r"+([0-9]+(?:\.[0-9]+)*)" + NOT_WORD_AFTER, re.I | re.A
+)
 
 # The table-header FINDER, mirroring `ledger-check.mjs:47`'s `/^\|\s*#\s*\|/`. JS_WS_CLASS, never
 # Python `\s` -- this is the single most consequential of the class's sites, because it does not
@@ -218,7 +222,8 @@ PRIOR_RECEIPT = re.compile(r"<!-- agents-discipline-check: ([^ ]+) sha256:([0-9a
 # a NEL row against a widened one -- U+0085 breaks lines to Python and not to ECMAScript).
 CREATED = re.compile(
     r"(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]))Created:?" + JS_WS_CLASS
-    + r"+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:[+-][0-9]{2}:?[0-9]{2})?)"
+    # Fraction and `Z` captured, mirroring the oracle: a dropped `Z` read a UTC stamp as local.
+    + r"+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)"
 )
 
 path = sys.argv[1] if len(sys.argv) > 1 else "DELEGATION.md"
@@ -555,7 +560,7 @@ if any(r["status"] == "verified" for r in rows):
         # and Date.parse("2020-01-01T24:00:01") is NaN. A loose `(:.*)?` rewrote the second
         # into a parseable datetime, so the port ENFORCED staleness where the oracle skips it
         # — the opposite direction from the bug this fix is for, and just as silent.
-        m24 = re.match(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})T24(:00(?::00)?)?((?:[+-].*)?)$", raw)
+        m24 = re.match(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})T24(:00(?::00)?)?((?:[+-].*|Z)?)$", raw)
         if m24:
             raw = (datetime.fromisoformat(m24.group(1)) + timedelta(days=1)).strftime("%Y-%m-%d") \
                 + "T00" + (m24.group(2) or "") + m24.group(3)
@@ -880,7 +885,13 @@ if not rerun_skipped:
             # artifact. Verdict is unaffected either way -- both are non-zero.
             if code < 0:
                 code = 1
-        except (subprocess.TimeoutExpired, OSError):
+        # Same two named non-acceptance failures as the oracle's ETIMEDOUT / ENOENT branches, so a
+        # timeout or a missing /bin/bash is never printed as an ordinary `exit 1`.
+        except subprocess.TimeoutExpired:
+            code = "timed out — the re-run budget ran out while this acceptance was running"
+        except FileNotFoundError:
+            code = "cannot run /bin/bash — the ledger re-run requires it (see SECURITY.md)"
+        except OSError:
             code = 1
         (reran if code == 0 else repro_failed).append({"unit": r["unit"], "cmd": cmd, "code": code})
 
@@ -957,7 +968,7 @@ if abandoned:
         # nothing else. `[ \t]` rather than `\s` keeps this identical to the JS side, whose `\s`
         # includes U+FEFF while Python's does not.
         _reason = re.sub(
-            r"^\*\*unit[ \t]+[0-9]+[ \t]*[-—–:]*[ \t]*\*\*", "", evidence_block_for(r["unit"]), 1, re.I
+            r"^\*\*unit[ \t]+[0-9]+(?:\.[0-9]+)*[ \t]*[-—–:]*[ \t]*\*\*", "", evidence_block_for(r["unit"]), 1, re.I
         ).strip(JS_TRIM)
         _why = f" — no reason found in a **Unit {r['unit']}** evidence block" if _reason == "" else ""
         print(f"    - #{r['unit']} {r['name']}{_why}")

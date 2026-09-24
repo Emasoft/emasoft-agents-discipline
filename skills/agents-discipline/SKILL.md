@@ -50,7 +50,7 @@ Read [references/ledger-discipline.md](references/ledger-discipline.md) before w
   - **Context.** Pointers to specs and upstream reports, pasted in full where they matter. Workers cannot see your thread.
   - **Acceptance.** The checkable criteria, one line each.
   - **Verify.** The exact commands the worker runs before reporting done.
-  - **Isolation.** If the repo is shared, a branch or worktree per worker: `git worktree add -b agent/<slug> ../wt-<slug> main`. One writer per worktree.
+  - **Isolation.** If the repo is shared, a worktree per worker: `git worktree add -b agent/<slug> ../wt-<slug> HEAD`. One writer per worktree. `ledger-check.mjs` re-runs acceptances from the ledger's own repository root, so merge a unit's branch there before running it.
 - You are the coordinator. You do not do the workers' work. If you catch yourself implementing a unit you assigned, stop and either reassign it or mark yourself as the worker for that unit in the ledger.
 
 Read [references/delegation-orchestration.md](references/delegation-orchestration.md) to make fresh context and non-overlapping ownership mechanically true.
@@ -72,7 +72,7 @@ The integration pass is yours too: interfaces match, tests pass together, nothin
 Your final report must contain:
 
 - The gate decision: units counted, threshold met or not.
-- The ledger: N units, each with status (`pending` / `done` / `verified`) and who did it.
+- The ledger: N units, each with status (`pending` / `done` / `verified` / `abandoned`) and who did it. An `abandoned` row is a required handoff, never completion.
 - What you verified yourself, with evidence: commands run, tests passed, files read.
 - What remains, if anything.
 
@@ -180,4 +180,4 @@ Do not create gates for a trivial edit or factual reply. Use this discipline whe
 
 ## Run both
 
-When the delegation gate is open, write `DELEGATION.md` from [templates/DELEGATION.md](templates/DELEGATION.md) before any artifact and give every worker brief its own gate ledger from [templates/gates-leaf.md](templates/gates-leaf.md). Reuse the row's acceptance command as that leaf's `CHECK:` and give it an `EXPECT:` there: `ledger-check.mjs` passes a row on exit status alone, so the leaf ledger is where the same command becomes decisive. Write each gate's `CHECK:`/`EXPECT:` into the brief itself, plain, and tell the worker to bound its own run of it with a timeout (the recorded `CHECK:` stays unwrapped; `gate-check.mjs` bounds the coordinator's re-run) — a worker cannot see your thread or your approval store. When a worker returns, inspect its oracles and `--approve` them, then run `node <skill-dir>/scripts/gate-check.mjs --reverify` on its leaf ledger before marking the row `verified`, then `node <skill-dir>/scripts/ledger-check.mjs` on the delegation ledger. Without the approval step `--reverify` runs nothing and reports the gate unmet. Report only when both are green: every row `verified` with evidence, every gate met with current automatic evidence. Methods: [references/delegation-method.md](references/delegation-method.md) and [references/method.md](references/method.md).
+When the delegation gate is open, write `DELEGATION.md` from [templates/DELEGATION.md](templates/DELEGATION.md) before any artifact and give every worker brief its own gate ledger from [templates/gates-leaf.md](templates/gates-leaf.md). Reuse the row's acceptance command as that leaf's `CHECK:` and give it an `EXPECT:` there: `ledger-check.mjs` passes a row on exit status alone, so the leaf ledger is where the same command becomes decisive. The two checkers use different shells — `ledger-check.mjs` runs `/bin/bash -o pipefail`, `gate-check.mjs` runs `/bin/sh` (dash on Debian/Ubuntu, no `pipefail`) or `ComSpec` on Windows — so keep the shared command shell-neutral: no pipes and no bashisms, ideally one script invocation. Write each gate's `CHECK:`/`EXPECT:` into the brief itself, plain, and tell the worker to bound its own run of it with a timeout (the recorded `CHECK:` stays unwrapped; `gate-check.mjs` bounds the coordinator's re-run) — a worker cannot see your thread or your approval store. When a worker returns, inspect its oracles and `--approve` them, then run `node <skill-dir>/scripts/gate-check.mjs --reverify` on its leaf ledger before marking the row `verified`, then `node <skill-dir>/scripts/ledger-check.mjs` on the delegation ledger. Without the approval step `--reverify` runs nothing and reports the gate unmet. Report only when both are green: every row `verified` with evidence, every gate met with current automatic evidence. Methods: [references/delegation-method.md](references/delegation-method.md) and [references/method.md](references/method.md).

@@ -28,16 +28,19 @@ Scope is the most important line. A worker told "touch app/stats.py only" cannot
 In a shared repo, parallel workers must not write the same working tree. Two options, in order of preference:
 
 ```bash
-# Worktree: full isolation, independent working directories
-git worktree add -b agent/stats ../wt-stats main
+# Worktree: full isolation, independent working directories.
+# HEAD, not a hardcoded `main`: the default branch may be `master` or `trunk`, and the
+# worker must start from the coordinator's current commit, not from the default branch.
+git worktree add -b agent/stats ../wt-stats HEAD
 
-# Branch only: same working directory, safe only if workers touch disjoint files
-git checkout -b agent/stats
+# Shared tree: no branch per worker. One checkout can hold only one branch at a time, so
+# `git checkout -b` by one worker switches the tree under every other. All workers write
+# the same branch; safe only if they touch disjoint files and never run git themselves.
 ```
 
-Worktrees are strictly safer and are the default recommendation. One writer per worktree. The ledger's "Files (mine)" column is what makes disjoint-branch parallelism safe when worktrees are impractical.
+Worktrees are strictly safer and are the default recommendation. One writer per worktree. The ledger's "Files (mine)" column is what makes shared-tree parallelism safe when worktrees are impractical.
 
-The coordinator is the only one who merges. Workers never merge, never push, never touch git beyond their own commits. Integration is a coordinator act, done after every unit is verified.
+The coordinator is the only one who merges. Workers never merge, never push, never touch git beyond their own commits. Verify each unit in its own worktree, then merge it before running `ledger-check.mjs`: the checker re-runs every `verified` row's acceptance from the ledger's repository root, where an unmerged unit's work does not exist.
 
 ## The verification hierarchy
 

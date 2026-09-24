@@ -94,7 +94,7 @@ cannot meet ends your work honestly: say which one, and why, in your report.
 
 ## Isolation
 
-- Worktree/branch: <e.g. git worktree add -b agent/<slug> ../wt-<slug> main>
+- Worktree/branch: <e.g. git worktree add -b agent/<slug> ../wt-<slug> HEAD>
 - One writer per worktree. Do not merge. The coordinator integrates.
 
 ## Report back
