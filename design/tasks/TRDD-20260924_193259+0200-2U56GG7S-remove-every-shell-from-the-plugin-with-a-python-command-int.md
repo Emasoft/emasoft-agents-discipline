@@ -4,8 +4,8 @@ title: Remove every shell from the plugin with a Python command interpreter and 
 column: dev
 status: tasked
 created: 2026-09-24T19:32:59+0200
-updated: 2026-09-24T19:32:59+0200
-current-owner: user
+updated: 2026-09-24T19:53:04+0200
+current-owner: main-agent@agents-discipline
 created-by: user
 task-type: refactor
 min-approval-requirement: none
