@@ -4,7 +4,7 @@ title: Remove every shell from the plugin with a Python command interpreter and 
 column: dev
 status: tasked
 created: 2026-09-24T19:32:59+0200
-updated: 2026-09-24T19:53:04+0200
+updated: 2026-09-24T23:03:46+0200
 current-owner: main-agent@agents-discipline
 created-by: user
 task-type: refactor
@@ -21,13 +21,13 @@ approval-datetime: 2026-09-24T19:32:59+0200
 
 ## ⤵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-09-24
 
-Step 1 of the no-bash conversion (docs_dev/no-bash-spec.md "Steps" section) is IN PROGRESS /
-landing in this commit: scripts/lib/cmdrun.py (the Python interpreter), tests/cmdrun_tests.py
-(hand-written expected-table unit tests), tests/cmdrun_stress.py (randomized fuzz/stress test).
-NEXT ACTION: step 2 -- the cmdrun.mjs JS twin plus a Node-vs-Python parity test. Steps 3-8
-(ledger-check/gate-check wiring, tests/*.sh ports, git-hooks, docs, Windows push) are not
-started. See the spec body below (pasted verbatim, source of truth until this TRDD's own body
-supersedes a specific clause).
+Step 1 of the no-bash conversion (docs_dev/no-bash-spec.md "Steps" section) was REDONE as the executor v2 design (docs_dev/cmdrun-v2-executor-spec.md, supervisor + anchor worker) after an adversarial audit and advisor review found the v1 executor hung/leaked/lied under 10 High findings -- see the '## Executor v2' section below.
+cmdrun.py, tests/cmdrun_tests.py and tests/cmdrun_stress.py are all v2 now: pyright/ruff clean,
+130 unit-test rows green (one per audit finding H1-H10/M1-M11/L1-L5 and advisor probe
+P1/P2/P6/P7), 3-seed stress run green at --cases 300.
+NEXT ACTION: full tests/cmdrun_stress.py run (all seeds, no --cases cap) by the coordinator
+(not run here -- another agent must not run a full suite concurrently), THEN the Windows
+proof (ask the user to allow pushing a branch) BEFORE step 3, per the spec's own 'Order' section. Steps 2 (JS twin) through 8 are not started. See the spec body below (pasted verbatim).
 
 
 ---
@@ -103,3 +103,22 @@ Exit condition: `git ls-files | xargs file | grep -i "shell script"` is empty, n
 ## Approval log
 
 - 2026-09-24T19:32:59+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Executor v2
+
+Supervisor + anchor worker design; full spec: docs_dev/cmdrun-v2-executor-spec.md.
+Two processes, one timekeeper: cmdrun.py is the threadless supervisor; it validates the
+request, spawns cmdrun.py --exec (the worker) with start_new_session=True, stdin=PIPE
+(the death pipe), stdout=PIPE (the answer), and writes the request as one JSON line.
+The worker's pid IS the one process group of the whole command -- every stage it spawns
+is a plain group-inheriting Popen, no per-stage groups. A daemon thread in the worker reads
+stdin to EOF and SIGKILLs its own group the instant that happens, so a caller's SIGKILL of
+the supervisor reaches the work automatically (closes H4).
+The supervisor is the only timekeeper: on its own deadline, on SIGTERM/SIGHUP/SIGINT, or
+worker exit without a valid answer, it repeats killpg(worker_pid, SIGKILL) until ESRCH under
+one global cleanup deadline (never silent: leaked:true + pgid on exhaustion).
+Windows: Job Object assigned to the worker BEFORE the request line is written; .COM/.EXE
+candidates only; npm/npx trampoline to node + npm-cli.js. Every answer carries tree_kill.
+Closes H1 H2 H3 H4(partly, residual documented) H5 H6 H7 H8 H9 H10 and all advisor probes
+tested on POSIX (P1 P2 P6 P7); full findings-by-finding table in the step-1 report.
+created-by: user is wrong -- a worker minted this card, not the human; the field is write-once.

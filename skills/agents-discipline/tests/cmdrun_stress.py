@@ -25,7 +25,6 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 LIB_DIR = os.path.join(TESTS_DIR, "..", "scripts", "lib")
 CMDRUN = os.path.join(LIB_DIR, "cmdrun.py")
 
-DEFAULT_SEED = 20260924
 # The spec bound is timeout_ms + 2s, measured INSIDE the interpreter/caller pair. This
 # harness measures the whole `python3 cmdrun.py` round trip from OUTSIDE, which also pays
 # for CPython startup and OS scheduling fairness -- under load (e.g. right after this same
@@ -81,14 +80,65 @@ def invoke(command, cwd, mode="gate", timeout_ms=1000, output_limit=200_000, env
         return None, wall, p.stdout, p.stderr
 
 
-def check_one(command, name, cwd, timeout_ms=1000, env=None):
+def check_one(command, name, cwd, timeout_ms=1000, env=None, shrink_on_fail=False):
     """The three universal invariants every case in this file must satisfy."""
+    global failed
+    before = failed
     answer, wall, out, err = invoke(command, cwd, timeout_ms=timeout_ms, env=env)
     budget = (timeout_ms / 1000.0) + 2.0
-    report(answer is not None, f"{name}: exactly one parseable JSON answer", {"stdout": out[:300], "stderr": err[:300]})
-    report(wall <= budget + HARNESS_SLACK, f"{name}: answered within timeout+2s", f"{wall:.2f}s budget={budget:.2f}s")
-    report("Traceback (most recent call last)" not in err, f"{name}: no uncaught exception", err[:500])
+    ok_answer = answer is not None
+    ok_latency = wall <= budget + HARNESS_SLACK
+    ok_no_tb = "Traceback (most recent call last)" not in err
+    report(ok_answer, f"{name}: exactly one parseable JSON answer", {"stdout": out[:300], "stderr": err[:300]})
+    report(ok_latency, f"{name}: answered within timeout+2s", f"{wall:.2f}s budget={budget:.2f}s")
+    report(ok_no_tb, f"{name}: no uncaught exception", err[:500])
+    if shrink_on_fail and failed > before:
+        def still_fails(candidate):
+            a2, w2, _out2, e2 = invoke(candidate, cwd, timeout_ms=timeout_ms, env=env)
+            if not ok_answer and a2 is None:
+                return True
+            if not ok_latency and w2 > budget + HARNESS_SLACK:
+                return True
+            if not ok_no_tb and "Traceback (most recent call last)" in e2:
+                return True
+            return False
+        minimal = shrink(command, still_fails)
+        print(f"SHRUNK  {name}: minimal repro -> {minimal!r}")
     return answer
+
+
+def shrink(command, still_fails, max_rounds=200):
+    """Delta-debug `command` down to (ideally) the smallest string that still makes
+    `still_fails(candidate)` True -- word-by-word removal first (coarse, fast), then halving from
+    the end for cases with no word boundaries (e.g. one giant token). Never raises: a `predicate`
+    that itself errors just stops shrinking early, since a partial reduction is still useful."""
+    current = command
+    for _ in range(max_rounds):
+        changed = False
+        tokens = current.split(" ")
+        if len(tokens) > 1:
+            for i in range(len(tokens)):
+                candidate = " ".join(tokens[:i] + tokens[i + 1 :])
+                try:
+                    if candidate and still_fails(candidate):
+                        current = candidate
+                        changed = True
+                        break
+                except Exception:  # noqa: BLE001 - a broken candidate just ends the shrink early
+                    break
+        if not changed and len(current) > 1:
+            for cut in (len(current) // 2, len(current) - 1):
+                candidate = current[:cut]
+                try:
+                    if candidate and still_fails(candidate):
+                        current = candidate
+                        changed = True
+                        break
+                except Exception:  # noqa: BLE001
+                    break
+        if not changed:
+            break
+    return current
 
 
 # ---------------------------------------------------------------------------
@@ -191,48 +241,78 @@ def ps_snapshot(path):
         subprocess.run(["ps", "-eo", "pid,ppid,pgid,command"], stdout=f, stderr=subprocess.DEVNULL, check=False)
 
 
+def run_one_seed(seed, n_cases, d):
+    """One full pass (named regressions + randomized fuzz) under one seed, its own sentinel
+    marker, and its own baseline/after-grace leak check -- so seeds never share a marker and a
+    leak from seed A can't be misattributed to seed B running concurrently... except nothing here
+    runs concurrently across seeds (spec: never diff whole tables, and running seeds back to back
+    keeps each one's `ps` snapshot unambiguous)."""
+    rng = random.Random(seed)
+    marker = f"cmdrun-stress-{seed}-{os.getpid()}"
+
+    baseline_path = os.path.join(d, f"ps-before-{seed}.txt")
+    ps_snapshot(baseline_path)
+    with open(baseline_path, encoding="utf-8") as f:
+        report(marker not in f.read(), f"seed {seed}: sentinel marker absent before any command runs (baseline)")
+
+    # -- Named regressions first (each targets exactly one documented failure mode) -------------
+    for name, cmd, timeout_ms in named_cases(d, marker):
+        check_one(cmd, f"seed{seed}/{name}", d, timeout_ms=timeout_ms)
+
+    # Descendant-leak check for the cases above that spawn something long-lived: give the kill a
+    # moment to land (the answer already blocked on the supervisor's own cleanup deadline before
+    # returning -- this grace period is only for kernel zombie-reaping bookkeeping afterwards, not
+    # for waiting out a child's full sleep), then prove the marker is gone from the WHOLE process
+    # table (not just cmdrun's own subtree -- a leaked descendant may have been re-parented to
+    # pid 1). Never a whole-table diff -- only ever "is this one unique string present".
+    time.sleep(0.5)
+    after_path = os.path.join(d, f"ps-after-{seed}.txt")
+    ps_snapshot(after_path)
+    with open(after_path, encoding="utf-8") as f:
+        table = f.read()
+    report(marker not in table, f"seed {seed}: no descendant left alive after SIGTERM-ignorer / fork-bomb / detached grandchild",
+           f"marker {marker!r} still present in the process table")
+
+    # -- Randomized fuzz ---------------------------------------------------------------------------
+    n_random = int(n_cases * 0.6)
+    n_safe = n_cases - n_random
+    for i in range(n_random):
+        cmd = random_command(rng)
+        timeout_ms = rng.choice([200, 500, 1000])
+        check_one(cmd, f"seed{seed}/fuzz#{i}", d, timeout_ms=timeout_ms, shrink_on_fail=True)
+    for i in range(n_safe):
+        cmd = safe_command(rng)
+        timeout_ms = rng.choice([300, 800])
+        check_one(cmd, f"seed{seed}/safe-fuzz#{i}", d, timeout_ms=timeout_ms, shrink_on_fail=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--cases", type=int, default=DEFAULT_CASES)
+    parser.add_argument("--seed", type=int, default=None,
+                         help="run exactly this one seed (reproduce a specific failure); "
+                              "default: 3 random seeds per run")
+    parser.add_argument("--cases", type=int, default=DEFAULT_CASES,
+                         help="total fuzz cases, split evenly across the seeds run")
     args = parser.parse_args()
-    rng = random.Random(args.seed)
+
+    if args.seed is not None:
+        seeds = [args.seed]
+    else:
+        seeds = [random.SystemRandom().randrange(1, 2**31) for _ in range(3)]
+    print(f"seeds: {seeds}")
 
     d = tempfile.mkdtemp(prefix="cmdrun-stress-")
     with open(os.path.join(d, "a.txt"), "w", encoding="utf-8") as f:
         f.write("a\n")
 
-    marker = f"cmdrun-stress-{args.seed}-{os.getpid()}"
+    n_per_seed = max(1, args.cases // len(seeds))
+    for seed in seeds:
+        run_one_seed(seed, n_per_seed, d)
 
-    # -- Named regressions first (each targets exactly one documented failure mode) -------------
-    for name, cmd, timeout_ms in named_cases(d, marker):
-        check_one(cmd, name, d, timeout_ms=timeout_ms)
-
-    # Descendant-leak check for the three cases above that spawn something long-lived: give the
-    # kill a moment to land, then prove the marker is gone from the WHOLE process table (not just
-    # cmdrun's own subtree -- a leaked descendant may have been re-parented to pid 1).
-    time.sleep(0.5)
-    snap_path = os.path.join(d, "ps-after.txt")
-    ps_snapshot(snap_path)
-    with open(snap_path, encoding="utf-8") as f:
-        table = f.read()
-    report(marker not in table, "no descendant left alive after SIGTERM-ignorer / fork-bomb / detached grandchild",
-           f"marker {marker!r} still present in the process table")
-
-    # -- Randomized fuzz ---------------------------------------------------------------------------
-    n = args.cases
-    n_random = int(n * 0.6)
-    n_safe = n - n_random
-    for i in range(n_random):
-        cmd = random_command(rng)
-        timeout_ms = rng.choice([200, 500, 1000])
-        check_one(cmd, f"fuzz#{i}", d, timeout_ms=timeout_ms)
-    for i in range(n_safe):
-        cmd = safe_command(rng)
-        timeout_ms = rng.choice([300, 800])
-        check_one(cmd, f"safe-fuzz#{i}", d, timeout_ms=timeout_ms)
-
-    print(f"\n{checked} checks, {failed} failing" if failed else f"\n{checked} checks, all green (seed={args.seed}, cases={n})")
+    if failed:
+        print(f"\n{checked} checks, {failed} failing (seeds={seeds}, cases/seed={n_per_seed})")
+    else:
+        print(f"\n{checked} checks, all green (seeds={seeds}, cases/seed={n_per_seed})")
     sys.exit(1 if failed else 0)
 
 
