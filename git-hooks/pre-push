@@ -30,6 +30,35 @@ import sys
 
 ZERO = "0" * 40
 
+
+def _child_exit_code(returncode: int) -> int:
+    """Map a subprocess returncode to a shell-style exit status.
+
+    Python's subprocess.returncode is negative (-N) when the child was
+    killed by signal N; sh's `exit $?` instead reports 128+N for a
+    signalled child, per POSIX convention. Without this mapping a killed
+    gate/scan child would make the hook itself exit with an invalid
+    negative status (Python then reduces it mod 256, silently changing
+    which signal it looks like), instead of the standard >128 signature
+    a caller can recognize and diff against a graceful exit.
+    """
+    if returncode < 0:
+        return 128 - returncode
+    return returncode
+
+
+def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run, flushing our own buffered output first.
+
+    Without this a child's stdout/stderr (inherited, unbuffered pipes)
+    can land on the terminal before this hook's own already-buffered
+    print() lines, showing the hook's messages after the child's even
+    though they were printed first.
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    return subprocess.run(cmd, **kwargs)
+
 # POSIX-only patterns matching the old bash `case "$(uname -s)"` list exactly
 # (fnmatch so the trailing `*` wildcards on CYGWIN/MSYS/MINGW still work).
 _POSIX_UNAME_PATTERNS = [
@@ -41,7 +70,7 @@ _POSIX_UNAME_PATTERNS = [
 def _uname_s() -> str:
     """Return `uname -s` output, or "unknown" if uname is unavailable/fails."""
     try:
-        result = subprocess.run(
+        result = _run(
             ["uname", "-s"], capture_output=True, text=True, check=False
         )
     except OSError:
@@ -53,7 +82,7 @@ def _uname_s() -> str:
 
 def _git_rev_parse_verify(ref: str) -> str | None:
     """`git rev-parse --verify --quiet <ref>` — the resolved sha, or None."""
-    result = subprocess.run(
+    result = _run(
         ["git", "rev-parse", "--verify", "--quiet", ref],
         capture_output=True, text=True, check=False,
     )
@@ -67,8 +96,10 @@ def run_release_gate() -> int:
     if shutil.which("uv"):
         cmd = ["uv", "run", "python", "scripts/publish.py", "--gate"]
     else:
-        cmd = ["python3", "scripts/publish.py", "--gate"]
-    return subprocess.run(cmd, check=False).returncode
+        # sys.executable, not "python3": stock Windows ships no python3.exe,
+        # only the interpreter already running this hook is guaranteed to exist.
+        cmd = [sys.executable, "scripts/publish.py", "--gate"]
+    return _child_exit_code(_run(cmd, check=False).returncode)
 
 
 def secret_scan_range(
@@ -140,7 +171,7 @@ def secret_scan_range(
     if base:
         cmd += ["--since-commit", base]
     cmd += ["--branch", short_branch, "--no-update", "--fail"]
-    return subprocess.run(cmd, check=False).returncode
+    return _child_exit_code(_run(cmd, check=False).returncode)
 
 
 def main() -> int:
@@ -149,6 +180,13 @@ def main() -> int:
     # Windows. Refusing with an explicit message is the honest outcome;
     # silently failing the ancestry probe would block every push including
     # publish.py's own, with no reason given.
+    # `uname`, not sys.platform: Git for Windows' MINGW/MSYS bash environments
+    # both run `uname` (reporting e.g. "MINGW64_NT-...", matched by the
+    # MINGW*/MSYS* patterns above) and are POSIX-enough for this hook's
+    # ancestry probe, exactly like the sh original allowed. sys.platform
+    # would report "win32" there regardless, indistinguishably from stock
+    # Windows, and would wrongly refuse a Git-for-Windows push that the sh
+    # hook always accepted.
     if not any(fnmatch.fnmatch(_uname_s(), p) for p in _POSIX_UNAME_PATTERNS):
         print(
             "publish.py canon is POSIX-only (macOS/Linux); Windows is unsupported",
@@ -156,7 +194,7 @@ def main() -> int:
         )
         return 1
 
-    repo_root_result = subprocess.run(
+    repo_root_result = _run(
         ["git", "rev-parse", "--show-toplevel"],
         capture_output=True, text=True, check=False,
     )
@@ -171,7 +209,7 @@ def main() -> int:
 
     # Default branch name from origin/HEAD (e.g. "main"/"master"), or empty.
     default_branch = ""
-    dbr = subprocess.run(
+    dbr = _run(
         ["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
         capture_output=True, text=True, check=False,
     )
@@ -184,8 +222,13 @@ def main() -> int:
     saw_feature = False
     scan_failed = False
 
-    # git feeds "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin.
-    for raw_line in sys.stdin:
+    # git feeds "<local ref> <local sha> <remote ref> <remote sha>" lines on
+    # stdin. Read raw bytes and decode with surrogateescape: a ref name is
+    # only "usually UTF-8" (git allows arbitrary bytes in a ref), and text
+    # mode would raise UnicodeDecodeError on a stray non-UTF-8 byte, crashing
+    # the hook and blocking every push instead of just gating that one ref.
+    for raw_bytes in sys.stdin.buffer:
+        raw_line = raw_bytes.decode("utf-8", errors="surrogateescape")
         fields = raw_line.split()
         fields += [""] * (4 - len(fields))
         localref, localsha, remoteref, remotesha = fields[:4]
