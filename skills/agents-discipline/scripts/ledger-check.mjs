@@ -297,8 +297,24 @@ function existingArtifactsIn(block, bases) {
 // also accepts a non-ES `+0200` offset. Shape: YYYY-MM-DD, `T` or a space, HH:mm, optional
 // :ss with optional .fraction, optional Z/+HH:mm/+HHmm. Hour 24 legal ONLY as exactly
 // 24:00[:00[.0...]] (next-day midnight) -- checked separately below, never by the shape alone.
+// Year must be 1970-2999 inclusive, else the stamp is skipped -- checked separately below,
+// never by the shape alone. Two reasons: (1) Python's next-day rollover on 24:00 does
+// `dt += timedelta(days=1)`, which raises an uncaught OverflowError once `dt` is already
+// datetime.max's day (year 9999); (2) a naive (no-offset) datetime's `.timestamp()` goes
+// through the platform C `mktime`/`localtime`, which raises OSError on Windows for years well
+// before 1970 or past roughly 3000, while Node's `Date` has no such limit -- so without a
+// shared cap the two runtimes would diverge by engine instead of agreeing the stamp is invalid.
+// This range also replaces (not stacks on top of) the old bare `year < 100` guard: `\d{4}`
+// alone let `year` through as low as 0, where `new Date(0, ...)` (JS: silently maps years 0-99
+// to 1900-1999, a documented `Date` legacy footgun) and `datetime(0, ...)` (Python: raises)
+// disagree on what a low 4-digit year even means -- 1970-2999 already excludes that whole
+// ambiguous range, so a second, narrower guard added nothing.
+// The offset sign, hours and minutes are captured directly here (groups 8-10) instead of via a
+// second regex re-parsed from a combined offset group -- a stamp that matched this grammar's
+// offset shape cannot then fail to match a laxer copy of the same shape, so the second parse
+// was always either redundant or (if it ever drifted from this one) a silent divergence.
 const CREATED_STAMP_RE =
-  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(Z|[+-]\d{2}:?\d{2})?$/;
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:(Z)|([+-])(\d{2}):?(\d{2}))?$/;
 
 function isLeapYear(y) {
   return y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0);
@@ -317,13 +333,13 @@ function daysInMonth(y, m) {
 function parseCreatedStamp(raw) {
   const m = CREATED_STAMP_RE.exec(raw);
   if (!m) return null;
-  const [, yS, moS, dS, hS, miS, sS, fracS, offS] = m;
+  const [, yS, moS, dS, hS, miS, sS, fracS, zFlag, offSign, offHS, offMS] = m;
   const year = Number(yS), month = Number(moS), day = Number(dS);
   const hour = Number(hS), minute = Number(miS), second = sS !== undefined ? Number(sS) : 0;
-  // `\d{4}` alone lets `year` through as low as 0; `new Date(0, ...)` silently maps years 0-99
-  // to 1900-1999 (a documented `Date` legacy footgun), while Python's `datetime(0, ...)` raises.
-  // Excluded here instead of letting either engine guess what a low 4-digit year means.
-  if (year < 100) return null;
+  // See the grammar comment above CREATED_STAMP_RE: outside 1970-2999 either runtime can
+  // raise on a stamp that is otherwise well-formed, so the range is part of the grammar
+  // rather than a try/catch bolted around the arithmetic below.
+  if (year < 1970 || year > 2999) return null;
   if (month < 1 || month > 12) return null;
   if (day < 1 || day > daysInMonth(year, month)) return null;
   if (minute > 59 || second > 59) return null;
@@ -339,13 +355,12 @@ function parseCreatedStamp(raw) {
     return null;
   }
   let offsetMinutes = null;
-  if (offS === "Z") {
+  if (zFlag) {
     offsetMinutes = 0;
-  } else if (offS) {
-    const om = /^([+-])(\d{2}):?(\d{2})$/.exec(offS);
-    const oh = Number(om[2]), omin = Number(om[3]);
+  } else if (offSign) {
+    const oh = Number(offHS), omin = Number(offMS);
     if (oh > 23 || omin > 59) return null;
-    offsetMinutes = (om[1] === "-" ? -1 : 1) * (oh * 60 + omin);
+    offsetMinutes = (offSign === "-" ? -1 : 1) * (oh * 60 + omin);
   }
   const fracMs = fracS ? Number(`0.${fracS}`) * 1000 : 0;
   const wallHour = nextDay ? 0 : hour;
@@ -378,8 +393,36 @@ if (rows.some((r) => r.status === "verified")) {
   // both, `date -u +%FT%TZ` writes the `Z` alone; dropping the `Z` made a UTC stamp parse as LOCAL time,
   // so on a machine west of UTC every artifact produced in the first hours read "older than the
   // ledger" and an honest ledger failed.
-  const createdM = text.match(/^Created:?\s+(\d{4}-\d{2}-\d{2}[T ][\d:]+(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/m);
-  const createdInstant = createdM ? parseCreatedStamp(createdM[1].replace(" ", "T")) : null;
+  // A `Created:` line's mandatory separator (`\s+` after the optional colon) is the anchor: a
+  // line that doesn't even have that shape is not a `Created:` line at all, and falls into the
+  // "no Created: line" branch below rather than erroring on something that was never meant to
+  // be a date. Its Python mirror is CREATED_LINE, a SEPARATE regex with the same anchor written
+  // out longhand (Python's `^`/`/m` can't be relied on to agree with JS's, see CREATED's own
+  // comment) -- if this line's anchor ever changes, change CREATED_LINE the same commit.
+  const createdLineM = text.match(/^Created:?\s+(.*)$/m);
+  let createdInstant = null;
+  if (createdLineM) {
+    const rest = createdLineM[1];
+    // The trailing `(?=\s|$)` is load-bearing: without it, `Created: 2099-09-24T10:00+2` captures
+    // only `2099-09-24T10:00` and silently drops `+2`, so a malformed stamp is read as a valid
+    // LOCAL time instead of being rejected. Stopping at the next whitespace (or end of line)
+    // also lets a `Created:` line carry trailing prose after a well-formed stamp.
+    const stampM = /^(\d{4}-\d{2}-\d{2}[T ][\d:]+(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)(?=\s|$)/.exec(rest);
+    const candidate = stampM ? stampM[1] : rest.trim();
+    createdInstant = stampM ? parseCreatedStamp(candidate) : null;
+    if (createdInstant === null) {
+      // A `Created:` line that is present but not a real, in-grammar stamp used to be silently
+      // treated the same as no line at all -- the staleness rule just went quiet. That let a
+      // typo'd date defeat the one check that catches stale, re-cited evidence. A line that
+      // exists and is wrong is a ledger defect, not a shrug.
+      fail(1, `agents-discipline: Created: ${candidate} is not a real date -- fix it or remove the line`);
+    }
+  } else {
+    // stdout, not stderr: this is a successful run's own report (like the summary below), not
+    // a failure -- a warning that only showed up on stderr would be invisible to a caller that
+    // pipes just stdout, which is exactly the audience this line exists to reach.
+    console.log("agents-discipline: no Created: date -- the file-age check was skipped");
+  }
 
   // Resolution walks UP from the ledger, because a cited path is written relative to the
   // PROJECT, not to wherever the ledger happens to sit. `reports/agents-discipline/DELEGATION.md`

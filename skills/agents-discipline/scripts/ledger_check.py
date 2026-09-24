@@ -224,6 +224,25 @@ CREATED = re.compile(
     r"(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]))Created:?" + JS_WS_CLASS
     # Fraction and `Z` captured, mirroring the oracle: a dropped `Z` read a UTC stamp as local.
     + r"+([0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:]+(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:?[0-9]{2})?)"
+    # Mirrors the oracle's trailing `(?=\s|$)`: without it, `Created: 2099-...T10:00+2` captures
+    # only up to `10:00` and silently drops `+2`, reading a malformed stamp as a valid LOCAL
+    # time. JS_WS_CLASS already contains every character JS's `\s` does (including the four
+    # line terminators used above), so reusing it here -- rather than a bare `$` -- gives the
+    # same "ends at whitespace or end of text" semantics the oracle gets from `\s` under `/m`.
+    + r"(?=" + JS_WS_CLASS + r"|$)"
+)
+# Same anchor as CREATED, above, but capturing whatever follows the mandatory separator instead
+# of requiring it to already look like a stamp -- this is what tells a `Created:` line that
+# exists but is garbage ("Created: not-a-date") apart from no `Created:` line at all. The former
+# is a ledger defect (fail loud); the latter just means the staleness rule has nothing to check
+# (warn and move on). Reusing CREATED's exact anchor keeps the "is there a Created: line" verdict
+# identical to the one CREATED itself would reach, rather than a second guess at the same anchor.
+# ADVERSARIAL-REVIEW: this anchor is copy-pasted from CREATED's, not shared code -- a future fix
+# to CREATED's line-terminator or whitespace handling (the kind d1011f0/17dd2de made) that does
+# not touch this regex too silently reintroduces a presence/extraction disagreement. If CREATED's
+# anchor ever changes, change this one in the same commit.
+CREATED_LINE = re.compile(
+    r"(?:^|(?<=[\n\r\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}]))Created:?" + JS_WS_CLASS + r"+(.*)"
 )
 
 # Created-stamp grammar, declared ONCE and ported line-for-line to ledger-check.mjs's
@@ -234,16 +253,26 @@ CREATED = re.compile(
 # or a space, HH:mm, optional :ss with optional .fraction, optional Z/+HH:mm/+HHmm. Hour 24
 # legal ONLY as exactly 24:00[:00[.0...]] (next-day midnight) -- checked separately below,
 # never by the shape alone.
-# `re.ASCII` is load-bearing, not decoration: without it Python's `\d` matches every Unicode
-# decimal digit (Arabic-Indic, full-width, ...) while JS's `\d` in ledger-check.mjs is
-# ASCII-only, so a stamp built from non-ASCII digits would parse here and be rejected there --
-# the exact class of engine-quirk divergence this whole grammar exists to remove.
+# Year must be 1970-2999 inclusive, else the stamp is skipped -- checked separately below,
+# never by the shape alone. Two reasons: (1) the next-day rollover on 24:00 does
+# `dt += timedelta(days=1)`, which raises an uncaught OverflowError once `dt` is already
+# datetime.max's day (year 9999); (2) a naive (no-offset) datetime's `.timestamp()` goes
+# through the platform C `mktime`/`localtime`, which raises OSError on Windows for years well
+# before 1970 or past roughly 3000, while Node's `Date` has no such limit -- so without a
+# shared cap the two runtimes would diverge by engine instead of agreeing the stamp is invalid.
+# This range also replaces (not stacks on top of) the old bare `year < 100` guard: `\d{4}`
+# alone let `year` through as low as 0, where `datetime(0, ...)` (Python: raises ValueError) and
+# `new Date(0, ...)` (JS: silently maps years 0-99 to 1900-1999, a documented `Date` legacy
+# footgun) disagree on what a low 4-digit year even means -- 1970-2999 already excludes that
+# whole ambiguous range, so a second, narrower guard added nothing.
+# The offset sign, hours and minutes are captured directly here (groups 9-11) instead of via a
+# second regex re-parsed from group 8's text -- a stamp that matched this grammar's offset shape
+# cannot then fail to match a laxer copy of the same shape, so the second parse was always
+# either redundant or (if it ever drifted from this one) a silent source of divergence.
 CREATED_STAMP_RE = re.compile(
     r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[T ]([0-9]{2}):([0-9]{2})"
-    r"(?::([0-9]{2})(?:\.([0-9]+))?)?(Z|[+-][0-9]{2}:?[0-9]{2})?$",
-    re.ASCII,
+    r"(?::([0-9]{2})(?:\.([0-9]+))?)?(?:(Z)|([+-])([0-9]{2}):?([0-9]{2}))?$"
 )
-_OFFSET_RE = re.compile(r"^([+-])([0-9]{2}):?([0-9]{2})$", re.ASCII)
 
 
 def _is_leap_year(y):
@@ -266,15 +295,14 @@ def parse_created_stamp(raw):
     m = CREATED_STAMP_RE.match(raw)
     if not m:
         return None
-    y_s, mo_s, d_s, h_s, mi_s, s_s, frac_s, off_s = m.groups()
+    y_s, mo_s, d_s, h_s, mi_s, s_s, frac_s, z_flag, off_sign, oh_s, om_s = m.groups()
     year, month, day = int(y_s), int(mo_s), int(d_s)
     hour, minute = int(h_s), int(mi_s)
     second = int(s_s) if s_s is not None else 0
-    # `\d{4}` alone lets `year` through as low as 0; both `datetime(0, ...)` (Python: raises
-    # ValueError) and `new Date(0, ...)` (JS: silently maps years 0-99 to 1900-1999, a documented
-    # `Date` legacy footgun) disagree on what a low 4-digit year even means, so this grammar
-    # excludes the ambiguous range instead of letting either engine guess.
-    if year < 100:
+    # See the grammar comment above CREATED_STAMP_RE: outside 1970-2999 either runtime can
+    # raise on a stamp that is otherwise well-formed, so the range is part of the grammar
+    # rather than a try/except bolted around the arithmetic below.
+    if year < 1970 or year > 2999:
         return None
     if not (1 <= month <= 12):
         return None
@@ -296,15 +324,13 @@ def parse_created_stamp(raw):
     elif hour > 23:
         return None
     offset_minutes = None
-    if off_s == "Z":
+    if z_flag:
         offset_minutes = 0
-    elif off_s:
-        om = _OFFSET_RE.match(off_s)
-        assert om is not None  # off_s already matched CREATED_STAMP_RE's offset group, so this always matches
-        oh, omin = int(om.group(2)), int(om.group(3))
+    elif off_sign:
+        oh, omin = int(oh_s), int(om_s)
         if oh > 23 or omin > 59:
             return None
-        offset_minutes = (-1 if om.group(1) == "-" else 1) * (oh * 60 + omin)
+        offset_minutes = (-1 if off_sign == "-" else 1) * (oh * 60 + omin)
     frac_ms = float("0." + frac_s) * 1000 if frac_s else 0.0
     dt = datetime(year, month, day, 0 if next_day else hour, minute, second)
     if next_day:
@@ -641,12 +667,30 @@ if any(r["status"] == "verified" for r in rows):
     # staleness rule is skipped rather than guessed -- a check that invents its own baseline
     # would fail honest ledgers, and a gate that cries wolf gets deleted.
     created_ms = None
-    cm = CREATED.search(text)
-    if cm:
+    created_line_m = CREATED_LINE.search(text)
+    if created_line_m:
         # Both runtimes now validate against the ONE declared grammar (CREATED_STAMP_RE, above)
         # instead of each engine's own date parser, so parity no longer depends on fromisoformat
         # and Date.parse happening to agree on which stamps are real.
-        created_ms = parse_created_stamp(cm.group(1).replace(" ", "T"))
+        cm = CREATED.search(text)
+        created_ms = parse_created_stamp(cm.group(1)) if cm else None
+        if created_ms is None:
+            # A `Created:` line that is present but not a real, in-grammar stamp used to be
+            # silently treated the same as no line at all -- the staleness rule just went quiet.
+            # That let a typo'd date defeat the one check that catches stale, re-cited evidence.
+            # A line that exists and is wrong is a ledger defect, not a shrug.
+            # `.strip(JS_TRIM)`, never a bare `.strip()`: Python's default strip set and JS's
+            # `.trim()` set disagree in BOTH directions (see JS_TRIM's own definition, above) --
+            # a bare `.strip()` here would silently remove a pad character (e.g. U+001C) that
+            # ledger-check.mjs's `.trim()` leaves in place, so the two runtimes would name a
+            # DIFFERENT bad stamp for byte-identical input.
+            bad = cm.group(1) if cm else created_line_m.group(1).strip(JS_TRIM)
+            fail(1, f"agents-discipline: Created: {bad} is not a real date -- fix it or remove the line")
+    else:
+        # stdout, not stderr: this is a successful run's own report (like the summary below), not
+        # a failure -- a warning that only showed up on stderr would be invisible to a caller
+        # that pipes just stdout, which is exactly the audience this line exists to reach.
+        print("agents-discipline: no Created: date -- the file-age check was skipped")
 
     for p in artifact_paths:
         cands = [p] if os.path.isabs(p) else [os.path.join(b, p) for b in bases]
@@ -661,7 +705,11 @@ if any(r["status"] == "verified" for r in rows):
         # using the FIRST stat. The oracle asks its one stat object; so does this.
         if statmod.S_ISREG(st.st_mode) and st.st_size == 0:
             empty_artifacts.append(p)
-        elif created_ms is not None and st.st_mtime * 1000 < created_ms:
+        # `st_mtime_ns / 1e6`, not `st_mtime * 1000`: `st_mtime` is a float truncated from the
+        # same nanosecond count, so multiplying it back up loses precision `mtimeMs` (Node) never
+        # did -- a Created stamp landing inside that lost fraction could read either side of it
+        # depending on which runtime ran the check.
+        elif created_ms is not None and st.st_mtime_ns / 1e6 < created_ms:
             stale_artifacts.append(p)
     artifacts_ok = not (missing_artifacts or empty_artifacts or stale_artifacts)
 

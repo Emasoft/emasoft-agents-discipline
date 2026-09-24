@@ -57,7 +57,18 @@ try {
 const cases = [
   { name: "template (incomplete)", file: "templates/DELEGATION.md", want: 1 },
   { name: "partial ledger", file: "tests/fixtures/partial.md", want: 1 },
-  { name: "complete ledger", file: "tests/fixtures/complete.md", want: 0 },
+  {
+    // This fixture has no `Created:` line at all -- the DECISION's other half: absence keeps
+    // the ledger passing (the staleness rule genuinely has nothing to check), but now prints a
+    // visible warning instead of quietly doing nothing, so a coordinator who forgot the line
+    // finds out without the ledger being failed for an absence that was never a grammar
+    // violation (that's reserved for a line that's PRESENT and wrong -- the table below).
+    name: "complete ledger",
+    file: "tests/fixtures/complete.md",
+    want: 0,
+    expect: ["no Created: date", "file-age check was skipped"],
+    reject: ["is not a real date"],
+  },
   { name: "not a ledger", file: "SECURITY.md", want: 2 },
   { name: "junk evidence rejected", file: "tests/fixtures/evidence-junk.md", want: 1 },
   { name: "real evidence accepted", file: "tests/fixtures/evidence-real.md", want: 0 },
@@ -479,7 +490,16 @@ const cases = [
     // other case in the suite. The case below ARMS it.
     name: "copy the template and flip every status: still fails",
     file: "templates/DELEGATION.md",
-    mutate: (t) => t.replace(/\| pending \|/g, "| verified |"),
+    // The template's own `Created:` line is a placeholder ("<ISO 8601, e.g. ...>"), never a
+    // real date. Flipping every row to `verified` makes the staleness branch run at all, and
+    // since the DECISION a present-but-invalid `Created:` line now fails the ledger outright --
+    // exactly what would happen to an unedited copy-paste, but not what THIS case is testing.
+    // Filling in a real (past) stamp keeps the case on the evidence/UNBACKED assertion it exists
+    // to make.
+    mutate: (t) =>
+      t
+        .replace(/\| pending \|/g, "| verified |")
+        .replace(/^Created:.*$/m, "Created: 2020-01-01T00:00:00Z"),
     want: 1,
     // Needed for the UNBACKED assertion -- that verdict lives inside the re-run block.
     // Safe: every Acceptance cell is the placeholder `<command>`, which has no whitespace,
@@ -502,9 +522,13 @@ const cases = [
     // Going through the checker asserts the route it actually uses.
     name: "template rules text scores strong when not skipped (arms the persistence gate)",
     file: "templates/DELEGATION.md",
+    // Same placeholder-`Created:` fix as the case above -- flipping rows to `verified` arms
+    // the staleness branch, and the template's placeholder date must not be what this case is
+    // measuring.
     mutate: (t) =>
       t
         .replace(/\| pending \|/g, "| verified |")
+        .replace(/^Created:.*$/m, "Created: 2020-01-01T00:00:00Z")
         .replace("## Rules of this ledger", "## Notes on this ledger"),
     want: 0,
     expect: ["evidence:    present"],
@@ -766,12 +790,14 @@ const cases = [
     // hour 24 is legal ISO only as exactly 24:00:00, and Date.parse returns NaN for this one
     // (measured). A rewrite loose enough to accept it — the `(:.*)?` this replaced — makes
     // the port ENFORCE staleness where the oracle skips it, and this pair is what says so:
-    // both cases would then report stale, and only one of them should.
-    name: "hour 24 with a non-zero second skips the rule, as Date.parse does",
+    // both cases would then report stale, and only one of them should. Since the DECISION, an
+    // out-of-grammar `Created:` line that is PRESENT fails the ledger outright instead of
+    // silently skipping the rule, so this control now reads "invalid stamp", not "complete".
+    name: "hour 24 with a non-zero second fails the ledger as an invalid Created stamp",
     file: "tests/fixtures/created-unparseable.md",
-    want: 0,
-    expect: ["artifacts:   1 cited, all present"],
-    reject: ["older than the ledger"],
+    want: 1,
+    expect: ["is not a real date", "2099-01-01T24:00:01"],
+    reject: ["older than the ledger", "artifacts:   1 cited, all present"],
   },
   {
     // Guards the port's fraction handling on the T24 rewrite:
@@ -792,75 +818,91 @@ const cases = [
   },
   // Table-driven: every `Created:` stamp shape parity.sh measured Node's Date.parse against.
   // Each stamp is dated 2099 so a parsed (non-NaN) stamp always makes `tests/fixtures/complete.md`
-  // read "older than the ledger", and an unparsed (NaN) stamp always leaves the rule skipped
-  // ("ledger complete") -- the same two-outcome probe the single-stamp cases above use, run
-  // over the full set parity.sh checked instead of one stamp at a time.
+  // read "older than the ledger", and an out-of-grammar stamp now FAILS the ledger outright
+  // (exit 1, naming the stamp) instead of silently skipping the staleness rule -- a `Created:`
+  // line that is present but wrong is a ledger defect, not something to shrug past. Only a
+  // ledger with NO `Created:` line at all gets the quieter "skipped" treatment, covered by its
+  // own case below the table.
   ...[
     ["2099-09-24T24:00:00.000Z", "stale"],
     ["2099-09-24T24:00:00.0Z", "stale"],
     ["2099-09-24T24:00:00.0000000Z", "stale"],
-    ["2099-09-24T24:00:00.5Z", "skip"],
-    ["2099-09-24T24:00.000Z", "skip"],
+    ["2099-09-24T24:00:00.5Z", "invalid"],
+    ["2099-09-24T24:00.000Z", "invalid"],
     ["2099-09-24T24:00:00.000+02:00", "stale"],
     ["2099-09-24T24:00:00.000+0200", "stale"],
-    ["2099-09-24T24.000Z", "skip"],
+    ["2099-09-24T24.000Z", "invalid"],
     ["2099-09-24T24:00:00", "stale"],
     ["2099-09-24T24:00:00.000", "stale"],
     ["2099-09-24T10:00:00.5Z", "stale"],
     ["2099-09-24T10:00:00.1234567Z", "stale"],
     ["2099-09-24T10:00:00.1234567", "stale"],
-    ["2099-09-24T10:00.5Z", "skip"],
+    ["2099-09-24T10:00.5Z", "invalid"],
     ["2099-09-24T10:00:00.123+0200", "stale"],
     ["2099-09-24T10:00:00+0200", "stale"],
     ["2099-09-24 10:00:00.5Z", "stale"],
-    ["2099-09-24T10Z", "skip"],
+    ["2099-09-24T10Z", "invalid"],
     ["2099-09-24T10:00Z", "stale"],
     // Calendar-validity probes (TRDD: the Created grammar is now declared once and validated
     // the same way in both runtimes, instead of leaning on fromisoformat/Date.parse -- Node's
     // Date.parse used to roll an impossible date over instead of rejecting it).
-    ["2026-02-30T10:00Z", "skip"], // February never has a 30th
-    ["2026-04-31T10:00Z", "skip"], // April has 30 days
-    ["2026-02-29T10:00Z", "skip"], // 2026 is not a leap year
-    ["2028-02-29T10:00Z", "stale"], // 2028 is a leap year (divisible by 4, not a century)
-    ["2026-13-01T10:00Z", "skip"], // month 13 does not exist
+    ["2026-02-30T10:00Z", "invalid"], // February never has a 30th
+    ["2026-04-31T10:00Z", "invalid"], // April has 30 days
+    ["2026-02-29T10:00Z", "invalid"], // 2026 is not a leap year
+    // Dated 2096, not 2028: 2028 is a time bomb -- a leap year today, but the row would go
+    // silently red once 2028 itself is in the past and the "future date" assumption above it
+    // (every 2099-dated stamp is newer than "now") stops holding for THIS one row alone. 2096
+    // buys the same century's worth of runway the 2099 rows already assume.
+    ["2096-02-29T10:00Z", "stale"], // 2096 is a leap year (divisible by 4, not a century)
+    // The century rule, both directions: 2100 is divisible by 4 but NOT by 400, so it is NOT a
+    // leap year (a bare `y % 4 === 0` would wrongly accept Feb 29 here); 2400 is divisible by
+    // both, so it IS one. Without both rows, a broken century check (`y % 4 === 0` alone) passes
+    // every leap-year case in this table -- 2400 is the only one where the two rules disagree.
+    ["2100-02-29T10:00Z", "invalid"], // 2100 is divisible by 100 but not by 400: not a leap year
+    ["2400-02-29T10:00Z", "stale"], // 2400 is divisible by 400: a leap year
+    ["2026-13-01T10:00Z", "invalid"], // month 13 does not exist
     // Shape probes: single-digit hour/minute/second, a double colon, an extra field, hour 24
-    // without its mandatory minute, and malformed offsets -- each must be skipped, never guessed.
-    ["2099-09-24T25:00Z", "skip"],
-    ["2099-09-24T10:60Z", "skip"],
-    ["2099-09-24T1:00Z", "skip"],
-    ["2099-09-24T10:0Z", "skip"],
-    ["2099-09-24T10:00:0Z", "skip"],
-    ["2099-09-24T10::00Z", "skip"],
-    ["2099-09-24T10:00:00:00", "skip"],
-    ["2099-09-24T24Z", "skip"],
-    ["2099-09-24T24", "skip"],
-    // A malformed 1-digit offset never reaches the grammar at all: the CREATED extraction
-    // regex's offset group requires 2 digits and, unanchored, simply stops capturing before
-    // the "+2" it can't match -- leaving the bare, VALID "...T10:00" behind. Same truncation
-    // in both runtimes (measured), so this is parity, not a hole the grammar needs to close.
-    ["2099-09-24T10:00+2", "stale"],
-    ["2099-09-24T10:00+25:00", "skip"],
+    // without its mandatory minute, and malformed offsets -- each must fail the ledger, never
+    // be guessed at.
+    ["2099-09-24T25:00Z", "invalid"],
+    ["2099-09-24T10:60Z", "invalid"],
+    ["2099-09-24T1:00Z", "invalid"],
+    ["2099-09-24T10:0Z", "invalid"],
+    ["2099-09-24T10:00:0Z", "invalid"],
+    ["2099-09-24T10::00Z", "invalid"],
+    ["2099-09-24T10:00:00:00", "invalid"],
+    ["2099-09-24T24Z", "invalid"],
+    ["2099-09-24T24", "invalid"],
+    // The extraction regex now requires the captured stamp to end at whitespace or end of line
+    // (the truncation fix): a malformed 1-digit offset used to leave the bare, VALID
+    // "...T10:00" behind and this row read "stale" on the truncated remainder. It now captures
+    // the WHOLE malformed token, "...T10:00+2", which fails the grammar outright.
+    ["2099-09-24T10:00+2", "invalid"],
+    ["2099-09-24T10:00+25:00", "invalid"],
     ["2099-09-24T10:00+0200", "stale"],
     ["2099-09-24T10:00+02:00", "stale"],
-    ["2099-09-24T10", "skip"],
-    ["2099-09-24T1000", "skip"],
+    ["2099-09-24T10", "invalid"],
+    ["2099-09-24T1000", "invalid"],
     ["2099-09-24T10:00", "stale"],
-    // Review-flagged gaps (ADVERSARIAL-REVIEW on this TRDD): a year below 100 is ambiguous
+    // Review-flagged gaps (ADVERSARIAL-REVIEW on this TRDD): a year below 1970 is ambiguous
     // between engines (JS's `new Date(0, ...)` legacy-maps years 0-99 to 1900-1999; Python's
-    // `datetime(0, ...)` raises) so the grammar now excludes it outright rather than letting
-    // either engine guess.
-    ["0000-01-01T10:00Z", "skip"],
+    // `datetime(0, ...)` raises) or can crash the arithmetic below (Python's next-day rollover,
+    // a naive `.timestamp()` on Windows), so the grammar excludes the whole 1970-2999 border
+    // outright rather than letting either engine guess or fault.
+    ["0000-01-01T10:00Z", "invalid"],
     // A non-ASCII decimal digit (Arabic-Indic zero, U+0660) in place of the hour's leading "1":
-    // Python's `\d` matches it without `re.ASCII` while JS's `\d` never does, so this row pins
-    // the `re.ASCII` fix -- both runtimes must reject it identically.
-    [`2099-09-24T٠0:00Z`, "skip"],
+    // the CREATED extraction regex only ever captures ASCII `[0-9]`/`\d` characters in EITHER
+    // runtime, so this digit never reaches CREATED_STAMP_RE at all -- this row pins that
+    // extraction-level rejection, not a `re.ASCII` flag (the grammar regex already spells every
+    // digit as the literal class `[0-9]`, which is ASCII-only with or without that flag).
+    [`2099-09-24T٠0:00Z`, "invalid"],
   ].map(([stamp, outcome]) => ({
-    name: `Created stamp '${stamp}' ${outcome === "stale" ? "is parsed and enforces staleness" : "is skipped, as Date.parse does"}`,
+    name: `Created stamp '${stamp}' ${outcome === "stale" ? "is parsed and enforces staleness" : "fails the ledger as an invalid Created stamp"}`,
     file: "tests/fixtures/created-table-placeholder.md",
     mutate: (t) => t.replace("CREATED_PLACEHOLDER", stamp),
-    want: outcome === "stale" ? 1 : 0,
-    expect: outcome === "stale" ? ["older than the ledger", "tests/fixtures/complete.md"] : ["ledger complete"],
-    reject: outcome === "stale" ? [] : ["older than the ledger"],
+    want: 1,
+    expect: outcome === "stale" ? ["older than the ledger", "tests/fixtures/complete.md"] : ["is not a real date"],
+    reject: outcome === "stale" ? ["is not a real date"] : ["older than the ledger"],
   })),
   {
     // Guards the `Z`/fraction capture in `Created:` (d1011f0): dropping the `Z` made a UTC
@@ -1249,6 +1291,43 @@ for (const [vector, occurrence] of [
   [`exit${FS}0`, "exit\\s+0"],
 ]) {
   report(padFixture.includes(vector), `pad fixture: U+001C vector intact -- ${occurrence}`);
+}
+
+// STRESS: a 1 MB `Created:` line of digits and colons must be rejected (it is not a real
+// stamp) in well under 2s, in both runtimes -- proving the extraction and grammar regexes have
+// no catastrophic-backtracking path. Every quantifier on this path (`[\d:]+`/`[0-9:]+`, the
+// optional fraction/offset groups) is a single, non-nested repetition, so a blow-up here would
+// mean a REGRESSION in that shape, not an inherent property of "big input." Built as a
+// standalone timed check, not a `cases` table row: the table has no timing budget field, and a
+// fixed 2s bound is a property of THIS case, not something every other row should carry.
+{
+  const hugeCreated = "1:".repeat(500000) + "00Z"; // ~1 MB, never a valid stamp
+  const dir = mkdtempSync(join(tmpdir(), "ledger-stress-"));
+  const target = join(dir, "stress.md");
+  writeFileSync(
+    target,
+    `# Delegation plan\n\nUnits: 1\nCreated: ${hugeCreated}\n\n` +
+      "| # | Unit | Files (mine) | Worker | Acceptance | Status |\n" +
+      "|---|------|--------------|--------|------------|--------|\n" +
+      "| 1 | stats | app/a.py | worker-1 | measured by hand | verified |\n\n" +
+      "## Evidence\n\n**Unit 1 —** ran the suite by hand.\n"
+  );
+  const startedAt = Date.now();
+  let stressCode = null;
+  try {
+    execFileSync(runtimeBin, [...runtimeArgs, target], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10000, // safety net only -- the real bound is the elapsedMs assertion below
+      env: process.env,
+    });
+    stressCode = 0;
+  } catch (err) {
+    stressCode = err.status;
+  }
+  const elapsedMs = Date.now() - startedAt;
+  report(stressCode === 1, "a 1 MB Created line is rejected as an invalid stamp, not accepted", `exit ${stressCode}, want 1`);
+  report(elapsedMs < 2000, "a 1 MB Created line is rejected in well under 2s (no regex blow-up)", `${elapsedMs}ms`);
 }
 
 console.log(failed ? `${failed} failing` : "all pass");
