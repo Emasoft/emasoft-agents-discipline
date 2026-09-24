@@ -39,6 +39,7 @@ import subprocess
 import sys
 import threading
 import time
+from ctypes import wintypes  # pure-Python type defs; importable on every platform, not just win32
 from dataclasses import dataclass, field
 from typing import AbstractSet, Optional, Union
 
@@ -57,6 +58,20 @@ MAX_REQUEST_BYTES = 16 * 1024 * 1024  # spec: read stdin to EOF, cap 16 MiB.
 # Global cleanup deadline (spec: "deadline + 1.5 s") shared by the killpg-until-ESRCH loop and
 # the reap that follows it -- exhausting it answers `leaked: true`, never silently.
 CLEANUP_BUDGET_S = 1.5
+
+
+def _cleanup_budget_s() -> float:
+    """`CLEANUP_BUDGET_S`, overridable via the `CMDRUN_CLEANUP_BUDGET_S` env var -- a TEST-ONLY
+    hook (not a request field: a caller must never be able to shrink the group-kill deadline
+    from outside) so a test can force the "cannot confirm dead in time" / `leaked: true` path
+    without waiting out the real 1.5s budget on every run."""
+    override = os.environ.get("CMDRUN_CLEANUP_BUDGET_S")
+    if override:
+        try:
+            return float(override)
+        except ValueError:
+            pass
+    return CLEANUP_BUDGET_S
 
 _IDENT_START = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
 _IDENT_CONT = _IDENT_START | set("0123456789")
@@ -317,7 +332,14 @@ def tokenize(command, env):
             if ch == "\\":
                 if i + 1 >= n:
                     raise Refused("trailing backslash")
-                word.add(command[i + 1], True)
+                nxt = command[i + 1]
+                # I2: on Windows, an unquoted backslash is almost always a PATH separator
+                # (`C:\Users\foo`), not an escape -- silently treating `\U` as "literal U" (the
+                # POSIX behaviour above) would mangle the path into "C:Usersfoo". Refuse instead
+                # of guessing, and tell the caller the fix: quote the whole path.
+                if IS_WINDOWS and (nxt.isalpha() or nxt.isdigit()):
+                    raise Refused("unquoted backslash before a letter/digit -- quote Windows paths")
+                word.add(nxt, True)
                 i += 2
                 raw_prefix_done = True
                 continue
@@ -713,7 +735,15 @@ class _NotExecutable:
     """Distinct sentinel type (not bare `object()`) so pyright can narrow `resolved` to
     `str | tuple[list[str], str]` after an `is _NOT_EXECUTABLE` check, instead of the whole
     union collapsing to `object` -- that collapse is what made the `Popen(argv, ...)` call
-    unable to see `argv` as `list[str]` (the pyright finding this task was handed to fix)."""
+    unable to see `argv` as `list[str]` (the pyright finding this task was handed to fix).
+
+    `reason`, when set, replaces the generic "permission denied" message -- used by the npm/npx
+    trampoline below to name the exact `*-cli.js` path it looked for and didn't find, instead of
+    falling through to a generic PATH search that would answer a misleading "command not found:
+    npm" even though `node` itself was located just fine."""
+
+    def __init__(self, reason: Optional[str] = None):
+        self.reason = reason
 
 
 _NOT_EXECUTABLE = _NotExecutable()  # L4: a resolved file exists but lacks +x -- distinct from "not found"
@@ -727,10 +757,14 @@ def _is_npm_trampoline_name(name):
     return base in ("npm", "npx")
 
 
-def _resolve_npm_trampoline(base, env) -> NpmTrampoline:  # pragma: no cover - Windows only
+def _resolve_npm_trampoline(base, env, tried: Optional[list] = None) -> NpmTrampoline:
     """H10: `npm`/`npx` resolve to `node.exe` running the sibling npm package's CLI script, never
     to `npm.cmd`/`npx.cmd` -- Popen'ing a `.cmd` implicitly starts `cmd.exe` (D2), and
-    list2cmdline does not quote cmd metacharacters (BatBadBut-class argument injection)."""
+    list2cmdline does not quote cmd metacharacters (BatBadBut-class argument injection).
+
+    `tried`, when given, collects every `*-cli.js` path this function looked for and rejected --
+    the caller uses it to name the exact path in a diagnostic when `node` was found but npm's own
+    CLI script wasn't (see `_NotExecutable.reason` above)."""
     path_var = _env_get(env, "PATH") or ""
     for d in path_var.split(os.pathsep):
         if not d or not os.path.isabs(d):
@@ -742,6 +776,8 @@ def _resolve_npm_trampoline(base, env) -> NpmTrampoline:  # pragma: no cover - W
         cli = os.path.join(node_dir, "node_modules", "npm", "bin", f"{base}-cli.js")
         if os.path.isfile(cli):
             return ([node_exe], cli)
+        if tried is not None:
+            tried.append(cli)
         exe = _check_candidate(os.path.join(d, base), env)
         if isinstance(exe, str):
             return exe  # Volta-style npm.exe/npx.exe shipped alongside node.exe
@@ -758,9 +794,15 @@ def resolve_executable(name, cwd, env) -> ResolvedExecutable:
             return _NOT_EXECUTABLE
         return found
     if IS_WINDOWS and _is_npm_trampoline_name(name):
-        trampoline = _resolve_npm_trampoline(os.path.basename(name).lower(), env)
+        tried: list = []
+        trampoline = _resolve_npm_trampoline(os.path.basename(name).lower(), env, tried)
         if trampoline is not None:
             return trampoline
+        if tried:
+            # `node` was found but its sibling npm CLI script wasn't -- name the exact path we
+            # looked for instead of silently falling through to the generic PATH loop below,
+            # which would answer a misleading "command not found: npm" even though node exists.
+            return _NotExecutable(f"npm/npx trampoline: node found but missing {tried[0]}")
     path_var = _env_get(env, "PATH") or ""
     for d in path_var.split(os.pathsep):
         # M11: skip relative AND empty PATH entries -- "never search the current directory".
@@ -933,7 +975,8 @@ def _run_command_inner(cmd, fds, ctx, close_after_spawn):
         # an identity check for None/enum literals, not an arbitrary singleton instance, so the
         # `is` form left `resolved` as the full 4-member union all the way to the Popen call
         # below and made `argv` look like `list[str | _NotExecutable]`.
-        _write_fd(local_fds[2], f"permission denied: {args[0]}\n".encode())
+        msg = resolved.reason if resolved.reason is not None else f"permission denied: {args[0]}"
+        _write_fd(local_fds[2], f"{msg}\n".encode())
         _close_quiet(opened)
         _close_quiet(fd for fd in close_after_spawn if fd not in opened)
         return 126
@@ -1125,11 +1168,23 @@ def _emit_and_die(answer):
     OWN process group (which we are the leader of) before actually exiting. That single act
     closes H3 (a success-path descendant like a detached `subprocess.Popen` grandchild used to
     outlive the interpreter that spawned it) as a side effect of always being the worker's last
-    act, success or failure -- there is no separate "cleanup on success" code path to forget."""
+    act, success or failure -- there is no separate "cleanup on success" code path to forget.
+
+    Writes the payload with raw `os.write` in a loop, bypassing `sys.stdout`'s buffering, so
+    every byte is CONFIRMED delivered to the pipe before `killpg(0, SIGKILL)` runs -- SIGKILL is
+    uncatchable and hits this very process too, so any byte still sitting in a Python-level
+    buffer at that instant would never reach the reader (a partial/absent JSON line the
+    supervisor could easily mistake for "worker exited without a valid answer")."""
     try:
-        sys.stdout.write(json.dumps(answer) + "\n")
-        sys.stdout.flush()
-    except (BrokenPipeError, OSError):
+        payload = memoryview((json.dumps(answer) + "\n").encode("utf-8"))
+        fd = sys.stdout.fileno()
+        while payload:
+            try:
+                n = os.write(fd, payload)
+            except InterruptedError:
+                continue
+            payload = payload[n:]
+    except (BrokenPipeError, OSError, ValueError):
         pass
     try:
         os.killpg(0, signal.SIGKILL)
@@ -1161,6 +1216,12 @@ def _death_watch():
 
 
 def _worker_main():
+    if os.environ.get("CMDRUN_TEST_WORKER_CRASH_BEFORE_READ"):
+        # Test-only fault injection (finding 7): the worker dies before it ever reads its
+        # request line -- proves the supervisor still answers with exactly ONE `internal_error`
+        # JSON line ("worker exited without a valid answer"), never a crash with two lines or a
+        # hang. Never set outside a test.
+        os._exit(1)
     raw = sys.stdin.buffer.readline()
     try:
         request = json.loads(raw.decode("utf-8"))
@@ -1381,6 +1442,13 @@ def _reap_bounded(proc, timeout):
 
 def _run_posix_supervisor(req):
     worker_argv = [sys.executable, os.path.abspath(__file__), "--exec"]
+    _test_delay_ms = os.environ.get("CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS")
+    if _test_delay_ms:
+        # Test-only fault injection (finding 7): widens the window between "the supervisor
+        # process exists" and "the worker process exists" so a test can prove a signal landing
+        # in exactly that gap (no `_SignalWatch` installed yet, no worker to clean up) still
+        # never produces more than one answer line. Never set outside a test.
+        time.sleep(int(_test_delay_ms) / 1000.0)
     try:
         proc = subprocess.Popen(
             worker_argv,
@@ -1410,17 +1478,20 @@ def _run_posix_supervisor(req):
         signalled.close()
 
     if answer is not None:
-        _reap_bounded(proc, CLEANUP_BUDGET_S)
+        _reap_bounded(proc, _cleanup_budget_s())
         answer.setdefault("tree_kill", "process_group")
         answer.setdefault("timed_out", False)
         return answer
 
-    cleanup_deadline = time.monotonic() + CLEANUP_BUDGET_S
+    cleanup_deadline = time.monotonic() + _cleanup_budget_s()
     leaked = _kill_group_until_dead(proc.pid, cleanup_deadline)
     _reap_bounded(proc, 0.5)
 
     if leaked:
-        return {"status": None, "timed_out": timed_out, "leaked": True,
+        # M6/forced-cleanup-exhaustion: never answer silently when the deadline runs out before
+        # the group is confirmed dead -- `pgid` names exactly which group a caller must go clean
+        # up by hand (it equals `proc.pid`: the worker is its own session/group leader).
+        return {"status": None, "timed_out": timed_out, "leaked": True, "pgid": proc.pid,
                 "reason": f"failed to reap process group {proc.pid}", "tree_kill": "process_group"}
     if sig is not None:
         return {"status": 143, "timed_out": False, "tree_kill": "process_group"}
@@ -1438,30 +1509,53 @@ def _run_posix_supervisor(req):
 
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 _JobObjectExtendedLimitInformation = 9
+_PROCESS_ALL_ACCESS = 0x1F0FFF
+
+
+def _win_kernel32():  # pragma: no cover - requires Windows to exercise
+    """One `use_last_error=True` handle for every call below -- `ctypes.windll.kernel32` (the
+    old form) does NOT set `use_last_error`, and `ctypes.GetLastError()` reads whichever
+    thread's error slot last happened to be touched process-wide, not necessarily this call's
+    (a documented ctypes gotcha). `WinDLL(..., use_last_error=True)` + `ctypes.get_last_error()`
+    is the pair the ctypes docs recommend instead -- M12.
+
+    `getattr`, not `ctypes.WinDLL` directly: typeshed declares `WinDLL`/`get_last_error` only
+    under a `sys.platform == "win32"` guard, so pyright (running on this non-Windows dev host,
+    per `pyproject.toml`'s `[tool.pyright]`) reports a real attribute-access error on the direct
+    form even though this whole function is itself `sys.platform`-gated at the only call site."""
+    win_dll_cls = getattr(ctypes, "WinDLL")  # noqa: B009 - see docstring
+    return win_dll_cls("kernel32", use_last_error=True)
+
+
+def _win_last_error(call_name: str) -> str:  # pragma: no cover - requires Windows to exercise
+    get_last_error = getattr(ctypes, "get_last_error")  # noqa: B009 - see _win_kernel32 docstring
+    return f"{call_name} failed (WinError {get_last_error()})"
 
 
 def _win_create_job_object():  # pragma: no cover - requires Windows to exercise
+    """Returns (job_handle_or_None, reason_or_None) -- the reason NAMES the failing WinAPI call
+    (M12) instead of the caller only ever seeing a bare None."""
     if sys.platform != "win32":
-        return None
+        return None, "not running on win32"
     try:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.CreateJobObjectW.restype = ctypes.c_void_p
-        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+        kernel32 = _win_kernel32()
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
         job = kernel32.CreateJobObjectW(None, None)
         if not job:
-            return None
+            return None, _win_last_error("CreateJobObjectW")
 
         class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
             _fields_ = [
                 ("PerProcessUserTimeLimit", ctypes.c_int64),
                 ("PerJobUserTimeLimit", ctypes.c_int64),
-                ("LimitFlags", ctypes.c_uint32),
+                ("LimitFlags", wintypes.DWORD),
                 ("MinimumWorkingSetSize", ctypes.c_size_t),
                 ("MaximumWorkingSetSize", ctypes.c_size_t),
-                ("ActiveProcessLimit", ctypes.c_uint32),
+                ("ActiveProcessLimit", wintypes.DWORD),
                 ("Affinity", ctypes.c_void_p),
-                ("PriorityClass", ctypes.c_uint32),
-                ("SchedulingClass", ctypes.c_uint32),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
             ]
 
         class IO_COUNTERS(ctypes.Structure):
@@ -1481,52 +1575,59 @@ def _win_create_job_object():  # pragma: no cover - requires Windows to exercise
 
         info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         info.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        kernel32.SetInformationJobObject.restype = ctypes.c_int
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
         kernel32.SetInformationJobObject.argtypes = [
-            ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32
+            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD
         ]
         # M12: every ctypes return value is checked -- a silent 0 return (no exception without
         # `use_last_error`) used to look identical to success.
         if not kernel32.SetInformationJobObject(
             job, _JobObjectExtendedLimitInformation, ctypes.byref(info), ctypes.sizeof(info)
         ):
+            reason = _win_last_error("SetInformationJobObject")
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
             kernel32.CloseHandle(job)
-            return None
-        return job
-    except OSError:
-        return None
+            return None, reason
+        return job, None
+    except OSError as exc:
+        return None, f"CreateJobObjectW/SetInformationJobObject raised: {exc}"
 
 
 def _win_assign_job(job, pid):  # pragma: no cover - requires Windows to exercise
+    """Returns (ok, reason_or_None) -- see `_win_create_job_object`."""
     if sys.platform != "win32":
-        return False
+        return False, "not running on win32"
     try:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.OpenProcess.restype = ctypes.c_void_p
-        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-        handle = kernel32.OpenProcess(0x1F0FFF, False, pid)  # PROCESS_ALL_ACCESS
+        kernel32 = _win_kernel32()
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        handle = kernel32.OpenProcess(_PROCESS_ALL_ACCESS, False, pid)
         if not handle:
-            return False
-        kernel32.AssignProcessToJobObject.restype = ctypes.c_int
-        kernel32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            return False, _win_last_error("OpenProcess")
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
         ok = bool(kernel32.AssignProcessToJobObject(job, handle))
+        reason = None if ok else _win_last_error("AssignProcessToJobObject")
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         kernel32.CloseHandle(handle)
-        return ok
-    except OSError:
-        return False
+        return ok, reason
+    except OSError as exc:
+        return False, f"OpenProcess/AssignProcessToJobObject raised: {exc}"
 
 
 def _win_terminate_process(pid):  # pragma: no cover - requires Windows to exercise
     if sys.platform != "win32":
         return
     try:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.OpenProcess.restype = ctypes.c_void_p
-        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-        handle = kernel32.OpenProcess(0x1F0FFF, False, pid)
+        kernel32 = _win_kernel32()
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        handle = kernel32.OpenProcess(_PROCESS_ALL_ACCESS, False, pid)
         if handle:
-            kernel32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            kernel32.TerminateProcess.restype = wintypes.BOOL
+            kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
             kernel32.TerminateProcess(handle, 1)
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
             kernel32.CloseHandle(handle)
     except OSError:
         pass
@@ -1536,8 +1637,9 @@ def _win_kill_job(job):  # pragma: no cover - requires Windows to exercise
     if sys.platform != "win32":
         return
     try:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.TerminateJobObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel32 = _win_kernel32()
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
         kernel32.TerminateJobObject(job, 1)
     except OSError:
         pass
@@ -1547,18 +1649,19 @@ def _win_close_job(job):  # pragma: no cover - requires Windows to exercise
     if sys.platform != "win32":
         return
     try:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32 = _win_kernel32()
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         kernel32.CloseHandle(job)
     except OSError:
         pass
 
 
 def _run_windows_supervisor(req):  # pragma: no cover - requires Windows to exercise
-    job = _win_create_job_object()
+    job, job_reason = _win_create_job_object()
     if job is None:
         return {"status": None, "timed_out": False, "internal_error": True,
-                "reason": "failed to create a Windows Job Object"}
+                "reason": f"failed to create a Windows Job Object: {job_reason}"}
     worker_argv = [sys.executable, os.path.abspath(__file__), "--exec"]
     try:
         proc = subprocess.Popen(worker_argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -1569,13 +1672,16 @@ def _run_windows_supervisor(req):  # pragma: no cover - requires Windows to exer
                 "reason": f"failed to spawn worker: {exc}"}
     # H9: assign BEFORE writing the request line, so the worker cannot have spawned a stage
     # yet -- every descendant then inherits job membership from birth, with no CREATE_SUSPENDED
-    # / NtResumeProcess window to get wrong.
-    if not _win_assign_job(job, proc.pid):
+    # / NtResumeProcess window to get wrong. M12: a failed assignment terminates the already-
+    # spawned worker (it would otherwise run un-jobbed, escaping the cleanup this whole
+    # supervisor exists to guarantee) instead of merely reporting the failure and leaking it.
+    assigned, assign_reason = _win_assign_job(job, proc.pid)
+    if not assigned:
         _win_terminate_process(proc.pid)
         _reap_bounded(proc, 1.5)
         _win_close_job(job)
         return {"status": None, "timed_out": False, "internal_error": True,
-                "reason": "AssignProcessToJobObject failed"}
+                "reason": f"AssignProcessToJobObject failed: {assign_reason}"}
 
     line = (json.dumps(req) + "\n").encode("utf-8")
     try:
@@ -1594,12 +1700,12 @@ def _run_windows_supervisor(req):  # pragma: no cover - requires Windows to exer
 
     try:
         if answer is not None:
-            _reap_bounded(proc, CLEANUP_BUDGET_S)
+            _reap_bounded(proc, _cleanup_budget_s())
             answer.setdefault("tree_kill", "job")
             answer.setdefault("timed_out", False)
             return answer
         _win_kill_job(job)
-        _reap_bounded(proc, CLEANUP_BUDGET_S)
+        _reap_bounded(proc, _cleanup_budget_s())
         if sig is not None:
             return {"status": 143, "timed_out": False, "tree_kill": "job"}
         if timed_out:

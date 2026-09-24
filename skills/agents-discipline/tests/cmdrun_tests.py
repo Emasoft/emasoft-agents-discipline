@@ -13,6 +13,7 @@ Run: python3 tests/cmdrun_tests.py
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,13 @@ LIB_DIR = os.path.join(TESTS_DIR, "..", "scripts", "lib")
 CMDRUN = os.path.join(LIB_DIR, "cmdrun.py")
 
 failed = 0
+
+
+def skip(name: str) -> None:
+    """A printed SKIP that is NOT counted as a PASS -- for a row that executes nothing (no
+    tool on PATH, no host to exercise a platform-only path). A bare `report(True, ...)` for
+    "nothing ran" is a fake pass: it inflates the green count with zero coverage behind it."""
+    print(f"SKIP  {name}")
 
 
 def report(ok: bool, name: str, detail: object = "") -> None:
@@ -107,6 +115,32 @@ def marker_alive(marker, grace_s=0.3):
     return marker in ps_snapshot_text()
 
 
+def wait_until(pred, timeout_s, interval=0.05):
+    """Polls `pred()` instead of one fixed `sleep` -- a single grace-period snapshot either
+    fires too early (flaky fail on a slow CI box) or wastes the difference on a fast one."""
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout_s:
+        if pred():
+            return True
+        time.sleep(interval)
+    return pred()
+
+
+def marker_pids(marker):
+    """Returns the pids of every `ps` row whose command contains `marker` -- used to kill a
+    survivor by pid before failing a test, per RULE 0 (never leave a stray attack-test process
+    running after this suite ends)."""
+    pids = []
+    for line in ps_snapshot_text().splitlines():
+        parts = line.split(None, 3)
+        if len(parts) == 4 and marker in parts[3] and "cmdrun_tests" not in parts[3]:
+            try:
+                pids.append(int(parts[0]))
+            except ValueError:
+                pass
+    return pids
+
+
 def make_workdir():
     d = tempfile.mkdtemp(prefix="cmdrun-tests-")
     for name in ("a.txt", "b.txt", "note.md"):
@@ -117,6 +151,90 @@ def make_workdir():
         f.write("#!/bin/sh\necho should-never-run\n")
     os.chmod(os.path.join(d, "exec.sh"), 0o755)
     return d
+
+
+def _h4_signal_row(sig_name, d):
+    """H4, real regression (ported from scripts_dev/cmdrun-attack/killparent.py): spawn the
+    supervisor in its OWN session running a `sleep <marker>` command, wait until the worker has
+    actually started it (marker visible in `ps`), then send `sig_name` to the SUPERVISOR's own
+    process group -- never the worker's, which is a separate session by design. Asserts the
+    whole group is confirmed dead afterwards, killing any survivor by pid before failing."""
+    sig = getattr(signal, sig_name)
+    marker = f"{time.time():.6f}"
+    p = subprocess.Popen(
+        [sys.executable, CMDRUN],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        assert p.stdin is not None
+        req = json.dumps({"command": f"sleep {marker}", "cwd": d, "timeout_ms": 60000})
+        p.stdin.write(req.encode() + b"\n")
+        p.stdin.close()  # main() blocks on a full-EOF stdin read -- an unclosed pipe never returns.
+
+        started = wait_until(lambda: marker in ps_snapshot_text(), timeout_s=3.0)
+        if not started:
+            report(False, f"H4 {sig_name}: worker never started 'sleep {marker}'")
+            return
+
+        os.killpg(p.pid, sig)
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+
+        dead = wait_until(lambda: marker not in ps_snapshot_text(), timeout_s=5.0, interval=0.1)
+        if not dead:
+            survivors = marker_pids(marker)
+            for pid in survivors:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            report(False, f"H4 {sig_name}: the process group survived the caller's signal to the supervisor", survivors)
+            return
+
+        if sig_name == "SIGKILL":
+            # SIGKILL is uncatchable -- the supervisor dies outright, with no answer. The group
+            # reaching this point already dead IS the assertion: it can only have died via the
+            # worker's own death-watch thread noticing stdin EOF (its supervisor's death), not
+            # via any code path in the supervisor itself.
+            report(True, f"H4 {sig_name}: caller-kills-supervisor reaches the worker via stdin EOF -- group confirmed dead")
+        else:
+            # SIGTERM/SIGHUP are caught by the supervisor's _SignalWatch -- it kills the worker
+            # group ITSELF, then answers normally with status 143 (docs_dev/cmdrun-v2-executor-spec.md).
+            out = p.stdout.read().decode("utf-8", errors="replace") if p.stdout else ""
+            lines = [ln for ln in out.splitlines() if ln.strip()]
+            answer = None
+            if lines:
+                try:
+                    answer = json.loads(lines[-1])
+                except json.JSONDecodeError:
+                    answer = None
+            report(isinstance(answer, dict) and answer.get("status") == 143,
+                   f"H4 {sig_name}: supervisor kills the worker group itself and answers status 143", answer)
+    finally:
+        if p.poll() is None:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                p.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+        for stream in (p.stdin, p.stdout, p.stderr):
+            try:
+                if stream is not None:
+                    stream.close()
+            except OSError:
+                pass
+        # Belt-and-braces: kill anything still bearing this test's marker, regardless of outcome.
+        for pid in marker_pids(marker):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
 
 
 def main():
@@ -318,7 +436,7 @@ def _run_tests(d):
         report(a.get("status") == 0 and not a.get("refused"),
                "node -e with single-quoted { } ( ) is accepted, not refused", a)
     else:
-        report(True, "node -e regression rows skipped -- no `node` on PATH")
+        skip("node -e regression rows -- no `node` on PATH")
 
     # -- Regression: a background grandchild holding an inherited handle must not delay the answer.
     # I1 (audit, documented residual): a descendant that calls setsid/setpgid itself escapes the
@@ -347,7 +465,7 @@ def _run_tests(d):
             os.kill(grandchild_pid, 9)
         except ProcessLookupError:
             pass
-        report(True, f"detached grandchild (pid {grandchild_pid}) reaped by pid at test end (I1 residual)")
+        print(f"INFO  detached grandchild (pid {grandchild_pid}) reaped by pid at test end (I1 residual)")
     else:
         report(False, "detached-grandchild pidfile was never written -- cannot confirm cleanup", a)
 
@@ -378,10 +496,13 @@ def _run_tests(d):
     report(a.get("status") == 0, "H3: the spawning command itself succeeds", a)
     report(not marker_alive(marker_h3), "H3: its in-group grandchild is killed on the success path too", a)
 
-    # -- H4: covered structurally by module design (worker stdin = death pipe); exercised live by
-    # scripts_dev/cmdrun-attack/killparent.py, which is a manual/attack-harness script, not part
-    # of this suite's fast run. Recorded here so the row isn't silently missing from the table.
-    report(True, "H4: caller-kills-supervisor reaches the worker via stdin EOF (see killparent.py; not run in this suite)")
+    # -- H4: real regression, ported from the manual scripts_dev/cmdrun-attack/killparent.py
+    # attack harness -- one row per signal the caller might use to enforce its OWN timeout on the
+    # supervisor (SIGKILL: uncatchable, reaches the worker via the death-watch's stdin EOF;
+    # SIGTERM/SIGHUP: caught by _SignalWatch, the supervisor kills the worker itself and answers
+    # 143). Each row spawns real processes and asserts by `ps`, not by trusting the JSON alone.
+    for _sig_name in ("SIGKILL", "SIGTERM", "SIGHUP"):
+        _h4_signal_row(_sig_name, d)
 
     # -- H5: non-numeric / null timeout_ms used to divide-by-zero AFTER forking; now bad_request.
     a = run_raw(f'{{"command":"sleep 1","cwd":{json.dumps(d)},"timeout_ms":"500"}}\n')
@@ -577,6 +698,123 @@ def _run_tests(d):
     else:
         print("SKIP  P7: os.mkfifo unavailable on this platform")
 
+    # -- Answer-vs-self-kill: `_emit_and_die` writes the JSON answer with a raw os.write loop and
+    # ONLY THEN kills its own process group (SIGKILL is uncatchable and hits the worker writing
+    # the answer too) -- a burst of quick commands is how a partially-written-then-killed race
+    # would show up (a truncated/missing JSON line), not a single lucky run.
+    burst_ok = True
+    burst_detail = ""
+    for _i in range(500):
+        # A generous timeout_ms (not the race under test -- that's write-then-kill ordering, not
+        # wall-clock speed): under real system load from 500 rapid subprocess spawns plus any
+        # concurrent work in this repo, a 3s budget can spuriously time out with no bug involved.
+        a = run("echo ok", d, timeout_ms=15000)
+        if a.get("status") != 0 or a.get("stdout") != "ok\n":
+            burst_ok = False
+            burst_detail = f"iteration {_i}: {a}"
+            break
+    report(burst_ok, "answer-before-self-kill: 500 back-to-back 'echo ok' runs all answer status 0 / stdout 'ok\\n'", burst_detail)
+
+    # -- Forced cleanup exhaustion: a zero `CLEANUP_BUDGET_S` (test-only env override -- never a
+    # request field, see cmdrun._cleanup_budget_s) must make the group-kill loop report
+    # `leaked: true` plus the `pgid` it couldn't confirm dead, never a silent/ambiguous answer.
+    _leak_marker = f"CMDRUN_LEAK_MARKER_{os.getpid()}_{int(time.time() * 1000)}"
+    _leak_env = dict(os.environ)
+    _leak_env["CMDRUN_CLEANUP_BUDGET_S"] = "0"
+    _leak_req = json.dumps({"command": f"python3 -c \"import time;time.sleep(5)\" {_leak_marker}",
+                             "cwd": d, "timeout_ms": 30})
+    _leak_proc = subprocess.run([sys.executable, CMDRUN], input=_leak_req, capture_output=True,
+                                 text=True, env=_leak_env, timeout=15)
+    _leak_lines = [ln for ln in _leak_proc.stdout.splitlines() if ln.strip()]
+    _leak_answer = {}
+    if len(_leak_lines) == 1:
+        try:
+            _leak_answer = json.loads(_leak_lines[0])
+        except json.JSONDecodeError:
+            _leak_answer = {}
+    report(_leak_answer.get("leaked") is True and isinstance(_leak_answer.get("pgid"), int),
+           "forced cleanup exhaustion: a zero cleanup budget answers leaked:true with a pgid", _leak_answer)
+    # The kill WAS sent even though confirmation timed out -- sweep any straggler by pid.
+    wait_until(lambda: _leak_marker not in ps_snapshot_text(), timeout_s=3.0, interval=0.1)
+    for _pid in marker_pids(_leak_marker):
+        try:
+            os.kill(_pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    # -- Supervisor edge case: the worker dies before it ever reads its request line (test-only
+    # fault injection) -- the supervisor must still answer with exactly ONE internal_error line,
+    # never a hang, a crash, or two lines.
+    _crash_env = dict(os.environ)
+    _crash_env["CMDRUN_TEST_WORKER_CRASH_BEFORE_READ"] = "1"
+    # Generous timeout_ms here too -- see the burst-test comment above; this row follows right
+    # after 500 rapid spawns and has no reason to race a tight wall clock.
+    _crash_req = json.dumps({"command": "echo hi", "cwd": d, "timeout_ms": 15000})
+    _crash_proc = subprocess.run([sys.executable, CMDRUN], input=_crash_req, capture_output=True,
+                                  text=True, env=_crash_env, timeout=20)
+    _crash_lines = [ln for ln in _crash_proc.stdout.splitlines() if ln.strip()]
+    _crash_answer = {}
+    if len(_crash_lines) == 1:
+        try:
+            _crash_answer = json.loads(_crash_lines[0])
+        except json.JSONDecodeError:
+            _crash_answer = {}
+    report(len(_crash_lines) == 1 and _crash_answer.get("internal_error") is True,
+           "supervisor edge case: worker dies before reading the request -> exactly one internal_error answer",
+           {"lines": _crash_lines, "stderr": _crash_proc.stderr[-300:]})
+
+    # -- Supervisor edge case: a signal lands in the gap BEFORE the worker process even exists
+    # (test-only delay hook widens that window) -- no `_SignalWatch` is installed yet there, so
+    # Python's default disposition just kills the supervisor; the only invariant this row can
+    # check is that it NEVER produces more than one JSON line.
+    _delay_env = dict(os.environ)
+    _delay_env["CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS"] = "300"
+    _delay_proc = subprocess.Popen([sys.executable, CMDRUN], stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    start_new_session=True, env=_delay_env)
+    try:
+        assert _delay_proc.stdin is not None
+        _delay_req = json.dumps({"command": "echo hi", "cwd": d, "timeout_ms": 3000})
+        _delay_proc.stdin.write(_delay_req.encode() + b"\n")
+        _delay_proc.stdin.close()
+        time.sleep(0.05)  # land inside the artificial pre-spawn delay window
+        os.killpg(_delay_proc.pid, signal.SIGTERM)
+        try:
+            _delay_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        _delay_out = _delay_proc.stdout.read().decode("utf-8", errors="replace") if _delay_proc.stdout else ""
+        _delay_lines = [ln for ln in _delay_out.splitlines() if ln.strip()]
+        report(len(_delay_lines) <= 1, "supervisor edge case: a signal before the worker exists never yields two answers", _delay_lines)
+    finally:
+        if _delay_proc.poll() is None:
+            try:
+                os.killpg(_delay_proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                _delay_proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+        for _stream in (_delay_proc.stdin, _delay_proc.stdout, _delay_proc.stderr):
+            try:
+                if _stream is not None:
+                    _stream.close()
+            except OSError:
+                pass
+
+    # Control check for the hook above: `len(lines) <= 1` alone is satisfied even by a silently
+    # broken/no-op hook (nothing in this codebase produces two answer lines today either way), so
+    # this row proves the delay ACTUALLY fires -- without it, the row above would be vacuous.
+    _delay_env_ctrl = dict(os.environ)
+    _delay_env_ctrl["CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS"] = "300"
+    _t0 = time.monotonic()
+    _ctrl = subprocess.run([sys.executable, CMDRUN],
+                            input=json.dumps({"command": "echo hi", "cwd": d, "timeout_ms": 3000}),
+                            capture_output=True, text=True, env=_delay_env_ctrl, timeout=10)
+    _ctrl_elapsed = time.monotonic() - _t0
+    report(_ctrl_elapsed >= 0.25, f"supervisor edge case: the pre-spawn delay hook actually delays spawn ({_ctrl_elapsed:.2f}s)", _ctrl.stdout.strip())
+
     # -- analyze() is usable standalone (for a future lint use) -------------------------------------
     sys.path.insert(0, LIB_DIR)
     import cmdrun  # noqa: E402  # type: ignore[import-not-found]
@@ -585,6 +823,123 @@ def _run_tests(d):
     report(ok is True and reason is None, "analyze() accepts a supported command")
     ok, reason = cmdrun.analyze("echo hi; echo bye")
     report(ok is False and "';'" in reason, "analyze() refuses by name, no execution needed", reason)
+
+    # -- I2: on Windows, an unquoted backslash before a letter/digit is refused (it's almost
+    # always a path separator, not an escape) -- exercised by injecting IS_WINDOWS, no Windows
+    # host required.
+    _orig_is_windows = cmdrun.IS_WINDOWS
+    cmdrun.IS_WINDOWS = True
+    try:
+        ok, reason = cmdrun.analyze(r"echo C:\Users\foo")
+        report(ok is False and "quote Windows paths" in (reason or ""),
+               "I2: an unquoted backslash before a letter is refused on Windows, naming the fix", reason)
+        ok, reason = cmdrun.analyze(r"echo 5\5")
+        report(ok is False and "quote Windows paths" in (reason or ""),
+               "I2: an unquoted backslash before a digit is refused on Windows too", reason)
+        ok, reason = cmdrun.analyze("echo 'C:\\Users\\foo'")
+        report(ok is True, "I2: a QUOTED Windows path is unaffected -- quotes are fully literal", reason)
+        ok, reason = cmdrun.analyze(r"echo a\ b")
+        report(ok is True, "I2: an unquoted backslash before a SPACE (not alnum) is still allowed on Windows", reason)
+    finally:
+        cmdrun.IS_WINDOWS = _orig_is_windows
+    ok, reason = cmdrun.analyze(r"echo C:\Users\foo")
+    report(ok is True, "I2: off Windows (the real host default), backslash-before-letter is still the ordinary POSIX escape", reason)
+
+    # -- Trampoline argv / PATHEXT resolution: the resolver functions are called DIRECTLY with
+    # IS_WINDOWS forced True, a fake node dir, and a fake PATH -- no Windows host required.
+    _orig_is_windows = cmdrun.IS_WINDOWS
+    cmdrun.IS_WINDOWS = True
+    _win_tmp = tempfile.mkdtemp(prefix="cmdrun-win-")
+    try:
+        node_dir = os.path.join(_win_tmp, "node")
+        os.makedirs(node_dir)
+        node_exe = os.path.join(node_dir, "node.exe")
+        open(node_exe, "w", encoding="utf-8").close()
+        npm_bin = os.path.join(node_dir, "node_modules", "npm", "bin")
+        os.makedirs(npm_bin)
+        npm_cli = os.path.join(npm_bin, "npm-cli.js")
+        npx_cli = os.path.join(npm_bin, "npx-cli.js")
+        open(npm_cli, "w", encoding="utf-8").close()
+        open(npx_cli, "w", encoding="utf-8").close()
+        win_env = {"PATH": node_dir, "PATHEXT": ".COM;.EXE"}
+
+        # `_check_candidate` reconstructs the winning path as `path + <PATHEXT entry>`, so its
+        # CASE reflects PATHEXT's own spelling (".EXE" here), not the real file's -- Windows
+        # filesystems are case-insensitive, exactly like this dev host, so compare case-folded.
+        r = cmdrun.resolve_executable("npm", _win_tmp, win_env)
+        report(isinstance(r, tuple) and [p.lower() for p in r[0]] == [node_exe.lower()] and r[1] == npm_cli,
+               "trampoline: npm resolves to [node, npm-cli.js]", r)
+        r = cmdrun.resolve_executable("npx", _win_tmp, win_env)
+        report(isinstance(r, tuple) and [p.lower() for p in r[0]] == [node_exe.lower()] and r[1] == npx_cli,
+               "trampoline: npx resolves to [node, npx-cli.js]", r)
+
+        # missing *-cli.js: node exists, no node_modules at all -- refused, naming the exact path.
+        bare_dir = tempfile.mkdtemp(prefix="cmdrun-win-bare-")
+        try:
+            open(os.path.join(bare_dir, "node.exe"), "w", encoding="utf-8").close()
+            bare_env = {"PATH": bare_dir, "PATHEXT": ".COM;.EXE"}
+            r = cmdrun.resolve_executable("npm", bare_dir, bare_env)
+            expected_cli = os.path.join(bare_dir, "node_modules", "npm", "bin", "npm-cli.js")
+            ok = isinstance(r, cmdrun._NotExecutable) and r.reason is not None and expected_cli in r.reason
+            report(ok, "trampoline: a missing npm-cli.js is refused, naming the exact path tried", getattr(r, "reason", r))
+        finally:
+            shutil.rmtree(bare_dir, ignore_errors=True)
+
+        ext_dir = tempfile.mkdtemp(prefix="cmdrun-win-ext-")
+        try:
+            with open(os.path.join(ext_dir, "tool.COM"), "w", encoding="utf-8") as f:
+                f.write("x")
+            with open(os.path.join(ext_dir, "tool.BAT"), "w", encoding="utf-8") as f:
+                f.write("x")
+            # .COM/.EXE candidates are matched regardless of PATHEXT (never .BAT/.CMD -- those
+            # would implicitly start cmd.exe, D2/BatBadBut).
+            found = cmdrun._check_candidate(os.path.join(ext_dir, "tool"), {"PATHEXT": ".TXT"})
+            report(found is not None and found.upper().endswith(".COM"),
+                   "trampoline: .COM/.EXE candidates are matched regardless of a PATHEXT that excludes them", found)
+            # PATHEXT absent from the env entirely defaults to '.COM;.EXE'.
+            found2 = cmdrun._check_candidate(os.path.join(ext_dir, "tool"), {})
+            report(found2 is not None and found2.upper().endswith(".COM"),
+                   "trampoline: PATHEXT absent from the env defaults to .COM;.EXE", found2)
+
+            with open(os.path.join(ext_dir, "spacey.EXE"), "w", encoding="utf-8") as f:
+                f.write("x")
+            found3 = cmdrun._check_candidate(os.path.join(ext_dir, "spacey   "), {"PATHEXT": ".COM;.EXE"})
+            report(found3 is not None and found3.upper().endswith("SPACEY.EXE"),
+                   "trampoline: a trailing-space name is normalised before the PATHEXT suffix check", found3)
+            found4 = cmdrun._check_candidate(os.path.join(ext_dir, "spacey.exe."), {"PATHEXT": ".COM;.EXE"})
+            report(found4 is not None and found4.upper().endswith("SPACEY.EXE"),
+                   "trampoline: a trailing-dot extension is normalised before the suffix check", found4)
+
+            # Case-insensitive PATHEXT MEMBERSHIP (`ext.upper() in (".COM", ".EXE")` accepting a
+            # lowercase ".exe" entry), not filesystem case-folding -- this dev host's filesystem
+            # is ALSO case-insensitive, so a plain `os.path.isfile` probe here would pass even if
+            # the code wrongly uppercased the candidate before checking (it would still resolve
+            # to the same inode). Patch `os.path.isfile` to a real case-SENSITIVE directory-listing
+            # check for the duration of this one probe, so only the correct, case-preserving
+            # candidate ("caseit" + ".exe", exactly as spelled in PATHEXT) can match.
+            with open(os.path.join(ext_dir, "caseit.exe"), "w", encoding="utf-8") as f:
+                f.write("x")
+
+            def _case_sensitive_isfile(path):
+                dirpath, base = os.path.split(path)
+                try:
+                    return base in os.listdir(dirpath or ".")
+                except OSError:
+                    return False
+
+            _orig_isfile = os.path.isfile
+            os.path.isfile = _case_sensitive_isfile
+            try:
+                found5 = cmdrun._check_candidate(os.path.join(ext_dir, "caseit"), {"PATHEXT": ".com;.exe"})
+            finally:
+                os.path.isfile = _orig_isfile
+            report(found5 is not None and os.path.basename(found5) == "caseit.exe",
+                   "trampoline: PATHEXT suffix matching is case-insensitive (case-sensitive isfile probe)", found5)
+        finally:
+            shutil.rmtree(ext_dir, ignore_errors=True)
+    finally:
+        cmdrun.IS_WINDOWS = _orig_is_windows
+        shutil.rmtree(_win_tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":
