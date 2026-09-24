@@ -306,8 +306,8 @@ if (rows.some((r) => r.status === "verified")) {
   // The ledger's own start time, so "newer than the ledger" is answerable. Absent it,
   // the staleness rule is skipped rather than guessed — a check that invents its own
   // baseline would fail honest ledgers, and a gate that cries wolf gets deleted.
-  // Fractional seconds and a `Z` designator are captured: `new Date().toISOString()` and
-  // `date -u +%FT%TZ` both write them, and dropping the `Z` made a UTC stamp parse as LOCAL time,
+  // Fractional seconds and a `Z` designator are captured: `new Date().toISOString()` writes
+  // both, `date -u +%FT%TZ` writes the `Z` alone; dropping the `Z` made a UTC stamp parse as LOCAL time,
   // so on a machine west of UTC every artifact produced in the first hours read "older than the
   // ledger" and an honest ledger failed.
   const createdM = text.match(/^Created:?\s+(\d{4}-\d{2}-\d{2}[T ][\d:]+(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/m);

@@ -560,7 +560,11 @@ if any(r["status"] == "verified" for r in rows):
         # and Date.parse("2020-01-01T24:00:01") is NaN. A loose `(:.*)?` rewrote the second
         # into a parseable datetime, so the port ENFORCED staleness where the oracle skips it
         # — the opposite direction from the bug this fix is for, and just as silent.
-        m24 = re.match(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})T24(:00(?::00)?)?((?:[+-].*|Z)?)$", raw)
+        # Fractions are captured too: Date.parse("...T24:00:00.000Z") is legal (all-zero
+        # fraction denotes exact midnight) but Date.parse("...T24:00:00.5Z") is NaN, so
+        # only an all-zero fraction may match here -- a loose `.*` would accept a fraction
+        # the oracle rejects, enforcing staleness where the oracle silently skips it.
+        m24 = re.match(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})T24(:00(?::00(?:\.0+)?)?)?((?:[+-].*|Z)?)$", raw)
         if m24:
             raw = (datetime.fromisoformat(m24.group(1)) + timedelta(days=1)).strftime("%Y-%m-%d") \
                 + "T00" + (m24.group(2) or "") + m24.group(3)

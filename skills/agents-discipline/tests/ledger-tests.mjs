@@ -202,6 +202,22 @@ const cases = [
     ],
   },
   {
+    // Guards the dotted-unit-id fix (d1011f0): the header regex used to key evidence blocks by
+    // `[0-9]+` alone, so `**Unit 1.2 —**` filed under unit `1` and row `1.2` (the Depth Tree's
+    // own leaf-numbering scheme) read UNBACKED even though its own evidence cites a real file.
+    // Row `#` is the literal string "1.2" (unit = cells[0]), so this only exercises the fix
+    // when the header capture keeps the dot instead of stopping at the first digit run.
+    // want:0 and "ledger complete" is the discriminator: unfixed, the row lands in `unbacked`
+    // (line 573) instead of `unreproducible`, which fails the ledger outright.
+    name: "a dotted unit id's own evidence block backs it, not row 1",
+    file: "tests/fixtures/dotted-unit-backed.md",
+    want: 0,
+    rerun: true,
+    artifacts: ["reports/dotted-1.2.txt"],
+    expect: ["ledger complete"],
+    reject: ["UNBACKED verified rows"],
+  },
+  {
     // Guards `d88f586`: Python's bare `re.I` folds U+0131 onto `i`, while JS `/i` without the
     // `u` flag refuses every non-ASCII->ASCII fold -- so a `**Un<U+0131>t 1` line is a unit
     // header to the port and NOT to the oracle. This finder decides evidence ATTRIBUTION, so
@@ -667,6 +683,21 @@ const cases = [
     expect: ["ACCEPTANCE DID NOT REPRODUCE", "budget exhausted before this row ran"],
   },
   {
+    // Guards the named-timeout fix (d1011f0): a re-run that is genuinely IN FLIGHT when the
+    // budget runs out used to print bare `exit 1`, indistinguishable from a real acceptance
+    // failure -- unlike the case above, where the row never starts at all. A 300ms budget on
+    // a `sleep 1` acceptance starts with `remaining > 0` (so it takes the execFileSync path,
+    // not the pre-check above) and is killed mid-run by the child's own `timeout` option,
+    // which is what raises Node's ETIMEDOUT / Python's TimeoutExpired this case pins.
+    name: "an acceptance that sleeps past a small re-run budget is named 'timed out'",
+    file: "tests/fixtures/timeout-budget.md",
+    rerun: true,
+    artifacts: ["reports/timeout-1.txt"],
+    envExtra: { AGENTS_DISCIPLINE_RERUN_BUDGET_MS: "300" },
+    want: 1,
+    expect: ["timed out — the re-run budget ran out while this acceptance was running"],
+  },
+  {
     // A malformed budget must HARD-FAIL, in every runtime, before a single row runs. The
     // underscore form is the one that separates a JavaScript `Number()` from a Python
     // `float()`: Number("1_000") is NaN (numeric separators are a literal-syntax feature, not
@@ -740,6 +771,41 @@ const cases = [
     file: "tests/fixtures/created-unparseable.md",
     want: 0,
     expect: ["artifacts:   1 cited, all present"],
+    reject: ["older than the ledger"],
+  },
+  {
+    // Guards the port's fraction handling on the T24 rewrite (TRDD follow-up to d1011f0):
+    // `T24:00:00.000Z` is legal ISO 8601 -- hour 24 denotes exactly next-day midnight, and an
+    // all-zero fraction still means that same instant -- and Date.parse accepts it (measured
+    // above the fix). The old rewrite regex only recognised `T24`, `T24:00`, or `T24:00:00`
+    // with no fraction at all, so it failed to match and the whole `Created:` line fell
+    // through unparsed -- the same silent-skip failure mode as the case above, reached by a
+    // fraction instead of a bare hour 24. want:1 and the future date make an unfixed port's
+    // silent skip visible the same way: unfixed, every artifact reads younger than an
+    // unenforced rule and the ledger reports complete instead of stale.
+    // Node needs no change here (Date.parse already accepts the fraction natively, measured),
+    // so this case only reds the Python port when change 1 (the `(?:\.0+)?` group) is reverted.
+    name: "a Created hour of 24 with an all-zero fraction still enforces the staleness rule",
+    file: "tests/fixtures/created-hour-24-fraction.md",
+    want: 1,
+    expect: ["older than the ledger", "tests/fixtures/complete.md"],
+  },
+  {
+    // Guards the `Z`/fraction capture in `Created:` (d1011f0): dropping the `Z` made a UTC
+    // stamp parse as LOCAL time, so west of UTC a fresh artifact could read "older than the
+    // ledger". TZ=America/New_York (UTC-4 in September) is the west-of-UTC probe; the
+    // `Created:` stamp is generated an hour before "now" so a 4-hour misreading would place
+    // the false Created time THREE HOURS AFTER the artifact that was just written into the
+    // temp dir -- reddening `staleArtifacts` on the bug and staying green on the fix, which
+    // parses the trailing `Z` and treats the stamp as UTC regardless of the process TZ.
+    name: "a Z-stamped Created is read as UTC even under a west-of-UTC TZ",
+    file: "tests/fixtures/created-z-tz.md",
+    mutate: (t) => t.replace("CREATED_PLACEHOLDER", new Date(Date.now() - 60 * 60 * 1000).toISOString()),
+    rerun: true,
+    artifacts: ["reports/tz-artifact.txt"],
+    envExtra: { TZ: "America/New_York" },
+    want: 0,
+    expect: ["ledger complete"],
     reject: ["older than the ledger"],
   },
   {

@@ -40,7 +40,7 @@ git worktree add -b agent/stats ../wt-stats HEAD
 
 Worktrees are strictly safer and are the default recommendation. One writer per worktree. The ledger's "Files (mine)" column is what makes shared-tree parallelism safe when worktrees are impractical.
 
-The coordinator is the only one who merges. Workers never merge, never push, never touch git beyond their own commits. Verify each unit in its own worktree, then merge it before running `ledger-check.mjs`: the checker re-runs every `verified` row's acceptance from the ledger's repository root, where an unmerged unit's work does not exist.
+The coordinator is the only one who merges, and only it pushes. A worker in its own worktree may commit on its own branch; a worker in a shared tree never runs git at all, per above. Verify each unit in its own worktree, then merge it before running `ledger-check.mjs`: the checker re-runs every `verified` row's acceptance from the ledger's repository root, where an unmerged unit's work does not exist.
 
 ## The verification hierarchy
 
