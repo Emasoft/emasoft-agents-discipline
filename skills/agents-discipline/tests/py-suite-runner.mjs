@@ -12,16 +12,10 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const py = process.env.PYTHON || "python3";
 // cmdrun_stress.py is NOT in this list: the full stress run (all seeds) is a
 // coordinator step, not a per-PR gate -- CI runs the deterministic unit suite.
-// cmdrun_tests.py is POSIX-only BY DESIGN (see its module docstring): it kills
-// process groups via os.killpg, snapshots the table via `ps`, and imports the
-// POSIX-only `resource` module -- none of which exist on Windows. Gating ~150
-// rows by hand would be a rewrite; the runner gates the whole suite by platform
-// instead. The Windows cells still exercise cmdrun itself via python-lib-checks
-// (parity) and via the winproof suite once it lands (TRDD-2U56GG7S step 8).
-const suites =
-  process.platform === "win32"
-    ? ["tests/python-lib-checks.py"]
-    : ["tests/cmdrun_tests.py", "tests/python-lib-checks.py"];
+// cmdrun_tests.py is import-safe on Windows (resource import guarded, ps helpers
+// return "" and every row that depends on seeing a live process gates on WIN),
+// so it runs on ALL cells and the Windows ones produce real port findings.
+const suites = ["tests/cmdrun_tests.py", "tests/python-lib-checks.py"];
 
 for (const suite of suites) {
   const r = spawnSync(py, [resolve(root, suite)], { stdio: "inherit" });

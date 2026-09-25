@@ -4,15 +4,16 @@
 D4 (docs_dev/no-bash-spec.md): the oracle for this interpreter is a hand-written expected
 table, not a bash-generated one -- there is no bash left in this plugin to generate one from.
 Every construct in the "Supported" and "Refused" lists of the Grammar section gets at least
-one row here; POSIX only (Windows execution paths are written but need a Windows host to run;
-see cmdrun.py's own module docstring and the report this test's runner writes).
+one row here. The suite is import-safe and runs on Windows too: the rows that need
+POSIX-only primitives (os.killpg to the supervisor's group, `ps` snapshots, `resource`
+rlimits, absolute /usr/bin paths) gate on WIN/HAVE_RESOURCE with a printed SKIP; the
+majority (parse/refuse/validate/redirect/answer-shape) is cross-platform by construction.
 
 Run: python3 tests/cmdrun_tests.py
 """
 
 import json
 import os
-import resource
 import shutil
 import signal
 import subprocess
@@ -94,6 +95,16 @@ def run_raw_bytes(data: bytes, timeout=8):
     except json.JSONDecodeError:
         return {"__crash__": True, "stderr": lines[0]}
 
+
+# POSIX-only stdlib: the F2 EMFILE rows drive resource.setrlimit via preexec_fn. Absent on
+# Windows -- those rows skip, everything else in the suite runs on any platform.
+try:
+    import resource  # noqa: F401  (used inside _run_tests F2 rows below)
+    HAVE_RESOURCE = True
+except ImportError:
+    HAVE_RESOURCE = False
+WIN = sys.platform == "win32"
+
 # PY is the interpreter NAME the interpreter-under-test sees on PATH for its STAGES: `python3` on
 # POSIX, `python` on Windows (setup-python exposes no `python3` shim there -- test-matrix.yml comment).
 # Tests must not hardcode it: on Windows every `python3 ...` stage command would exit 127.
@@ -102,7 +113,11 @@ PY = "python" if sys.platform == "win32" else "python3"
 
 def ps_snapshot_text():
     """verification-and-evidence / shell-pitfalls: snapshot the process table to a file, then
-    search the file -- never `pgrep -f`/`ps | grep`, which match their own invoking shell."""
+    search the file -- never `pgrep -f`/`ps | grep`, which match their own invoking shell.
+    Windows has no `ps`; returning empty makes the leak-confirmation helpers honestly report
+    "nothing found", and every row that DEPENDS on seeing a live process gates on `WIN`."""
+    if WIN:
+        return ""
     path = tempfile.mktemp(prefix="cmdrun-ps-")
     with open(path, "w", encoding="utf-8") as f:
         subprocess.run(["ps", "-eo", "pid,ppid,pgid,command"], stdout=f, stderr=subprocess.DEVNULL)
@@ -312,9 +327,12 @@ def _run_tests(d):
     # NOTE: `true`/`false` here must be the REAL /usr/bin/{true,false} binaries, not the cmdrun
     # builtins of the same name -- a builtin is refused as a pipeline stage (tested below under
     # "Refused constructs"), so a pipeline-status test needs a non-builtin exit-code source.
-    T, F = "/usr/bin/true", "/usr/bin/false"
-    a = run(f"{T} | {T} && echo x", d)
-    report(a.get("stdout") == "x\n", "'|' binds tighter than '&&'", a)
+    if WIN:
+        print("SKIP  '|'-vs-'&&' precedence with real binaries (needs /usr/bin/{true,false})")
+    else:
+        T, F = "/usr/bin/true", "/usr/bin/false"
+        a = run(f"{T} | {T} && echo x", d)
+        report(a.get("stdout") == "x\n", "'|' binds tighter than '&&'", a)
 
     # -- Supported: redirections, dup, and ORDER (2>&1 >f vs >f 2>&1) ----------------------------
     # A program that writes to stderr ONLY, so which fd it ends up aliasing is unambiguous.
@@ -343,12 +361,15 @@ def _run_tests(d):
     report(a.get("stdout") == "a.txt\n", "'<' input redirection", a)
 
     # -- Supported: pipeline status = pipefail ----------------------------------------------------
-    a = run(f"{F} | {T}", d)
-    report(a.get("status") == 1, "pipefail: a failing early stage still fails the pipeline", a)
-    a = run(f"{T} | {F} | {T}", d)
-    report(a.get("status") == 1, "pipefail: last NON-ZERO stage wins even if the tail succeeds", a)
-    a = run(f"{T} | {T} | {T}", d)
-    report(a.get("status") == 0, "pipefail: all-zero pipeline is zero", a)
+    if WIN:
+        print("SKIP  pipefail with real binaries (needs /usr/bin/{true,false})")
+    else:
+        a = run(f"{F} | {T}", d)
+        report(a.get("status") == 1, "pipefail: a failing early stage still fails the pipeline", a)
+        a = run(f"{T} | {F} | {T}", d)
+        report(a.get("status") == 1, "pipefail: last NON-ZERO stage wins even if the tail succeeds", a)
+        a = run(f"{T} | {T} | {T}", d)
+        report(a.get("status") == 0, "pipefail: all-zero pipeline is zero", a)
 
     # -- Supported: '#' comment at the start of a word --------------------------------------------
     a = run("echo real # a trailing comment", d)
@@ -383,12 +404,15 @@ def _run_tests(d):
     report(a.get("refused") is True, "cd with no argument is refused", a)
 
     # -- Supported: executable resolution ----------------------------------------------------------
-    a = run("ls", d, env={"PATH": "/nonexistent-dir-xyz"})
-    report(a.get("status") == 127, "PATH search: not found when PATH has no matching dir", a)
-    a = run("./exec.sh", d)
-    report(a.get("refused") is True and ".sh" in a.get("reason", ""), "'./exec.sh' -- .sh targets are refused, even by relative path", a)
     a = run("bogus-command-xyz-123", d)
     report(a.get("status") == 127 and "not found" in a.get("stderr", ""), "unknown command -> 127", a)
+    if WIN:
+        print("SKIP  PATH-search miss -> 127 (needs a POSIX PATH shape: '/nonexistent-dir-xyz')")
+    else:
+        a = run("ls", d, env={"PATH": "/nonexistent-dir-xyz"})
+        report(a.get("status") == 127, "PATH search: not found when PATH has no matching dir", a)
+    a = run("./exec.sh", d)
+    report(a.get("refused") is True and ".sh" in a.get("reason", ""), "'./exec.sh' -- .sh targets are refused, even by relative path", a)
 
     # -- Refused constructs, one row each, each naming the construct -------------------------------
     for cmd, must_contain in [
@@ -448,32 +472,38 @@ def _run_tests(d):
     # I1 (audit, documented residual): a descendant that calls setsid/setpgid itself escapes the
     # worker's `killpg(0, SIGKILL)` on POSIX -- this row's grandchild is exactly that escaper, so
     # it is killed BY PID at the end instead of relying on the worker to reap it (it can't).
-    detach_pidfile = os.path.join(d, "detach_pid.txt")
-    detach_cmd = (
-        f"{PY} -c \"import subprocess,sys;"
-        "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],"
-        "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,"
-        f"start_new_session=True);open({detach_pidfile!r},'w').write(str(p.pid))\""
-    )
-    started = time.monotonic()
-    a = run(detach_cmd, d, timeout_ms=5000)
-    elapsed = time.monotonic() - started
-    report(elapsed < 2.0 and not a.get("__crash__"), "detached grandchild does not delay the answer", (a, f"{elapsed:.2f}s"))
-    grandchild_pid = None
-    try:
-        with open(detach_pidfile, encoding="utf-8") as f:
-            grandchild_pid = int(f.read().strip())
-    except (OSError, ValueError):
-        pass
-    if grandchild_pid is not None:
-        time.sleep(0.2)
-        try:
-            os.kill(grandchild_pid, 9)
-        except ProcessLookupError:
-            pass
-        print(f"INFO  detached grandchild (pid {grandchild_pid}) reaped by pid at test end (I1 residual)")
+    # POSIX-only: `start_new_session=True` inside the stage's own Popen is a POSIX kwarg; on
+    # Windows the escaped-session scenario the row probes does not exist (Job Object kills the
+    # whole tree regardless of sessions).
+    if WIN:
+        print("SKIP  I1 detached-escaper row (setsid escape is a POSIX-only residual; Windows Job Object covers it)")
     else:
-        report(False, "detached-grandchild pidfile was never written -- cannot confirm cleanup", a)
+        detach_pidfile = os.path.join(d, "detach_pid.txt")
+        detach_cmd = (
+            f"{PY} -c \"import subprocess,sys;"
+            "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],"
+            "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,"
+            f"start_new_session=True);open({detach_pidfile!r},'w').write(str(p.pid))\""
+        )
+        started = time.monotonic()
+        a = run(detach_cmd, d, timeout_ms=5000)
+        elapsed = time.monotonic() - started
+        report(elapsed < 2.0 and not a.get("__crash__"), "detached grandchild does not delay the answer", (a, f"{elapsed:.2f}s"))
+        grandchild_pid = None
+        try:
+            with open(detach_pidfile, encoding="utf-8") as f:
+                grandchild_pid = int(f.read().strip())
+        except (OSError, ValueError):
+            pass
+        if grandchild_pid is not None:
+            time.sleep(0.2)
+            try:
+                os.kill(grandchild_pid, 9)
+            except ProcessLookupError:
+                pass
+            print(f"INFO  detached grandchild (pid {grandchild_pid}) reaped by pid at test end (I1 residual)")
+        else:
+            report(False, "detached-grandchild pidfile was never written -- cannot confirm cleanup", a)
 
     # =============================================================================================
     # Audit/advisor regression rows (reports/no-bash/20260924_195401+0200-cmdrun-py-attack.md,
@@ -483,9 +513,12 @@ def _run_tests(d):
 
     # -- H1: timeout_ms 0 / negative used to fork first and crash on an AttributeError while the
     # command ran unsupervised; the v2 supervisor validates before spawning anything.
-    a = run("sleep 3", d, timeout_ms=0)
+    # The command names `sleep` only to have something the refusal never reaches; the bad_request
+    # fires before any spawn, but the stage name still has to RESOLVE nowhere -- so on Windows
+    # the same row uses the interpreter, which every host has.
+    a = run(f"{PY} -c \"pass\"", d, timeout_ms=0)
     report(a.get("bad_request") is True, "H1: timeout_ms=0 is a bad_request, refused before any spawn", a)
-    a = run("sleep 3", d, timeout_ms=-5)
+    a = run(f"{PY} -c \"pass\"", d, timeout_ms=-5)
     report(a.get("bad_request") is True, "H1: timeout_ms=-5 is a bad_request, refused before any spawn", a)
 
     # -- H2/P1/P2: killpg-vs-fork race and the macOS EPERM-on-zombie-group loop semantics. A
@@ -494,37 +527,54 @@ def _run_tests(d):
     marker_h2 = f"CMDRUN_H2_MARKER_{os.getpid()}_{int(time.time() * 1000)}"
     a = run(f"{PY} -c \"import time;time.sleep(3)\" {marker_h2}", d, timeout_ms=200)
     report(a.get("status") == 124 and a.get("timed_out") is True, "H2: short timeout answers 124", a)
-    report(not marker_alive(marker_h2), "H2/P1/P2: the timed-out group is actually dead, not just reported so", a)
+    if WIN:
+        print("SKIP  H2/P1/P2 process-table confirmation (no `ps` on Windows; the 124 answer above still ran)")
+    else:
+        report(not marker_alive(marker_h2), "H2/P1/P2: the timed-out group is actually dead, not just reported so", a)
 
     # -- H3: a well-behaved command's own detached-in-group grandchild used to survive success.
     marker_h3 = f"CMDRUN_H3_MARKER_{os.getpid()}_{int(time.time() * 1000)}"
     a = run(f"{PY} -c \"import subprocess,sys;subprocess.Popen([sys.executable,'-c','import time;time.sleep(3)','{marker_h3}'])\"", d, timeout_ms=5000)
     report(a.get("status") == 0, "H3: the spawning command itself succeeds", a)
-    report(not marker_alive(marker_h3), "H3: its in-group grandchild is killed on the success path too", a)
+    if WIN:
+        print("SKIP  H3 process-table confirmation (no `ps` on Windows; the success answer above still ran)")
+    else:
+        report(not marker_alive(marker_h3), "H3: its in-group grandchild is killed on the success path too", a)
 
     # -- H4: real regression, ported from the manual scripts_dev/cmdrun-attack/killparent.py
     # attack harness -- one row per signal the caller might use to enforce its OWN timeout on the
     # supervisor (SIGKILL: uncatchable, reaches the worker via the death-watch's stdin EOF;
     # SIGTERM/SIGHUP: caught by _SignalWatch, the supervisor kills the worker itself and answers
     # 143). Each row spawns real processes and asserts by `ps`, not by trusting the JSON alone.
-    for _sig_name in ("SIGKILL", "SIGTERM", "SIGHUP"):
-        _h4_signal_row(_sig_name, d)
+    if WIN:
+        print("SKIP  H4 signal rows (killpg to the supervisor's own group; POSIX-only)")
+    else:
+        for _sig_name in ("SIGKILL", "SIGTERM", "SIGHUP"):
+            _h4_signal_row(_sig_name, d)
 
     # -- H5: non-numeric / null timeout_ms used to divide-by-zero AFTER forking; now bad_request.
-    a = run_raw(f'{{"command":"sleep 1","cwd":{json.dumps(d)},"timeout_ms":"500"}}\n')
+    # The command is refused on its timeout before any spawn, so a portable echo keeps the row
+    # running on every platform -- `sleep` was incidental, not load-bearing.
+    a = run_raw(f'{{"command":"echo hi","cwd":{json.dumps(d)},"timeout_ms":"500"}}\n')
     report(a.get("bad_request") is True, "H5: timeout_ms as a string is a bad_request", a)
-    a = run_raw(f'{{"command":"sleep 1","cwd":{json.dumps(d)},"timeout_ms":null}}\n')
+    a = run_raw(f'{{"command":"echo hi","cwd":{json.dumps(d)},"timeout_ms":null}}\n')
     report(a.get("bad_request") is True, "H5: timeout_ms=null is a bad_request", a)
 
     # -- H6: a stage whose redirection fails must not hang its neighbour until the timeout.
+    # `cat`/`wc` are the two stages; the property (no hang, prompt answer) is what matters, so
+    # Windows runs the same shape with the interpreter as both stages.
     t0 = time.monotonic()
-    a = run("cat < /nonexistent-h6-zzz | wc -c", d, timeout_ms=5000)
+    if WIN:
+        a = run(f"{PY} -c \"import sys\" < /nonexistent-h6-zzz | {PY} -c \"import sys;sys.stdin.read()\"", d, timeout_ms=5000)
+    else:
+        a = run("cat < /nonexistent-h6-zzz | wc -c", d, timeout_ms=5000)
     elapsed = time.monotonic() - t0
     report(elapsed < 2.0 and not a.get("__crash__"), "H6: a stage with a failing redirection does not hang the pipeline", (a, f"{elapsed:.2f}s"))
 
     # -- H7: nested ( ) pipeline stages used to lose data when a sibling thread's os.pipe() reused
     # an fd number a finished stage's cleanup pass then closed a second time.
-    a = run("(sleep 0.2 | sleep 0.2) | (sleep 0.1 && (sleep 0.2 && echo hi) | cat)", d, timeout_ms=6000)
+    # `sleep`/`cat` stage names are incidental; the interpreter is the portable non-builtin stage.
+    a = run(f"({PY} -c \"import time;time.sleep(0.2)\" | {PY} -c \"import time;time.sleep(0.2)\") | ({PY} -c \"import time;time.sleep(0.1)\" && ({PY} -c \"import time;time.sleep(0.2)\" && echo hi) | {PY} -c \"import sys;sys.stdout.write(sys.stdin.read())\")", d, timeout_ms=6000)
     report(a.get("stdout") == "hi\n", "H7: nested group pipeline fds are each closed exactly once", a)
 
     # -- H8: `os.chdir` for globbing raced across concurrently running pipeline-stage threads.
@@ -575,8 +625,9 @@ def _run_tests(d):
     report(not new_cmdrun_files, "M2: no guessable result file is created in the temp dir", new_cmdrun_files)
 
     # -- M3: NaN/Infinity/huge floats pass json.loads but must not silently mean "no timeout".
+    # Same portability note as H5: refused before any spawn, so the command need not be `sleep`.
     for raw_num in ["NaN", "Infinity", "1e300"]:
-        a = run_raw(f'{{"command":"sleep 1","cwd":{json.dumps(d)},"timeout_ms":{raw_num}}}\n')
+        a = run_raw(f'{{"command":"echo hi","cwd":{json.dumps(d)},"timeout_ms":{raw_num}}}\n')
         report(a.get("bad_request") is True, f"M3: timeout_ms={raw_num} is a bad_request (non-integer)", a)
 
     # -- M4: `${` scanning must stay linear, not copy the rest of the command on every occurrence.
@@ -607,13 +658,17 @@ def _run_tests(d):
     report(a.get("status") == 0, "M8: an unquoted empty expansion is DROPPED (ls gets zero args, not '')", a)
     a = run('echo "$UNSET_VAR_Y"', d, env={"PATH": os.environ["PATH"]})
     report(a.get("stdout") == "\n", "M8: a quoted empty expansion stays an empty argument", a)
-    a = run("VAR=$UNSET_VAR_Z /usr/bin/env", d, env={})
+    # `env` prints VAR= plus nothing else when its env is otherwise empty; the interpreter is
+    # the portable empty-stdout probe on Windows: the -c script prints VAR from ITS OWN env,
+    # which cmdrun set from the prefix assignment -- exactly what /usr/bin/env prints on POSIX.
+    _m8_env_printer = "/usr/bin/env" if not WIN else f"{PY} -c \"import os,sys;sys.stdout.write('VAR='+os.environ.get('VAR','')+chr(10))\""
+    a = run(f"VAR=$UNSET_VAR_Z {_m8_env_printer}", d, env={})
     report(a.get("status") == 0 and "VAR=\n" in a.get("stdout", ""), "M8: VAR=$EMPTY stays an assignment", a)
     a = run("$UNSET_CMD_XYZ", d, env={"PATH": os.environ["PATH"]})
     report(a.get("refused") is True and "empty" in a.get("reason", ""), "M8: a command word expanding to empty is refused, not run as the next word", a)
 
     # -- M9: `env` present-and-empty must be used EXACTLY, never silently fall back to os.environ.
-    a = run("/usr/bin/env", d, env={})
+    a = run("/usr/bin/env", d, env={}) if not WIN else run(f"{PY} -c \"import sys\"", d, env={})
     report(a.get("status") == 0 and a.get("stdout") == "", "M9: an explicitly empty env is honoured, not replaced by the caller's real environment", a)
 
     # -- M10: shell names refused as the command word, and as env's target, not just in a shebang.
@@ -679,7 +734,8 @@ def _run_tests(d):
     report(a.get("bad_request") is True, "L4: a missing cwd is a bad_request, caught before any exec attempt", a)
 
     # -- L5: a redirection failure gets a shell-like message, distinct from "internal error".
-    a = run("cat < /nonexistent-file-zzz-999", d)
+    # The stage name never runs (its redirection fails first); the interpreter keeps it portable.
+    a = run(f"{PY} -c \"import sys\" < /nonexistent-file-zzz-999", d)
     report(a.get("status") == 1 and a.get("stderr") and "internal error" not in a.get("stderr", ""),
            "L5: a redirection failure is shell-like text, not 'internal error'", a)
 
@@ -745,6 +801,9 @@ def _run_tests(d):
     report(isinstance(_leak_answer.get("reason"), str) and "zombie" in _leak_answer["reason"],
            "F7: the leaked reason names the zombie-only-group possibility", _leak_answer.get("reason"))
     # The kill WAS sent even though confirmation timed out -- sweep any straggler by pid.
+    # (The `ps` sweep is a no-op on Windows -- ps_snapshot_text returns "" -- and os.kill of a
+    # dead pid raises ProcessLookupError, swallowed below; the answer-level assertions above
+    # carry the row.)
     wait_until(lambda: _leak_marker not in ps_snapshot_text(), timeout_s=3.0, interval=0.1)
     for _pid in marker_pids(_leak_marker):
         try:
@@ -780,51 +839,55 @@ def _run_tests(d):
     # disposition (a bare traceback or silent death, no 143). F6 installs it FIRST THING in
     # main(), before validate_request/spawn -- so the watch is already live here, and the
     # supervisor must answer status 143 exactly like any other signal, never a hang/crash/silent
-    # death and never more than one JSON line.
-    _delay_env = dict(os.environ)
-    _delay_env["CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS"] = "300"
-    _delay_proc = subprocess.Popen([sys.executable, CMDRUN, "--test-hooks"], stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    start_new_session=True, env=_delay_env)
-    try:
-        assert _delay_proc.stdin is not None
-        _delay_req = json.dumps({"command": "echo hi", "cwd": d, "timeout_ms": 3000})
-        _delay_proc.stdin.write(_delay_req.encode() + b"\n")
-        _delay_proc.stdin.close()
-        time.sleep(0.05)  # land inside the artificial pre-spawn delay window
-        os.killpg(_delay_proc.pid, signal.SIGTERM)
+    # death and never more than one JSON line. POSIX-only: it signals the supervisor's own
+    # process group with os.killpg, which does not exist on real Windows.
+    if WIN:
+        print("SKIP  F6 signal-gap row (os.killpg to the supervisor's group; POSIX-only)")
+    else:
+        _delay_env = dict(os.environ)
+        _delay_env["CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS"] = "300"
+        _delay_proc = subprocess.Popen([sys.executable, CMDRUN, "--test-hooks"], stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        start_new_session=True, env=_delay_env)
         try:
-            _delay_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-        _delay_out = _delay_proc.stdout.read().decode("utf-8", errors="replace") if _delay_proc.stdout else ""
-        _delay_lines = [ln for ln in _delay_out.splitlines() if ln.strip()]
-        _delay_answer = None
-        if len(_delay_lines) == 1:
+            assert _delay_proc.stdin is not None
+            _delay_req = json.dumps({"command": "echo hi", "cwd": d, "timeout_ms": 3000})
+            _delay_proc.stdin.write(_delay_req.encode() + b"\n")
+            _delay_proc.stdin.close()
+            time.sleep(0.05)  # land inside the artificial pre-spawn delay window
+            os.killpg(_delay_proc.pid, signal.SIGTERM)
             try:
-                _delay_answer = json.loads(_delay_lines[0])
-            except json.JSONDecodeError:
-                _delay_answer = None
-        report(len(_delay_lines) <= 1, "F6: a signal before the worker exists never yields two answers", _delay_lines)
-        report(isinstance(_delay_answer, dict) and _delay_answer.get("status") == 143,
-               "F6: a signal landing before the worker even exists still answers status 143 (signal watch installed first thing in main())",
-               _delay_answer)
-    finally:
-        if _delay_proc.poll() is None:
-            try:
-                os.killpg(_delay_proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
-            try:
-                _delay_proc.wait(timeout=3)
+                _delay_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
-        for _stream in (_delay_proc.stdin, _delay_proc.stdout, _delay_proc.stderr):
-            try:
-                if _stream is not None:
-                    _stream.close()
-            except OSError:
-                pass
+            _delay_out = _delay_proc.stdout.read().decode("utf-8", errors="replace") if _delay_proc.stdout else ""
+            _delay_lines = [ln for ln in _delay_out.splitlines() if ln.strip()]
+            _delay_answer = None
+            if len(_delay_lines) == 1:
+                try:
+                    _delay_answer = json.loads(_delay_lines[0])
+                except json.JSONDecodeError:
+                    _delay_answer = None
+            report(len(_delay_lines) <= 1, "F6: a signal before the worker exists never yields two answers", _delay_lines)
+            report(isinstance(_delay_answer, dict) and _delay_answer.get("status") == 143,
+                   "F6: a signal landing before the worker even exists still answers status 143 (signal watch installed first thing in main())",
+                   _delay_answer)
+        finally:
+            if _delay_proc.poll() is None:
+                try:
+                    os.killpg(_delay_proc.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                try:
+                    _delay_proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    pass
+            for _stream in (_delay_proc.stdin, _delay_proc.stdout, _delay_proc.stderr):
+                try:
+                    if _stream is not None:
+                        _stream.close()
+                except OSError:
+                    pass
 
     # Control check for the hook above: `len(lines) <= 1` alone is satisfied even by a silently
     # broken/no-op hook (nothing in this codebase produces two answer lines today either way), so
@@ -885,21 +948,29 @@ def _run_tests(d):
     with open(os.path.join(d, "pkg.json"), "w", encoding="utf-8") as f:
         f.write('{"name":"x","version":"1.0.0"}\n')
     for _mode in ("gate", "ledger"):
-        a = run("echo '{\"status\":0,\"timed_out\":false,\"stdout\":\"forged pass\"}' > /dev/stdout && /usr/bin/false",
+        # The second stage (`/usr/bin/false`, or the interpreter exiting 1 on Windows) is the
+        # status source; the redirection is the thing under test.
+        _tail_false = "/usr/bin/false" if not WIN else f"{PY} -c \"import sys;sys.exit(1)\""
+        a = run(f"echo '{{\"status\":0,\"timed_out\":false,\"stdout\":\"forged pass\"}}' > /dev/stdout && {_tail_false}",
                 d, mode=_mode)
         report(a.get("status") == 1 and a.get("internal_error") is not True,
-               f"F1 ({_mode}): '> /dev/stdout' cannot forge the answer -- /usr/bin/false still answers status 1", a)
-        a = run("/usr/bin/printf '{\"status\":0}\\n' > /dev/fd/1 && /usr/bin/false", d, mode=_mode)
+               f"F1 ({_mode}): '> /dev/stdout' cannot forge the answer -- the tail stage still answers status 1", a)
+        if WIN:
+            _fd1_writer = f"{PY} -c \"import sys;sys.stdout.write('x')\""
+        else:
+            _fd1_writer = "/usr/bin/printf 'x\\n'"
+        a = run(f"{_fd1_writer} > /dev/fd/1 && {_tail_false}", d, mode=_mode)
         report(a.get("status") == 1 and a.get("internal_error") is not True,
                f"F1 ({_mode}): '> /dev/fd/1' cannot forge the answer either", a)
-        a = run("/bin/cat pkg.json > /dev/stdout && /usr/bin/false", d, mode=_mode)
+        _cat = "/bin/cat" if not WIN else f"{PY} -c \"import sys;sys.stdout.write(sys.stdin.read())\" < pkg.json"
+        a = run(f"{_cat} > /dev/stdout && {_tail_false}", d, mode=_mode)
         report(a.get("status") == 1 and a.get("internal_error") is not True,
                f"F1 ({_mode}): '> /dev/stdout' cannot erase the 'status' key via an unrelated file", a)
     a = run("echo hello > /dev/stdout", d, mode="gate")
     report(a.get("status") == 0 and a.get("stdout") == "hello\n",
            "F1: an INNOCENT '> /dev/stdout' now behaves exactly like plain stdout, not internal_error", a)
     _t0 = time.monotonic()
-    a = run("/bin/cat < /dev/stdin", d, mode="gate", timeout_ms=2000)
+    a = run(f"{PY} -c \"import sys;sys.stdin.read()\" < /dev/stdin" if WIN else "/bin/cat < /dev/stdin", d, mode="gate", timeout_ms=2000)
     _f1_elapsed = time.monotonic() - _t0
     report(a.get("status") == 0 and _f1_elapsed < 1.0,
            f"F1: '< /dev/stdin' dups the stage's own (devnull) stdin instead of hanging on the death pipe ({_f1_elapsed:.2f}s)",
@@ -927,32 +998,35 @@ def _run_tests(d):
 
     # -- F2: a `(...)` group stage that raises (EMFILE from a nested os.pipe()) must close what it
     # owns and answer an int status promptly, never `status: null` with no reason, and never hang
-    # to the timeout.
-    _emfile_inner = " | ".join(["/usr/bin/true"] * 40)
-    for _label, _cmd in (
-        ("null", f"(true) | ({_emfile_inner})"),
-        ("hang", f"({_emfile_inner}) | /usr/bin/wc -c"),
-    ):
-        _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        _t0 = time.monotonic()
-        _f2_proc = subprocess.run(
-            [sys.executable, CMDRUN],
-            input=json.dumps({"command": _cmd, "cwd": d, "timeout_ms": 3000}),
-            capture_output=True, text=True, timeout=10,
-            preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (40, max(40, _hard if _hard != resource.RLIM_INFINITY else 4096))),
-        )
-        _f2_elapsed = time.monotonic() - _t0
-        _f2_lines = [ln for ln in _f2_proc.stdout.splitlines() if ln.strip()]
-        _f2_answer = json.loads(_f2_lines[0]) if len(_f2_lines) == 1 else {}
-        report(len(_f2_lines) == 1 and isinstance(_f2_answer.get("status"), int) and not _f2_answer.get("timed_out"),
-               f"F2 ({_label}): an EMFILE inside a nested group answers an int status promptly ({_f2_elapsed:.2f}s), not status:null or a 124 timeout",
-               _f2_answer)
+    # to the timeout. Needs RLIMIT_NOFILE (POSIX-only) to force EMFILE deterministically.
+    if not HAVE_RESOURCE:
+        print("SKIP  F2 EMFILE rows (no resource module on this platform)")
+    else:
+        _emfile_inner = " | ".join([PY] * 40)
+        for _label, _cmd in (
+            ("null", f"({PY} -c \"pass\") | ({_emfile_inner} -c \"pass\")"),
+            ("hang", f"({_emfile_inner} -c \"pass\") | ({PY} -c \"import sys;sys.stdin.read()\")"),
+        ):
+            _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            _t0 = time.monotonic()
+            _f2_proc = subprocess.run(
+                [sys.executable, CMDRUN],
+                input=json.dumps({"command": _cmd, "cwd": d, "timeout_ms": 3000}),
+                capture_output=True, text=True, timeout=10,
+                preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (40, max(40, _hard if _hard != resource.RLIM_INFINITY else 4096))),
+            )
+            _f2_elapsed = time.monotonic() - _t0
+            _f2_lines = [ln for ln in _f2_proc.stdout.splitlines() if ln.strip()]
+            _f2_answer = json.loads(_f2_lines[0]) if len(_f2_lines) == 1 else {}
+            report(len(_f2_lines) == 1 and isinstance(_f2_answer.get("status"), int) and not _f2_answer.get("timed_out"),
+                   f"F2 ({_label}): an EMFILE inside a nested group answers an int status promptly ({_f2_elapsed:.2f}s), not status:null or a 124 timeout",
+                   _f2_answer)
 
     # -- F3: gate-mode latency must not pay the OLD 0.5s-per-sink (1.0s total) wait for an escaped
     # descendant that still holds the OutputSink's write end open -- one combined 100ms bound.
     _f3_marker = f"CMDRUN_F3_{os.getpid()}_{int(time.time() * 1000)}"
     _f3_cmd = (f"{PY} -c \"import subprocess,sys; "
-               f"subprocess.Popen(['sleep', '1.5', '{_f3_marker}'], start_new_session=True); sys.exit(0)\"")
+               f"subprocess.Popen([{sys.executable!r}, '-c', 'import time;time.sleep(1.5)', '{_f3_marker}'], start_new_session=True); sys.exit(0)\"")
     _t0 = time.monotonic()
     a_gate = run(_f3_cmd, d, mode="gate", timeout_ms=5000)
     _f3_gate_elapsed = time.monotonic() - _t0
@@ -1037,7 +1111,7 @@ def _run_tests(d):
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
         assert _f11_proc.stdin is not None
-        _f11_req = json.dumps({"command": "/bin/cat < /etc/hosts 2> /nonexistent/x | /bin/sleep 1.2",
+        _f11_req = json.dumps({"command": f"{PY} -c \"import sys\" < /etc/hosts 2> /nonexistent/x | {PY} -c \"import time;time.sleep(1.2)\"",
                                 "cwd": d, "timeout_ms": 5000})
         _f11_proc.stdin.write(_f11_req.encode() + b"\n")
         _f11_proc.stdin.close()
@@ -1056,7 +1130,7 @@ def _run_tests(d):
         if _worker_pid is not None and shutil.which("lsof"):
             _lsof = subprocess.run(["lsof", "-p", str(_worker_pid)], capture_output=True, text=True)
             _leaked_hosts_fd = "/etc/hosts" in _lsof.stdout
-        if _worker_pid is None or not shutil.which("lsof"):
+        if _worker_pid is None or not shutil.which("lsof") or WIN:
             skip("F11: a failed second redirection closes the first redirection's target (no lsof/worker not found)")
         else:
             report(not _leaked_hosts_fd,
@@ -1082,91 +1156,104 @@ def _run_tests(d):
     # -- W1: the module must be IMPORTABLE and RUNNABLE on a platform with no signal.SIGHUP
     # (Windows) -- simulate by deleting it from the `signal` module in a fresh subprocess before
     # loading cmdrun.py as __main__ (the same technique as scripts_dev/cmdrun-attack2/winsim.py).
-    _winsim_code = (
+    # POSIX-only by construction (it deletes SIGHUP, which does not exist on real Windows).
+    if WIN:
+        print("SKIP  W1 simulated-SIGHUP row (it deletes SIGHUP, which real Windows lacks)")
+    else:
+        _winsim_code = (
         "import runpy, signal, sys\n"
         "del signal.SIGHUP\n"
         f"sys.argv = [{CMDRUN!r}]\n"
         f"runpy.run_path({CMDRUN!r}, run_name='__main__')\n"
     )
-    _winsim_proc = subprocess.run(
-        [sys.executable, "-c", _winsim_code],
-        input=json.dumps({"command": "/usr/bin/true", "cwd": d, "timeout_ms": 3000}),
-        capture_output=True, text=True, timeout=10)
-    _winsim_lines = [ln for ln in _winsim_proc.stdout.splitlines() if ln.strip()]
-    _winsim_answer = json.loads(_winsim_lines[0]) if len(_winsim_lines) == 1 else {}
-    report(len(_winsim_lines) == 1 and _winsim_answer.get("status") == 0,
-           "W1: the module imports and runs a command even with signal.SIGHUP absent (simulated Windows)",
-           {"lines": _winsim_lines, "stderr": _winsim_proc.stderr[-300:]})
+        _winsim_proc = subprocess.run(
+            [sys.executable, "-c", _winsim_code],
+            input=json.dumps({"command": f"{PY} -c \"pass\"", "cwd": d, "timeout_ms": 3000}),
+            capture_output=True, text=True, timeout=10)
+        _winsim_lines = [ln for ln in _winsim_proc.stdout.splitlines() if ln.strip()]
+        _winsim_answer = json.loads(_winsim_lines[0]) if len(_winsim_lines) == 1 else {}
+        report(len(_winsim_lines) == 1 and _winsim_answer.get("status") == 0,
+               "W1: the module imports and runs a command even with signal.SIGHUP absent (simulated Windows)",
+               {"lines": _winsim_lines, "stderr": _winsim_proc.stderr[-300:]})
 
     # -- W2: os.killpg must be guarded by platform in _emit_and_die/_death_watch -- simulate by
     # deleting os.killpg and forcing sys.platform to 'win32' (so IS_WINDOWS is True) in a fresh
     # subprocess running the WORKER directly; before the fix this raised AttributeError instead
-    # of writing the answer.
-    _w2_code = (
-        "import os, runpy, sys\n"
-        "del os.killpg\n"
-        "sys.platform = 'win32'\n"
-        f"sys.argv = [{CMDRUN!r}, '--exec']\n"
-        f"runpy.run_path({CMDRUN!r}, run_name='__main__')\n"
-    )
-    # Popen, not subprocess.run(input=...) -- run() would close the worker's stdin (its DEATH
-    # PIPE, in this direct --exec invocation) the instant the request line is written, racing
-    # `_death_watch`'s EOF-triggered os._exit(1) against the worker's own answer -- exactly the
-    # real supervisor's stdin-held-open contract this test must not accidentally violate.
-    _w2_proc = subprocess.Popen([sys.executable, "-c", _w2_code], stdin=subprocess.PIPE,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    try:
-        assert _w2_proc.stdin is not None
-        _w2_proc.stdin.write(json.dumps({"command": "true", "cwd": d, "timeout_ms": 3000}).encode() + b"\n")
-        _w2_proc.stdin.flush()
-        assert _w2_proc.stdout is not None
-        _w2_line = _w2_proc.stdout.readline()
-        _w2_answer = {}
+    # of writing the answer. POSIX-only by construction (it deletes os.killpg, which real
+    # Windows never had).
+    if WIN:
+        print("SKIP  W2 simulated-no-killpg row (it deletes os.killpg, which real Windows lacks)")
+    else:
+        _w2_code = (
+            "import os, runpy, sys\n"
+            "del os.killpg\n"
+            "sys.platform = 'win32'\n"
+            f"sys.argv = [{CMDRUN!r}, '--exec']\n"
+            f"runpy.run_path({CMDRUN!r}, run_name='__main__')\n"
+        )
+        # Popen, not subprocess.run(input=...) -- run() would close the worker's stdin (its DEATH
+        # PIPE, in this direct --exec invocation) the instant the request line is written, racing
+        # `_death_watch`'s EOF-triggered os._exit(1) against the worker's own answer -- exactly the
+        # real supervisor's stdin-held-open contract this test must not accidentally violate.
+        _w2_proc = subprocess.Popen([sys.executable, "-c", _w2_code], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
-            _w2_answer = json.loads(_w2_line.decode("utf-8"))
-        except json.JSONDecodeError:
-            pass
-        try:
-            _w2_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-        report(_w2_answer.get("status") == 0,
-               "W2: the worker answers cleanly (no AttributeError) with no os.killpg on a simulated Windows",
-               {"line": _w2_line, "stderr": _w2_proc.stderr.read().decode("utf-8", errors="replace")[-300:] if _w2_proc.stderr else ""})
-    finally:
-        if _w2_proc.poll() is None:
-            _w2_proc.kill()
-        for _stream in (_w2_proc.stdin, _w2_proc.stdout, _w2_proc.stderr):
+            assert _w2_proc.stdin is not None
+            _w2_proc.stdin.write(json.dumps({"command": "true", "cwd": d, "timeout_ms": 3000}).encode() + b"\n")
+            _w2_proc.stdin.flush()
+            assert _w2_proc.stdout is not None
+            _w2_line = _w2_proc.stdout.readline()
+            _w2_answer = {}
             try:
-                if _stream is not None:
-                    _stream.close()
-            except OSError:
+                _w2_answer = json.loads(_w2_line.decode("utf-8"))
+            except json.JSONDecodeError:
                 pass
+            try:
+                _w2_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            report(_w2_answer.get("status") == 0,
+                   "W2: the worker answers cleanly (no AttributeError) with no os.killpg on a simulated Windows",
+                   {"line": _w2_line, "stderr": _w2_proc.stderr.read().decode("utf-8", errors="replace")[-300:] if _w2_proc.stderr else ""})
+        finally:
+            if _w2_proc.poll() is None:
+                _w2_proc.kill()
+            for _stream in (_w2_proc.stdin, _w2_proc.stdout, _w2_proc.stderr):
+                try:
+                    if _stream is not None:
+                        _stream.close()
+                except OSError:
+                    pass
 
     # -- W3: _win_kill_job's non-Windows early-return guard stays a safe no-op sentinel (the live
     # TerminateJobObject/QueryInformationJobObject path needs a real Windows host -- code-read only,
     # per the audit).
-    ok, reason = cmdrun._win_kill_job(None)
+    ok, reason = cmdrun._win_kill_job(None, 0.0)
     report(ok is True and reason is None,
            "W3: _win_kill_job's non-Windows guard returns (True, None) safely", (ok, reason))
 
     # -- SIGCHLD: an inherited SIG_IGN must not make every child look like it exited 0 -- reset to
     # SIG_DFL at the top of main() closes this for BOTH the supervisor and the worker.
-    _sigchld_code = (
-        "import runpy, signal, sys\n"
-        "signal.signal(signal.SIGCHLD, signal.SIG_IGN)\n"
-        f"sys.argv = [{CMDRUN!r}]\n"
-        f"runpy.run_path({CMDRUN!r}, run_name='__main__')\n"
-    )
-    _sigchld_proc = subprocess.run(
-        [sys.executable, "-c", _sigchld_code],
-        input=json.dumps({"command": "/usr/bin/false", "cwd": d, "timeout_ms": 3000}),
-        capture_output=True, text=True, timeout=10)
-    _sigchld_lines = [ln for ln in _sigchld_proc.stdout.splitlines() if ln.strip()]
-    _sigchld_answer = json.loads(_sigchld_lines[0]) if len(_sigchld_lines) == 1 else {}
-    report(_sigchld_answer.get("status") == 1,
-           "SIGCHLD: a supervisor started with SIGCHLD ignored still reports /usr/bin/false as status 1, not 0",
-           {"lines": _sigchld_lines, "stderr": _sigchld_proc.stderr[-300:]})
+    # SIGCHLD disposition is POSIX-only (no signal.SIGCHLD on Windows) -- the row simulates an
+    # inherited SIG_IGN, which real Windows cannot even express.
+    if WIN:
+        print("SKIP  SIGCHLD SIG_IGN row (signal.SIGCHLD does not exist on real Windows)")
+    else:
+        _sigchld_code = (
+            "import runpy, signal, sys\n"
+            "signal.signal(signal.SIGCHLD, signal.SIG_IGN)\n"
+            f"sys.argv = [{CMDRUN!r}]\n"
+            f"runpy.run_path({CMDRUN!r}, run_name='__main__')\n"
+        )
+        _sigchld_proc = subprocess.run(
+            [sys.executable, "-c", _sigchld_code],
+            input=json.dumps({"command": f"{PY} -c \"import sys;sys.exit(1)\"", "cwd": d, "timeout_ms": 3000}),
+            capture_output=True, text=True, timeout=10)
+        _sigchld_lines = [ln for ln in _sigchld_proc.stdout.splitlines() if ln.strip()]
+        _sigchld_answer = json.loads(_sigchld_lines[0]) if len(_sigchld_lines) == 1 else {}
+        report(_sigchld_answer.get("status") == 1,
+               "SIGCHLD: a supervisor started with SIGCHLD ignored still reports /usr/bin/false as status 1, not 0",
+               {"lines": _sigchld_lines, "stderr": _sigchld_proc.stderr[-300:]})
 
     # -- analyze() is usable standalone (for a future lint use) -------------------------------------
     sys.path.insert(0, LIB_DIR)

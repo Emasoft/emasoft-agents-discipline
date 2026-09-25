@@ -1876,14 +1876,18 @@ def _win_terminate_process(pid):  # pragma: no cover - requires Windows to exerc
         pass
 
 
-def _win_kill_job(job):  # pragma: no cover - requires Windows to exercise
+def _win_kill_job(job, settle_budget_s):  # pragma: no cover - requires Windows to exercise
     """Returns (confirmed_empty, reason_or_None). W3: check `TerminateJobObject`'s own return
     value, then QUERY the job's active-process count afterward -- a caller must never believe
     cleanup succeeded just because the API call didn't raise. Contract item 5 (review round 2):
     TerminateJobObject INITIATES teardown and returns before it finishes, so an immediate
     accounting query can still see `ActiveProcesses > 0` on a job that is in fact dying -- a
-    bounded settle/retry window (max 1.0 s total, 50 ms between queries) separates a real
-    survivor from teardown in progress before answering `leaked: true`."""
+    bounded settle/retry window (50 ms between queries) separates a real survivor from teardown
+    in progress before answering `leaked: true`. The window is the caller's cleanup budget
+    (re-derived at the call site, where no time has yet elapsed), not a hardcoded constant: a
+    caller with a 0 budget (the test hook forces exactly that) must answer `leaked: true`
+    immediately rather than silently waiting 1 s and possibly confirming empty against the
+    contract it is being tested for."""
     if sys.platform != "win32":
         return True, None
     try:
@@ -1897,7 +1901,7 @@ def _win_kill_job(job):  # pragma: no cover - requires Windows to exercise
             wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID,
         ]
         info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION()
-        settle_deadline = time.monotonic() + 1.0
+        settle_deadline = time.monotonic() + settle_budget_s
         while True:
             queried = kernel32.QueryInformationJobObject(
                 job, _JobObjectBasicAccountingInformation, ctypes.byref(info),
@@ -1909,7 +1913,7 @@ def _win_kill_job(job):  # pragma: no cover - requires Windows to exercise
                 return True, None
             if time.monotonic() >= settle_deadline:
                 return False, (f"job still has {info.ActiveProcesses} active process(es) "
-                               f"after terminate and a 1.0s settle window")
+                               f"after terminate and a {settle_budget_s:.1f}s settle window")
             time.sleep(0.05)
     except OSError as exc:
         return False, f"TerminateJobObject/QueryInformationJobObject raised: {exc}"
@@ -1973,9 +1977,10 @@ def _run_windows_supervisor(req, signalled):  # pragma: no cover - requires Wind
             answer.setdefault("timed_out", False)
             return answer
         # F7 (parity with the POSIX path): the reap counts INSIDE the same cleanup budget as the
-        # kill itself, never a separate bound tacked on afterward.
+        # kill itself, never a separate bound tacked on afterward. The W3 settle window shares
+        # that same budget -- the settle loop runs against the caller's remaining time.
         cleanup_deadline = time.monotonic() + _cleanup_budget_s()
-        confirmed_empty, kill_reason = _win_kill_job(job)
+        confirmed_empty, kill_reason = _win_kill_job(job, _cleanup_budget_s())
         _reap_bounded(proc, max(0.0, cleanup_deadline - time.monotonic()))
         if not confirmed_empty:
             # W3: TerminateJobObject's return value and the post-terminate active-process count
