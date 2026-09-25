@@ -4,7 +4,7 @@ title: Remove every shell from the plugin with a Python command interpreter and 
 column: dev
 status: tasked
 created: 2026-09-24T19:32:59+0200
-updated: 2026-09-25T12:55:04+0200
+updated: 2026-09-26T00:13:35+0200
 current-owner: main-agent@agents-discipline
 created-by: user
 task-type: refactor
@@ -34,6 +34,7 @@ NEXT ACTION: Windows proof (needs user OK to push a branch) BEFORE step 3 -- it 
 ---
 
 # No-bash conversion — specification (source for the TRDD; the TRDD is authoritative once minted)
+2026-09-26 CI round: branch trdd-2U56GG7S-cmdrun-winproof pushed 5x (27fd163..0a8bf28); runs 1-3 fixed macOS (BSD-sed _scrub), ubuntu (fixture probe-spelling), F6 startup race; run 5 (36195202384) is the FIRST cmdrun-on-Windows execution. HELD on main unpushed: 34bdf4f (comment-only; push with the next real change). RULE for the next CI push on this branch: gh run cancel any in-flight run the new SHA supersedes BEFORE trusting the new run as the verdict (run 4 36194907073 burned because superseded, not cancelled). Branch cleanup PR-vs-delete still undecided -- delete the branch only after the Windows verdicts are recorded in this card.
 
 ## User directives (verbatim)
 
