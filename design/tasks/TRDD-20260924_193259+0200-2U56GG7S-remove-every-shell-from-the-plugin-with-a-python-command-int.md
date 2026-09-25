@@ -28,7 +28,7 @@ cmdrun.py, tests/cmdrun_tests.py and tests/cmdrun_stress.py are all v2 now: pyri
 P1/P2/P6/P7), 3-seed stress run green at --cases 300.
 DONE: coordinator ran the full stress run after the hardening round landed -- unit suite
 193 PASS / 0 fail, stress 6702 checks all green (3 seeds x 733 cases), commit daa61ca.
-NEXT ACTION: Windows proof (needs user OK to push a branch) BEFORE step 3. Steps 2 (JS twin) through 8 are not started. See the spec body below (pasted verbatim).
+NEXT ACTION: Windows proof (needs user OK to push a branch) BEFORE step 3 -- it MUST address the W3 settle-race requirement in '## Contract' item (5) below (bounded retry window for the TerminateJobObject/ActiveProcesses query, or measure the race first). Then step 2 (JS twin) implements '## Contract' below. Steps 2 through 8 are not started.
 
 
 ---
