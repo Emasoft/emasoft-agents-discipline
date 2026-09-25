@@ -32,6 +32,7 @@ from __future__ import annotations
 import ctypes
 import glob as glob_mod
 import json
+import math
 import os
 import queue
 import signal
@@ -44,6 +45,13 @@ from dataclasses import dataclass, field
 from typing import AbstractSet, Optional, Union
 
 IS_WINDOWS = sys.platform == "win32"
+# F4: the CMDRUN_TEST_* env hooks below (worker-crash injection, pre-spawn delay, cleanup-budget
+# override) must be inert for every real caller -- gated on an argv flag ONLY tests pass, never on
+# the env alone (a nested cmdrun invoked from inside a test run would otherwise inherit the outer
+# test's env and silently arm the same hooks). Computed once, from argv, so both the supervisor
+# invocation (`cmdrun.py --test-hooks`) and the worker invocation it spawns
+# (`cmdrun.py --exec --test-hooks`) see the same answer.
+TEST_HOOKS = "--test-hooks" in sys.argv[1:]
 
 # ponytail: bounded, not unlimited -- an attacker-controlled command string must never make the
 # parser do unbounded work. These caps are generous for real use and small enough that a fuzzer
@@ -55,6 +63,12 @@ MAX_PIPELINE_STAGES = 512
 MAX_TOKENS = 20_000
 MAX_EXPANDED_BYTES = 1_048_576  # M4/M5: cap on the argv text a $VAR expansion can amplify to.
 MAX_REQUEST_BYTES = 16 * 1024 * 1024  # spec: read stdin to EOF, cap 16 MiB.
+# F9: `output_limit` cap. JSON string escaping can grow a captured byte to as much as 6 bytes in
+# the answer line, and the old 64 MiB cap let a 64 MiB stdout + 64 MiB stderr capture produce an
+# 805 MB answer line with 3.5 GB peak supervisor RSS (27x the captured bytes) -- and outlast the
+# request's own timeout on nothing but encoding/writing that answer. 4 MiB keeps the worst-case
+# answer well under 32 MB.
+MAX_OUTPUT_LIMIT = 4 * 1024 * 1024
 # Global cleanup deadline (spec: "deadline + 1.5 s") shared by the killpg-until-ESRCH loop and
 # the reap that follows it -- exhausting it answers `leaked: true`, never silently.
 CLEANUP_BUDGET_S = 1.5
@@ -62,15 +76,24 @@ CLEANUP_BUDGET_S = 1.5
 
 def _cleanup_budget_s() -> float:
     """`CLEANUP_BUDGET_S`, overridable via the `CMDRUN_CLEANUP_BUDGET_S` env var -- a TEST-ONLY
-    hook (not a request field: a caller must never be able to shrink the group-kill deadline
-    from outside) so a test can force the "cannot confirm dead in time" / `leaked: true` path
-    without waiting out the real 1.5s budget on every run."""
+    hook (gated on `--test-hooks`; not a request field: a caller must never be able to shrink the
+    group-kill deadline from outside) so a test can force the "cannot confirm dead in time" /
+    `leaked: true` path without waiting out the real 1.5s budget on every run.
+
+    F4: `nan`/`inf` make `_kill_group_until_dead`'s `time.monotonic() >= deadline` comparison
+    never succeed (any comparison against `nan` is False, and `now >= now+inf` is never True
+    either), so an override that isn't finite and within a sane 0-10s range is REJECTED --
+    fall back to the real budget -- instead of trusted as-is and looped on forever."""
+    if not TEST_HOOKS:
+        return CLEANUP_BUDGET_S
     override = os.environ.get("CMDRUN_CLEANUP_BUDGET_S")
     if override:
         try:
-            return float(override)
+            value = float(override)
         except ValueError:
-            pass
+            return CLEANUP_BUDGET_S
+        if math.isfinite(value) and 0.0 <= value <= 10.0:
+            return value
     return CLEANUP_BUDGET_S
 
 _IDENT_START = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
@@ -658,19 +681,49 @@ def _is_shell_name(name):
 
 
 def _check_env_target(args):
-    """M10: `env bash -c ...` is the canonical way around a shell-name refusal on the command
+    """M10/F10: `env bash -c ...` is the canonical way around a shell-name refusal on the command
     word alone -- apply the same rule to whatever `env` would exec, after skipping its own
-    `VAR=x`, `-i`, `-u NAME`, `-S` flags."""
+    `VAR=x`, `-i`, `-u NAME`/attached `-uNAME`, `-S STRING` (split into words -- its first word
+    IS the target), `--` (end of options), `-C DIR`, and combined short-flag clusters (`-iv`,
+    `-vuNAME`). The old version treated `-S`'s argument as an opaque flag with no argument at
+    all, so `env -S 'bash -c true'` slipped through unrefused: the next token examined was the
+    whole quoted string, whose basename never equals a bare shell name."""
     texts = [expand_word_no_glob(w) for w in args]
     i = 0
     n = len(texts)
     while i < n:
         t = texts[i]
-        if t in ("-i", "-S"):
+        if t == "--":
             i += 1
-            continue
-        if t == "-u":
-            i += 2
+            break
+        if len(t) >= 2 and t[0] == "-" and t[1] != "-":
+            body = t[1:]
+            j = 0
+            while j < len(body):
+                c = body[j]
+                if c == "S":
+                    rest = body[j + 1 :]
+                    if rest:
+                        s_value = rest
+                    elif i + 1 < n:
+                        i += 1
+                        s_value = texts[i]
+                    else:
+                        s_value = ""
+                    words = s_value.split()
+                    if words:
+                        target = words[0]
+                        base = os.path.basename(target.replace("\\", "/"))
+                        if _is_shell_name(base):
+                            raise Refused(f"refusing to run shell '{target}' via env -S")
+                    break
+                if c in ("u", "C"):
+                    rest = body[j + 1 :]
+                    if not rest and i + 1 < n:
+                        i += 1  # separate NAME/DIR argument, not attached
+                    break
+                j += 1
+            i += 1
             continue
         if len(t) > 1 and t[0] in _IDENT_START and "=" in t:
             head = t.split("=", 1)[0]
@@ -841,10 +894,35 @@ def _check_candidate(path, env) -> Optional[str]:
     return None
 
 
-def _open_redir_target(redir, ctx):
+_DEV_FD_ALIASES = {"/dev/stdin": 0, "/dev/stdout": 1, "/dev/stderr": 2}
+
+
+def _dev_fd_alias(path):
+    """F1: `/dev/stdin|stdout|stderr` and `/dev/fd/0-2` are bash's names for the STAGE'S OWN
+    stdio at this point in the redirection chain, never a path to open by itself -- opening
+    `/dev/stdout` as a PATH resolves (macOS/Linux) to the worker's OWN fd 1, the answer pipe to
+    the supervisor, letting a ledger command forge or erase the JSON answer (or, for
+    `/dev/stdin`/`/dev/fd/0`, read the death pipe and hang until the timeout). Returns the local
+    fd number to dup, or None if `path` names neither -- `/dev/fd/N` for any other N is refused
+    by raising OSError (caught by the caller exactly like any other failed `open()`, so it
+    becomes an ordinary status-1 redirection failure, not a crash)."""
+    if path in _DEV_FD_ALIASES:
+        return _DEV_FD_ALIASES[path]
+    if path.startswith("/dev/fd/"):
+        rest = path[len("/dev/fd/") :]
+        if rest.isdigit() and int(rest) in (0, 1, 2):
+            return int(rest)
+        raise OSError(f"refusing to open '{path}': only /dev/fd/0-2 are supported")
+    return None
+
+
+def _open_redir_target(redir, ctx, local_fds):
     path = expand_word_no_glob(redir.target)
     if path == "/dev/null" or (IS_WINDOWS and path.upper() == "NUL"):
         path = os.devnull
+    dev_fd = _dev_fd_alias(path)
+    if dev_fd is not None:
+        return os.dup(local_fds[dev_fd])
     abspath = path if os.path.isabs(path) else os.path.join(ctx.cwd_box.value, path)
     if redir.kind == ">":
         return os.open(abspath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
@@ -863,16 +941,23 @@ def _open_redir_target(redir, ctx):
 
 
 def _apply_redirs(cmd, base_fds, ctx):
-    """Returns (local_fds, opened_fds_to_close_after_spawn)."""
+    """Returns (local_fds, opened_fds_to_close_after_spawn). F11: on a failing redirection,
+    every target already opened by an EARLIER redirection in this same command is closed before
+    re-raising -- `_run_command_inner`'s `except OSError` only sees `opened` if we hand it back,
+    so a leaked fd from redirection 1 must not survive redirection 2's failure."""
     local = dict(base_fds)
     opened = []
-    for redir in cmd.redirs:
-        if redir.kind == ">&":
-            local[redir.fd] = local[redir.target]
-        else:
-            fd = _open_redir_target(redir, ctx)
-            local[redir.fd] = fd
-            opened.append(fd)
+    try:
+        for redir in cmd.redirs:
+            if redir.kind == ">&":
+                local[redir.fd] = local[redir.target]
+            else:
+                fd = _open_redir_target(redir, ctx, local)
+                local[redir.fd] = fd
+                opened.append(fd)
+    except OSError:
+        _close_quiet(opened)
+        raise
     return local, opened
 
 
@@ -966,7 +1051,13 @@ def _run_command_inner(cmd, fds, ctx, close_after_spawn):
         _close_quiet(close_after_spawn)
         _write_fd(fds[2], f"cmdrun: {target}: {exc.strerror or exc}\n".encode())
         return 1
-    overlay_env = dict(ctx.env)
+    # F4: scrub every CMDRUN_* key before it can reach a CHILD process -- otherwise a nested
+    # cmdrun invocation spawned as a stage (a ledger command running `python3 cmdrun.py < …`)
+    # would inherit the outer worker's own test-fault-injection env vars (e.g. a forced cleanup
+    # budget of 0) whenever the request has no explicit `env` of its own, silently arming the
+    # nested run's hooks. `--test-hooks` already gates whether they're READ; this additionally
+    # stops them being PASSED ALONG at all.
+    overlay_env = {k: v for k, v in ctx.env.items() if not k.startswith("CMDRUN_")}
     for aname, avalue in cmd.assigns:
         _env_set(overlay_env, aname, expand_word_no_glob(avalue))
     resolved = resolve_executable(args[0], ctx.cwd_box.value, overlay_env)
@@ -1096,7 +1187,15 @@ def run_stage(stage, fds, ctx, close_after_spawn: AbstractSet[int] = frozenset()
         inner_box = CwdBox(ctx.cwd_box.value)
         inner_ctx = ExecContext(ctx.env, inner_box, ctx.output_limit)
         inner_ctx.children = ctx.children
-        status = run_chain(stage.chain, fds, inner_ctx)
+        try:
+            status = run_chain(stage.chain, fds, inner_ctx)
+        except Exception as exc:  # noqa: BLE001 - F2: a `(...)` group that raises (EMFILE from a
+            # nested os.pipe(), etc.) must close everything it owns and answer status 1 promptly
+            # -- a `None` status must never reach the top-level answer, and a sibling pipeline
+            # stage must never be left blocked reading a pipe that will now never see EOF.
+            _close_quiet(close_after_spawn)
+            _write_fd(fds[2], f"cmdrun: {exc}\n".encode())
+            return 1
         # A group has no single "spawn" moment (it may run several commands in sequence), so
         # unlike run_command it can only release these once it is entirely done using them.
         _close_quiet(close_after_spawn)
@@ -1109,7 +1208,18 @@ def run_pipeline(pipeline, fds, ctx):
     if len(stages) == 1:
         return run_stage(stages[0], fds, ctx)
     n = len(stages)
-    pipes = [os.pipe() for _ in range(n - 1)]
+    pipes = []
+    try:
+        for _ in range(n - 1):
+            pipes.append(os.pipe())
+    except OSError as exc:
+        # F2: `os.pipe()` can EMFILE partway through -- close whatever pipes we already made
+        # instead of leaking them (the leak alone can make a SIBLING stage fail with EMFILE too,
+        # masking this failure by luck).
+        for r, w in pipes:
+            _close_quiet((r, w))
+        _write_fd(fds[2], f"cmdrun: pipe: {exc}\n".encode())
+        return 1
     statuses: list = [None] * n
     threads = []
     outer_fds = set(fds.values())
@@ -1124,7 +1234,15 @@ def run_pipeline(pipeline, fds, ctx):
         # longer needs them -- never an fd borrowed from the outer scope (`fds`), which may
         # still be needed by a sibling pipeline later in the same `&&` chain.
         private = {v for v in (stage_fds[0], stage_fds[1]) if v not in outer_fds}
-        statuses[idx] = run_stage(stages[idx], stage_fds, ctx, private)
+        try:
+            statuses[idx] = run_stage(stages[idx], stage_fds, ctx, private)
+        except Exception as exc:  # noqa: BLE001 - F2: belt-and-braces -- run_stage already
+            # converts a Group's own exception into a status, but this thread must never die
+            # silently for any OTHER reason and leave `statuses[idx]` at None forever with its
+            # private pipe fds still open.
+            _close_quiet(private)
+            _write_fd(fds[2], f"cmdrun: {exc}\n".encode())
+            statuses[idx] = 1
 
     # Run stages left-to-right but concurrently: external commands are already
     # concurrent via the OS once Popen'd; builtins/groups run inline on our
@@ -1186,10 +1304,15 @@ def _emit_and_die(answer):
             payload = payload[n:]
     except (BrokenPipeError, OSError, ValueError):
         pass
-    try:
-        os.killpg(0, signal.SIGKILL)
-    except OSError:
-        pass
+    if not IS_WINDOWS:
+        # W2: `os.killpg` is POSIX-only. On Windows there is no per-worker group to kill here --
+        # the supervisor's Job Object has KILL_ON_JOB_CLOSE set, so closing ITS job handle (which
+        # it does unconditionally, success or failure) is what reaps any escaped descendant; an
+        # `AttributeError` here would otherwise make even the SUCCESS path exit via traceback.
+        try:
+            os.killpg(0, signal.SIGKILL)
+        except OSError:
+            pass
     os._exit(0)
 
 
@@ -1208,19 +1331,24 @@ def _death_watch():
                 break
     except OSError:
         pass
-    try:
-        os.killpg(0, signal.SIGKILL)
-    except OSError:
-        pass
+    if not IS_WINDOWS:
+        # W2: see _emit_and_die -- on Windows the supervisor's job handle close (KILL_ON_JOB_CLOSE)
+        # is what kills the job when the supervisor dies; this thread's only job on that platform
+        # is to notice and exit, not to kill anything itself.
+        try:
+            os.killpg(0, signal.SIGKILL)
+        except OSError:
+            pass
     os._exit(1)
 
 
 def _worker_main():
-    if os.environ.get("CMDRUN_TEST_WORKER_CRASH_BEFORE_READ"):
-        # Test-only fault injection (finding 7): the worker dies before it ever reads its
-        # request line -- proves the supervisor still answers with exactly ONE `internal_error`
-        # JSON line ("worker exited without a valid answer"), never a crash with two lines or a
-        # hang. Never set outside a test.
+    tree_kill = "job" if IS_WINDOWS else "process_group"
+    if TEST_HOOKS and os.environ.get("CMDRUN_TEST_WORKER_CRASH_BEFORE_READ"):
+        # Test-only fault injection (finding 7), gated behind --test-hooks (F4): the worker dies
+        # before it ever reads its request line -- proves the supervisor still answers with
+        # exactly ONE `internal_error` JSON line ("worker exited without a valid answer"), never
+        # a crash with two lines or a hang. Never armed outside a test.
         os._exit(1)
     raw = sys.stdin.buffer.readline()
     try:
@@ -1229,7 +1357,7 @@ def _worker_main():
             raise ValueError("request is not an object")
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
         _emit_and_die({"status": None, "timed_out": False, "internal_error": True,
-                       "reason": f"worker: bad request: {exc}"})
+                       "reason": f"worker: bad request: {exc}", "tree_kill": tree_kill})
         return
     threading.Thread(target=_death_watch, daemon=True).start()
     command = request["command"]
@@ -1237,7 +1365,6 @@ def _worker_main():
     env = request["env"] if "env" in request else dict(os.environ)
     mode = request.get("mode", "gate")
     output_limit = request.get("output_limit", 1_000_000)
-    tree_kill = "job" if IS_WINDOWS else "process_group"
 
     chain, reason = compile_command(command, env=env)
     if reason is not None:
@@ -1260,7 +1387,20 @@ def _worker_main():
         status = run_chain(chain, fds, ctx)
     except Exception as exc:  # noqa: BLE001 - must never propagate as an uncaught crash
         _close_quiet(fds.values())
-        _emit_and_die({"status": 1, "timed_out": False, "reason": f"internal error: {exc}",
+        # F8: `internal_error: true` must be set on every genuinely internal fault -- this is the
+        # flag a caller keys on to tell "the command legitimately exited 1" from "the interpreter
+        # itself broke" (misc2.py: a 40-stage EMFILE pipeline used to answer plain status 1 here).
+        _emit_and_die({"status": 1, "timed_out": False, "internal_error": True,
+                       "reason": f"internal error: {exc}", "tree_kill": tree_kill})
+        return
+    if status is None:
+        # F2 safety net: every real code path now converts a failing stage into an int status
+        # before it gets here (run_stage's Group branch, run_pipeline's pipe/thread guards), but
+        # `None` reaching the answer is exactly the defect this whole finding is about -- never
+        # let a gap anywhere else silently forge a `status: null` with no `reason`.
+        _close_quiet(fds.values())
+        _emit_and_die({"status": None, "timed_out": False, "internal_error": True,
+                       "reason": "internal error: no stage produced a status",
                        "tree_kill": tree_kill})
         return
     for fd in set(fds.values()):
@@ -1270,13 +1410,14 @@ def _worker_main():
             pass
     answer = {"status": status, "timed_out": False, "tree_kill": tree_kill}
     if sinks is not None:
-        # L6: join with a BOUNDED wait instead of a fixed sleep -- the writers are already done
-        # (every stage has exited), so this only waits for the readers to drain what's left of
-        # one pipe buffer's worth of bytes; never close their fds afterwards (they're daemon
-        # threads and may still be mid-read on a stubborn escapee, and closing an fd a thread
-        # might still be blocked on is exactly the H7 fd-reuse hazard in a new place).
+        # F3: ONE combined 100ms bound for both readers together, not 0.5s EACH -- the writers
+        # are already done (every stage has exited), so this only waits for the readers to drain
+        # what's left of one pipe buffer's worth of bytes; never close their fds afterwards
+        # (they're daemon threads and may still be mid-read on a stubborn escapee, and closing an
+        # fd a thread might still be blocked on is exactly the H7 fd-reuse hazard in a new place).
+        _join_deadline = time.monotonic() + 0.1
         for s in sinks:
-            s.thread.join(timeout=0.5)
+            s.thread.join(timeout=max(0.0, _join_deadline - time.monotonic()))
         answer["stdout"] = sinks[0].snapshot().decode("utf-8", errors="replace")
         answer["stderr"] = sinks[1].snapshot().decode("utf-8", errors="replace")
         answer["truncated"] = sinks[0].truncated or sinks[1].truncated
@@ -1302,7 +1443,12 @@ def validate_request(raw: bytes):
         return None, "empty request"
     try:
         obj = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
+        # F5: `json.loads` raises more than `JSONDecodeError` -- a 5,001-digit integer literal
+        # hits Python's int-string-conversion limit (`ValueError`), and a deeply nested `[[[…`
+        # payload can exhaust the interpreter's recursion limit inside the parser itself
+        # (`RecursionError`, not a subclass of `ValueError`). `JSONDecodeError` IS a `ValueError`
+        # subclass, so this one clause also covers the ordinary malformed-JSON case.
         return None, f"invalid JSON: {exc}"
     if not isinstance(obj, dict):
         return None, "request must be a JSON object"
@@ -1310,13 +1456,18 @@ def validate_request(raw: bytes):
     if not isinstance(command, str) or not command:
         return None, "missing or invalid 'command'"
     cwd = obj.get("cwd")
-    if cwd is None:
-        cwd = os.getcwd()
-    else:
-        if not isinstance(cwd, str) or not cwd:
-            return None, "invalid 'cwd'"
-        if not os.path.isabs(cwd):
-            cwd = os.path.abspath(os.path.join(os.getcwd(), cwd))
+    try:
+        if cwd is None:
+            cwd = os.getcwd()
+        else:
+            if not isinstance(cwd, str) or not cwd:
+                return None, "invalid 'cwd'"
+            if not os.path.isabs(cwd):
+                cwd = os.path.abspath(os.path.join(os.getcwd(), cwd))
+    except OSError as exc:
+        # F5: `os.getcwd()` raises if the supervisor's own working directory was deleted out from
+        # under it -- one `bad_request` line, never a bare traceback with no JSON printed at all.
+        return None, f"cannot determine cwd: {exc}"
     if not os.path.isdir(cwd):
         return None, f"cwd does not exist: {cwd}"
     env_present = "env" in obj
@@ -1327,6 +1478,18 @@ def validate_request(raw: bytes):
         for k, v in env.items():
             if not isinstance(k, str) or not isinstance(v, str) or "\x00" in k or "\x00" in v:
                 return None, "invalid 'env': keys/values must be NUL-free strings"
+        if IS_WINDOWS:
+            # W3: Windows env keys are case-insensitive, but two JSON object keys differing only
+            # in case (`"Path"` and `"PATH"`) are two distinct dict entries -- normalize here so
+            # the child process never sees both spellings at once (later one wins).
+            normalized: dict = {}
+            for k, v in env.items():
+                for existing in list(normalized.keys()):
+                    if existing.upper() == k.upper():
+                        del normalized[existing]
+                        break
+                normalized[k] = v
+            env = normalized
     mode = obj.get("mode", "gate")
     if mode not in ("ledger", "gate"):
         return None, "invalid 'mode': must be 'ledger' or 'gate'"
@@ -1341,8 +1504,8 @@ def validate_request(raw: bytes):
     output_limit = obj.get("output_limit", 1_000_000)
     if isinstance(output_limit, bool) or not isinstance(output_limit, int):
         return None, "invalid 'output_limit': must be an integer"
-    if not (0 <= output_limit <= 67_108_864):
-        return None, "invalid 'output_limit': out of range 0..67108864"
+    if not (0 <= output_limit <= MAX_OUTPUT_LIMIT):
+        return None, f"invalid 'output_limit': out of range 0..{MAX_OUTPUT_LIMIT}"
     result = {"command": command, "cwd": cwd, "mode": mode, "timeout_ms": timeout_ms,
               "output_limit": output_limit}
     if env_present:
@@ -1355,7 +1518,15 @@ class _SignalWatch:
     loop polls `.got` at least every 100ms, so the deadline/signal/answer race stays in one
     place (the loop) instead of running kill logic from inside a signal handler."""
 
-    SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    # W1: `signal.SIGHUP` does not exist on Windows ("Availability: Unix") -- referencing it
+    # directly at class-definition time raised `AttributeError` before a single line of JSON
+    # could be printed, so the module could not even be IMPORTED on Windows. `getattr` + a filter
+    # keeps every platform's own subset.
+    SIGNALS = tuple(
+        s for s in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None),
+                    getattr(signal, "SIGINT", None))
+        if s is not None
+    )
 
     def __init__(self):
         self.got = None
@@ -1405,9 +1576,50 @@ def _wait_for_worker_answer(proc, deadline, signalled):
             answer = json.loads(line.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None, False, None
-        if not isinstance(answer, dict):
+        if not _validate_worker_answer(answer):
+            # F1: the answer line crosses a trust boundary a ledger command can reach (before the
+            # /dev/stdout redirection hole was closed, a stage could forge or erase it outright).
+            # Reject anything that isn't the EXACT shape the worker is contracted to produce --
+            # this is treated identically to "no answer at all", which the caller already turns
+            # into `internal_error` once the group is confirmed dead.
             return None, False, None
         return answer, False, None
+
+
+_ANSWER_KNOWN_KEYS = {
+    "status", "timed_out", "truncated", "tree_kill", "refused", "bad_request",
+    "internal_error", "leaked", "reason", "stdout", "stderr", "pgid",
+}
+
+
+def _validate_worker_answer(answer) -> bool:
+    """F1: known keys only, and every value's TYPE checked -- a forged `{"status": 0}` or a
+    `{"name": "x", "version": "1.0.0"}` (no `status` key at all, from a ledger command that
+    redirected an unrelated file onto its own answer channel) must never be mistaken for a real
+    answer just because it happens to be valid JSON."""
+    if not isinstance(answer, dict):
+        return False
+    if not set(answer.keys()) <= _ANSWER_KNOWN_KEYS:
+        return False
+    if "status" not in answer:
+        return False
+    status = answer["status"]
+    if status is not None and (isinstance(status, bool) or not isinstance(status, int)):
+        return False
+    for key in ("timed_out", "truncated", "refused", "bad_request", "internal_error", "leaked"):
+        if key in answer and not isinstance(answer[key], bool):
+            return False
+    if "reason" in answer and not isinstance(answer["reason"], str):
+        return False
+    if "tree_kill" in answer and answer["tree_kill"] not in ("process_group", "job"):
+        return False
+    if "stdout" in answer and not isinstance(answer["stdout"], str):
+        return False
+    if "stderr" in answer and not isinstance(answer["stderr"], str):
+        return False
+    if "pgid" in answer and (isinstance(answer["pgid"], bool) or not isinstance(answer["pgid"], int)):
+        return False
+    return True
 
 
 def _kill_group_until_dead(pid, deadline):
@@ -1440,14 +1652,16 @@ def _reap_bounded(proc, timeout):
         pass
 
 
-def _run_posix_supervisor(req):
+def _run_posix_supervisor(req, signalled):
     worker_argv = [sys.executable, os.path.abspath(__file__), "--exec"]
-    _test_delay_ms = os.environ.get("CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS")
+    if TEST_HOOKS:
+        worker_argv.append("--test-hooks")
+    _test_delay_ms = os.environ.get("CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS") if TEST_HOOKS else None
     if _test_delay_ms:
-        # Test-only fault injection (finding 7): widens the window between "the supervisor
-        # process exists" and "the worker process exists" so a test can prove a signal landing
-        # in exactly that gap (no `_SignalWatch` installed yet, no worker to clean up) still
-        # never produces more than one answer line. Never set outside a test.
+        # Test-only fault injection (finding 7), gated behind --test-hooks (F4): widens the
+        # window between "the supervisor process exists" and "the worker process exists" so a
+        # test can prove a signal landing in exactly that gap still never produces more than one
+        # answer line. Never armed outside a test.
         time.sleep(int(_test_delay_ms) / 1000.0)
     try:
         proc = subprocess.Popen(
@@ -1460,7 +1674,7 @@ def _run_posix_supervisor(req):
         )
     except OSError as exc:
         return {"status": None, "timed_out": False, "internal_error": True,
-                "reason": f"failed to spawn worker: {exc}"}
+                "reason": f"failed to spawn worker: {exc}", "tree_kill": "process_group"}
 
     line = (json.dumps(req) + "\n").encode("utf-8")
     try:
@@ -1471,11 +1685,7 @@ def _run_posix_supervisor(req):
         pass  # the read loop below will notice the worker died and report it
 
     deadline = time.monotonic() + req["timeout_ms"] / 1000.0
-    signalled = _SignalWatch()
-    try:
-        answer, timed_out, sig = _wait_for_worker_answer(proc, deadline, signalled)
-    finally:
-        signalled.close()
+    answer, timed_out, sig = _wait_for_worker_answer(proc, deadline, signalled)
 
     if answer is not None:
         _reap_bounded(proc, _cleanup_budget_s())
@@ -1483,16 +1693,25 @@ def _run_posix_supervisor(req):
         answer.setdefault("timed_out", False)
         return answer
 
+    # F7: the reap that follows a confirmed-dead-or-leaked group counts INSIDE the same cleanup
+    # budget as the kill loop itself, never a separate fixed 0.5s tacked on afterward -- the
+    # old code could push the total past the spec's single "deadline + 1.5s" budget whenever the
+    # worker was slow to reap (e.g. stuck reaping a zombie under EPERM the whole time).
     cleanup_deadline = time.monotonic() + _cleanup_budget_s()
     leaked = _kill_group_until_dead(proc.pid, cleanup_deadline)
-    _reap_bounded(proc, 0.5)
+    _reap_bounded(proc, max(0.0, cleanup_deadline - time.monotonic()))
 
     if leaked:
         # M6/forced-cleanup-exhaustion: never answer silently when the deadline runs out before
         # the group is confirmed dead -- `pgid` names exactly which group a caller must go clean
-        # up by hand (it equals `proc.pid`: the worker is its own session/group leader).
+        # up by hand (it equals `proc.pid`: the worker is its own session/group leader). F7: name
+        # the EPERM-zombie possibility explicitly -- the named group may hold only a harmless
+        # zombie while the real survivor escaped into another session/group entirely.
         return {"status": None, "timed_out": timed_out, "leaked": True, "pgid": proc.pid,
-                "reason": f"failed to reap process group {proc.pid}", "tree_kill": "process_group"}
+                "reason": f"failed to reap process group {proc.pid} in time "
+                          "(the group may hold only a zombie -- a real survivor may have "
+                          "escaped into another session)",
+                "tree_kill": "process_group"}
     if sig is not None:
         return {"status": 143, "timed_out": False, "tree_kill": "process_group"}
     if timed_out:
@@ -1509,7 +1728,26 @@ def _run_posix_supervisor(req):
 
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
 _JobObjectExtendedLimitInformation = 9
+_JobObjectBasicAccountingInformation = 1
 _PROCESS_ALL_ACCESS = 0x1F0FFF
+
+
+class JOBOBJECT_BASIC_ACCOUNTING_INFORMATION(ctypes.Structure):  # pragma: no cover - Windows only
+    """W3: queried after `TerminateJobObject` to CONFIRM the job is actually empty -- the old
+    code trusted `TerminateJobObject`'s return value alone (never even checked) and never
+    verified anything died, so a job that failed to terminate (or terminated everything except
+    one wedged process) would never answer `leaked`, contradicting the spec's "never silently"."""
+
+    _fields_ = [
+        ("TotalUserTime", ctypes.c_int64),
+        ("TotalKernelTime", ctypes.c_int64),
+        ("ThisPeriodTotalUserTime", ctypes.c_int64),
+        ("ThisPeriodTotalKernelTime", ctypes.c_int64),
+        ("TotalPageFaultCount", wintypes.DWORD),
+        ("TotalProcesses", wintypes.DWORD),
+        ("ActiveProcesses", wintypes.DWORD),
+        ("TotalTerminatedProcesses", wintypes.DWORD),
+    ]
 
 
 def _win_kernel32():  # pragma: no cover - requires Windows to exercise
@@ -1634,15 +1872,32 @@ def _win_terminate_process(pid):  # pragma: no cover - requires Windows to exerc
 
 
 def _win_kill_job(job):  # pragma: no cover - requires Windows to exercise
+    """Returns (confirmed_empty, reason_or_None). W3: check `TerminateJobObject`'s own return
+    value, then QUERY the job's active-process count afterward -- a caller must never believe
+    cleanup succeeded just because the API call didn't raise."""
     if sys.platform != "win32":
-        return
+        return True, None
     try:
         kernel32 = _win_kernel32()
         kernel32.TerminateJobObject.restype = wintypes.BOOL
         kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        kernel32.TerminateJobObject(job, 1)
-    except OSError:
-        pass
+        if not kernel32.TerminateJobObject(job, 1):
+            return False, _win_last_error("TerminateJobObject")
+        info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION()
+        kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+        kernel32.QueryInformationJobObject.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID,
+        ]
+        queried = kernel32.QueryInformationJobObject(
+            job, _JobObjectBasicAccountingInformation, ctypes.byref(info), ctypes.sizeof(info), None
+        )
+        if not queried:
+            return False, _win_last_error("QueryInformationJobObject")
+        if info.ActiveProcesses > 0:
+            return False, f"job still has {info.ActiveProcesses} active process(es) after terminate"
+        return True, None
+    except OSError as exc:
+        return False, f"TerminateJobObject/QueryInformationJobObject raised: {exc}"
 
 
 def _win_close_job(job):  # pragma: no cover - requires Windows to exercise
@@ -1657,19 +1912,21 @@ def _win_close_job(job):  # pragma: no cover - requires Windows to exercise
         pass
 
 
-def _run_windows_supervisor(req):  # pragma: no cover - requires Windows to exercise
+def _run_windows_supervisor(req, signalled):  # pragma: no cover - requires Windows to exercise
     job, job_reason = _win_create_job_object()
     if job is None:
         return {"status": None, "timed_out": False, "internal_error": True,
-                "reason": f"failed to create a Windows Job Object: {job_reason}"}
+                "reason": f"failed to create a Windows Job Object: {job_reason}", "tree_kill": "job"}
     worker_argv = [sys.executable, os.path.abspath(__file__), "--exec"]
+    if TEST_HOOKS:
+        worker_argv.append("--test-hooks")
     try:
         proc = subprocess.Popen(worker_argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                  stderr=subprocess.DEVNULL, close_fds=True)
     except OSError as exc:
         _win_close_job(job)
         return {"status": None, "timed_out": False, "internal_error": True,
-                "reason": f"failed to spawn worker: {exc}"}
+                "reason": f"failed to spawn worker: {exc}", "tree_kill": "job"}
     # H9: assign BEFORE writing the request line, so the worker cannot have spawned a stage
     # yet -- every descendant then inherits job membership from birth, with no CREATE_SUSPENDED
     # / NtResumeProcess window to get wrong. M12: a failed assignment terminates the already-
@@ -1681,7 +1938,7 @@ def _run_windows_supervisor(req):  # pragma: no cover - requires Windows to exer
         _reap_bounded(proc, 1.5)
         _win_close_job(job)
         return {"status": None, "timed_out": False, "internal_error": True,
-                "reason": f"AssignProcessToJobObject failed: {assign_reason}"}
+                "reason": f"AssignProcessToJobObject failed: {assign_reason}", "tree_kill": "job"}
 
     line = (json.dumps(req) + "\n").encode("utf-8")
     try:
@@ -1692,11 +1949,7 @@ def _run_windows_supervisor(req):  # pragma: no cover - requires Windows to exer
         pass
 
     deadline = time.monotonic() + req["timeout_ms"] / 1000.0
-    signalled = _SignalWatch()
-    try:
-        answer, timed_out, sig = _wait_for_worker_answer(proc, deadline, signalled)
-    finally:
-        signalled.close()
+    answer, timed_out, sig = _wait_for_worker_answer(proc, deadline, signalled)
 
     try:
         if answer is not None:
@@ -1704,8 +1957,17 @@ def _run_windows_supervisor(req):  # pragma: no cover - requires Windows to exer
             answer.setdefault("tree_kill", "job")
             answer.setdefault("timed_out", False)
             return answer
-        _win_kill_job(job)
-        _reap_bounded(proc, _cleanup_budget_s())
+        # F7 (parity with the POSIX path): the reap counts INSIDE the same cleanup budget as the
+        # kill itself, never a separate bound tacked on afterward.
+        cleanup_deadline = time.monotonic() + _cleanup_budget_s()
+        confirmed_empty, kill_reason = _win_kill_job(job)
+        _reap_bounded(proc, max(0.0, cleanup_deadline - time.monotonic()))
+        if not confirmed_empty:
+            # W3: TerminateJobObject's return value and the post-terminate active-process count
+            # are both checked -- never silently believe the job is clean.
+            return {"status": None, "timed_out": timed_out, "leaked": True,
+                    "reason": f"failed to confirm the Windows job is empty: {kill_reason}",
+                    "tree_kill": "job"}
         if sig is not None:
             return {"status": 143, "timed_out": False, "tree_kill": "job"}
         if timed_out:
@@ -1729,32 +1991,60 @@ def _print_answer(answer):
 
 
 def main():
+    if not IS_WINDOWS and hasattr(signal, "SIGCHLD"):
+        # SIGCHLD reset: an inherited SIG_IGN (some shells/launchers set it, and it survives
+        # exec) makes CPython's `Popen._try_wait` take its `ChildProcessError` branch and report
+        # returncode 0 for EVERY child, silently turning a failing command into a false success.
+        # Reset explicitly rather than trust the caller's disposition -- this covers BOTH the
+        # supervisor and the worker, since `_worker_main()` is also reached through this same
+        # `main()` entry point, before either one calls `subprocess.Popen`/`.wait()`.
+        signal.signal(signal.SIGCHLD, signal.SIG_DFL)
     if len(sys.argv) > 1 and sys.argv[1] == "--exec":
         _worker_main()
         return
-    raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
-    req, err = validate_request(raw)
-    if err is not None or req is None:
-        # `req is None` is unreachable in practice (validate_request never returns (None, None)
-        # -- see its docstring), but pyright can't see that contract across the tuple return, so
-        # this keeps `req` narrowed to `dict` below instead of `dict | None`.
-        _print_answer({"status": None, "bad_request": True, "reason": err, "timed_out": False})
-        return
-    env_for_analysis: Union[dict, os._Environ] = req["env"] if "env" in req else os.environ
-    _, reason = compile_command(req["command"], env=env_for_analysis)
-    if reason is not None:
-        _print_answer({"status": None, "refused": True, "reason": reason, "timed_out": False})
-        return
+    tree_kill = "job" if IS_WINDOWS else "process_group"
+    # F6: install the signal watch FIRST THING, before any validation/spawn work, and keep it
+    # installed through the whole cleanup phase below (closed only in the `finally`) -- the old
+    # code installed it only just before the wait loop, leaving ~70ms (startup/validation/spawn)
+    # and ~20ms (cleanup) windows where SIGTERM/SIGHUP/SIGINT killed the supervisor via Python's
+    # default disposition (a bare traceback or silent death) instead of answering 143.
+    signalled = _SignalWatch()
     try:
-        if IS_WINDOWS:
-            answer = _run_windows_supervisor(req)
-        else:
-            answer = _run_posix_supervisor(req)
-    except Exception as exc:  # noqa: BLE001 - the one place we truly must never crash
-        answer = {"status": None, "timed_out": False, "internal_error": True,
-                  "reason": f"internal error: {exc}"}
-    answer.setdefault("timed_out", False)
-    _print_answer(answer)
+        try:
+            raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
+            req, err = validate_request(raw)
+        except (ValueError, RecursionError) as exc:
+            # F5: validate_request is now internally hardened to never raise these, but this is
+            # the last line of defense the docstring's "never raises" contract depends on --
+            # exactly one bad_request line, never a bare traceback with zero JSON printed.
+            _print_answer({"status": None, "bad_request": True, "reason": f"invalid request: {exc}",
+                            "timed_out": False, "tree_kill": tree_kill})
+            return
+        if err is not None or req is None:
+            # `req is None` is unreachable in practice (validate_request never returns (None, None)
+            # -- see its docstring), but pyright can't see that contract across the tuple return, so
+            # this keeps `req` narrowed to `dict` below instead of `dict | None`.
+            _print_answer({"status": None, "bad_request": True, "reason": err, "timed_out": False,
+                            "tree_kill": tree_kill})
+            return
+        env_for_analysis: Union[dict, os._Environ] = req["env"] if "env" in req else os.environ
+        _, reason = compile_command(req["command"], env=env_for_analysis)
+        if reason is not None:
+            _print_answer({"status": None, "refused": True, "reason": reason, "timed_out": False,
+                            "tree_kill": tree_kill})
+            return
+        try:
+            if IS_WINDOWS:
+                answer = _run_windows_supervisor(req, signalled)
+            else:
+                answer = _run_posix_supervisor(req, signalled)
+        except Exception as exc:  # noqa: BLE001 - the one place we truly must never crash
+            answer = {"status": None, "timed_out": False, "internal_error": True,
+                      "reason": f"internal error: {exc}", "tree_kill": tree_kill}
+        answer.setdefault("timed_out", False)
+        _print_answer(answer)
+    finally:
+        signalled.close()
 
 
 if __name__ == "__main__":

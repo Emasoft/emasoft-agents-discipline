@@ -12,6 +12,7 @@ Run: python3 tests/cmdrun_tests.py
 
 import json
 import os
+import resource
 import shutil
 import signal
 import subprocess
@@ -715,16 +716,17 @@ def _run_tests(d):
             break
     report(burst_ok, "answer-before-self-kill: 500 back-to-back 'echo ok' runs all answer status 0 / stdout 'ok\\n'", burst_detail)
 
-    # -- Forced cleanup exhaustion: a zero `CLEANUP_BUDGET_S` (test-only env override -- never a
-    # request field, see cmdrun._cleanup_budget_s) must make the group-kill loop report
-    # `leaked: true` plus the `pgid` it couldn't confirm dead, never a silent/ambiguous answer.
+    # -- Forced cleanup exhaustion: a zero `CLEANUP_BUDGET_S` (test-only env override, requires
+    # --test-hooks since F4 -- never a request field, see cmdrun._cleanup_budget_s) must make the
+    # group-kill loop report `leaked: true` plus the `pgid` it couldn't confirm dead, never a
+    # silent/ambiguous answer.
     _leak_marker = f"CMDRUN_LEAK_MARKER_{os.getpid()}_{int(time.time() * 1000)}"
     _leak_env = dict(os.environ)
     _leak_env["CMDRUN_CLEANUP_BUDGET_S"] = "0"
     _leak_req = json.dumps({"command": f"python3 -c \"import time;time.sleep(5)\" {_leak_marker}",
                              "cwd": d, "timeout_ms": 30})
-    _leak_proc = subprocess.run([sys.executable, CMDRUN], input=_leak_req, capture_output=True,
-                                 text=True, env=_leak_env, timeout=15)
+    _leak_proc = subprocess.run([sys.executable, CMDRUN, "--test-hooks"], input=_leak_req,
+                                 capture_output=True, text=True, env=_leak_env, timeout=15)
     _leak_lines = [ln for ln in _leak_proc.stdout.splitlines() if ln.strip()]
     _leak_answer = {}
     if len(_leak_lines) == 1:
@@ -734,6 +736,9 @@ def _run_tests(d):
             _leak_answer = {}
     report(_leak_answer.get("leaked") is True and isinstance(_leak_answer.get("pgid"), int),
            "forced cleanup exhaustion: a zero cleanup budget answers leaked:true with a pgid", _leak_answer)
+    report("tree_kill" in _leak_answer, "F8: a leaked answer carries tree_kill", _leak_answer)
+    report(isinstance(_leak_answer.get("reason"), str) and "zombie" in _leak_answer["reason"],
+           "F7: the leaked reason names the zombie-only-group possibility", _leak_answer.get("reason"))
     # The kill WAS sent even though confirmation timed out -- sweep any straggler by pid.
     wait_until(lambda: _leak_marker not in ps_snapshot_text(), timeout_s=3.0, interval=0.1)
     for _pid in marker_pids(_leak_marker):
@@ -743,15 +748,15 @@ def _run_tests(d):
             pass
 
     # -- Supervisor edge case: the worker dies before it ever reads its request line (test-only
-    # fault injection) -- the supervisor must still answer with exactly ONE internal_error line,
-    # never a hang, a crash, or two lines.
+    # fault injection, requires --test-hooks since F4) -- the supervisor must still answer with
+    # exactly ONE internal_error line, never a hang, a crash, or two lines.
     _crash_env = dict(os.environ)
     _crash_env["CMDRUN_TEST_WORKER_CRASH_BEFORE_READ"] = "1"
     # Generous timeout_ms here too -- see the burst-test comment above; this row follows right
     # after 500 rapid spawns and has no reason to race a tight wall clock.
     _crash_req = json.dumps({"command": "echo hi", "cwd": d, "timeout_ms": 15000})
-    _crash_proc = subprocess.run([sys.executable, CMDRUN], input=_crash_req, capture_output=True,
-                                  text=True, env=_crash_env, timeout=20)
+    _crash_proc = subprocess.run([sys.executable, CMDRUN, "--test-hooks"], input=_crash_req,
+                                  capture_output=True, text=True, env=_crash_env, timeout=20)
     _crash_lines = [ln for ln in _crash_proc.stdout.splitlines() if ln.strip()]
     _crash_answer = {}
     if len(_crash_lines) == 1:
@@ -762,14 +767,18 @@ def _run_tests(d):
     report(len(_crash_lines) == 1 and _crash_answer.get("internal_error") is True,
            "supervisor edge case: worker dies before reading the request -> exactly one internal_error answer",
            {"lines": _crash_lines, "stderr": _crash_proc.stderr[-300:]})
+    report("tree_kill" in _crash_answer, "F8: an internal_error answer carries tree_kill", _crash_answer)
 
-    # -- Supervisor edge case: a signal lands in the gap BEFORE the worker process even exists
-    # (test-only delay hook widens that window) -- no `_SignalWatch` is installed yet there, so
-    # Python's default disposition just kills the supervisor; the only invariant this row can
-    # check is that it NEVER produces more than one JSON line.
+    # -- F6 regression: a signal lands in the gap BEFORE the worker process even exists
+    # (test-only delay hook, requires --test-hooks, widens that window). Before F6 the signal
+    # watch was installed only just before the wait loop, so this landed under Python's default
+    # disposition (a bare traceback or silent death, no 143). F6 installs it FIRST THING in
+    # main(), before validate_request/spawn -- so the watch is already live here, and the
+    # supervisor must answer status 143 exactly like any other signal, never a hang/crash/silent
+    # death and never more than one JSON line.
     _delay_env = dict(os.environ)
     _delay_env["CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS"] = "300"
-    _delay_proc = subprocess.Popen([sys.executable, CMDRUN], stdin=subprocess.PIPE,
+    _delay_proc = subprocess.Popen([sys.executable, CMDRUN, "--test-hooks"], stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     start_new_session=True, env=_delay_env)
     try:
@@ -785,7 +794,16 @@ def _run_tests(d):
             pass
         _delay_out = _delay_proc.stdout.read().decode("utf-8", errors="replace") if _delay_proc.stdout else ""
         _delay_lines = [ln for ln in _delay_out.splitlines() if ln.strip()]
-        report(len(_delay_lines) <= 1, "supervisor edge case: a signal before the worker exists never yields two answers", _delay_lines)
+        _delay_answer = None
+        if len(_delay_lines) == 1:
+            try:
+                _delay_answer = json.loads(_delay_lines[0])
+            except json.JSONDecodeError:
+                _delay_answer = None
+        report(len(_delay_lines) <= 1, "F6: a signal before the worker exists never yields two answers", _delay_lines)
+        report(isinstance(_delay_answer, dict) and _delay_answer.get("status") == 143,
+               "F6: a signal landing before the worker even exists still answers status 143 (signal watch installed first thing in main())",
+               _delay_answer)
     finally:
         if _delay_proc.poll() is None:
             try:
@@ -809,11 +827,341 @@ def _run_tests(d):
     _delay_env_ctrl = dict(os.environ)
     _delay_env_ctrl["CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS"] = "300"
     _t0 = time.monotonic()
-    _ctrl = subprocess.run([sys.executable, CMDRUN],
+    _ctrl = subprocess.run([sys.executable, CMDRUN, "--test-hooks"],
                             input=json.dumps({"command": "echo hi", "cwd": d, "timeout_ms": 3000}),
                             capture_output=True, text=True, env=_delay_env_ctrl, timeout=10)
     _ctrl_elapsed = time.monotonic() - _t0
     report(_ctrl_elapsed >= 0.25, f"supervisor edge case: the pre-spawn delay hook actually delays spawn ({_ctrl_elapsed:.2f}s)", _ctrl.stdout.strip())
+
+    # -- F4: every one of the three test-only env hooks above must be INERT without --test-hooks
+    # on argv -- a caller can set CMDRUN_* env vars by accident (or a nested nested cmdrun could
+    # inherit them), and none of the three may fire unless the invoking argv explicitly opted in.
+    _no_hooks_env = dict(os.environ)
+    _no_hooks_env["CMDRUN_TEST_WORKER_CRASH_BEFORE_READ"] = "1"
+    _no_hooks_env["CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS"] = "5000"  # would time out the row if honoured
+    _no_hooks_env["CMDRUN_CLEANUP_BUDGET_S"] = "0"
+    _no_hooks_proc = subprocess.run([sys.executable, CMDRUN], input=json.dumps(
+        {"command": "echo hi", "cwd": d, "timeout_ms": 5000}), capture_output=True, text=True,
+        env=_no_hooks_env, timeout=10)
+    _no_hooks_lines = [ln for ln in _no_hooks_proc.stdout.splitlines() if ln.strip()]
+    _no_hooks_answer = json.loads(_no_hooks_lines[0]) if len(_no_hooks_lines) == 1 else {}
+    report(_no_hooks_answer.get("status") == 0 and _no_hooks_answer.get("stdout") == "hi\n",
+           "F4: CMDRUN_TEST_* env hooks are inert without --test-hooks on argv (echo hi still answers 0 promptly)",
+           _no_hooks_answer)
+
+    # -- F4: an invalid CMDRUN_CLEANUP_BUDGET_S override (nan/inf) must be REJECTED, never trusted
+    # -- the old code let it through, and a nan/inf deadline makes _kill_group_until_dead's
+    # `time.monotonic() >= deadline` comparison never succeed, hanging forever.
+    for _bad_budget in ("nan", "inf", "-5", "999"):
+        _nan_env = dict(os.environ)
+        _nan_env["CMDRUN_CLEANUP_BUDGET_S"] = _bad_budget
+        _nan_marker = f"CMDRUN_NANBUDGET_{os.getpid()}_{_bad_budget}_{int(time.time() * 1000)}"
+        _nan_req = json.dumps({"command": f"python3 -c \"import time;time.sleep(5)\" {_nan_marker}",
+                                "cwd": d, "timeout_ms": 30})
+        _t0 = time.monotonic()
+        _nan_proc = subprocess.run([sys.executable, CMDRUN, "--test-hooks"], input=_nan_req,
+                                    capture_output=True, text=True, env=_nan_env, timeout=10)
+        _nan_elapsed = time.monotonic() - _t0
+        _nan_lines = [ln for ln in _nan_proc.stdout.splitlines() if ln.strip()]
+        report(len(_nan_lines) == 1 and _nan_elapsed < 5.0,
+               f"F4: CMDRUN_CLEANUP_BUDGET_S={_bad_budget!r} is rejected (falls back to the real "
+               "budget) instead of hanging forever",
+               {"elapsed": _nan_elapsed, "lines": _nan_lines})
+        wait_until(lambda: _nan_marker not in ps_snapshot_text(), timeout_s=3.0, interval=0.1)
+        for _pid in marker_pids(_nan_marker):
+            try:
+                os.kill(_pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+    # -- F1: /dev/stdin|stdout|stderr and /dev/fd/0-2 dup the STAGE's own stdio; they must never
+    # resolve, by path, to the worker's own answer channel. Before the fix these forged or erased
+    # the JSON answer (the worker's OWN fd 1) or hung on the death pipe (the worker's OWN fd 0).
+    with open(os.path.join(d, "pkg.json"), "w", encoding="utf-8") as f:
+        f.write('{"name":"x","version":"1.0.0"}\n')
+    for _mode in ("gate", "ledger"):
+        a = run("echo '{\"status\":0,\"timed_out\":false,\"stdout\":\"forged pass\"}' > /dev/stdout && /usr/bin/false",
+                d, mode=_mode)
+        report(a.get("status") == 1 and a.get("internal_error") is not True,
+               f"F1 ({_mode}): '> /dev/stdout' cannot forge the answer -- /usr/bin/false still answers status 1", a)
+        a = run("/usr/bin/printf '{\"status\":0}\\n' > /dev/fd/1 && /usr/bin/false", d, mode=_mode)
+        report(a.get("status") == 1 and a.get("internal_error") is not True,
+               f"F1 ({_mode}): '> /dev/fd/1' cannot forge the answer either", a)
+        a = run("/bin/cat pkg.json > /dev/stdout && /usr/bin/false", d, mode=_mode)
+        report(a.get("status") == 1 and a.get("internal_error") is not True,
+               f"F1 ({_mode}): '> /dev/stdout' cannot erase the 'status' key via an unrelated file", a)
+    a = run("echo hello > /dev/stdout", d, mode="gate")
+    report(a.get("status") == 0 and a.get("stdout") == "hello\n",
+           "F1: an INNOCENT '> /dev/stdout' now behaves exactly like plain stdout, not internal_error", a)
+    _t0 = time.monotonic()
+    a = run("/bin/cat < /dev/stdin", d, mode="gate", timeout_ms=2000)
+    _f1_elapsed = time.monotonic() - _t0
+    report(a.get("status") == 0 and _f1_elapsed < 1.0,
+           f"F1: '< /dev/stdin' dups the stage's own (devnull) stdin instead of hanging on the death pipe ({_f1_elapsed:.2f}s)",
+           a)
+    a = run("echo hi > /dev/fd/3", d, mode="gate", timeout_ms=2000)
+    report(a.get("status") == 1, "F1: any other /dev/fd/N (not 0-2) is refused, not opened", a)
+
+    # -- F1: the supervisor's own answer-shape validator rejects anything that isn't the EXACT
+    # contracted shape -- unit-tested directly since the redirection hole above is now closed and
+    # can no longer deliver a forged answer end-to-end.
+    sys.path.insert(0, LIB_DIR)
+    import cmdrun  # noqa: E402  # type: ignore[import-not-found]
+    report(cmdrun._validate_worker_answer({"status": 0, "timed_out": False}) is True,
+           "F1: a well-shaped answer validates")
+    report(cmdrun._validate_worker_answer({"name": "x", "version": "1.0.0"}) is False,
+           "F1: an answer missing 'status' entirely is rejected")
+    report(cmdrun._validate_worker_answer({"status": 0, "evil": "x"}) is False,
+           "F1: an answer with an unknown key is rejected")
+    report(cmdrun._validate_worker_answer({"status": "0"}) is False,
+           "F1: a non-integer 'status' is rejected")
+    report(cmdrun._validate_worker_answer({"status": True}) is False,
+           "F1: a boolean 'status' is rejected (bool passes Python's int isinstance check)")
+    report(cmdrun._validate_worker_answer(["not", "a", "dict"]) is False,
+           "F1: a non-dict answer is rejected")
+
+    # -- F2: a `(...)` group stage that raises (EMFILE from a nested os.pipe()) must close what it
+    # owns and answer an int status promptly, never `status: null` with no reason, and never hang
+    # to the timeout.
+    _emfile_inner = " | ".join(["/usr/bin/true"] * 40)
+    for _label, _cmd in (
+        ("null", f"(true) | ({_emfile_inner})"),
+        ("hang", f"({_emfile_inner}) | /usr/bin/wc -c"),
+    ):
+        _soft, _hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        _t0 = time.monotonic()
+        _f2_proc = subprocess.run(
+            [sys.executable, CMDRUN],
+            input=json.dumps({"command": _cmd, "cwd": d, "timeout_ms": 3000}),
+            capture_output=True, text=True, timeout=10,
+            preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_NOFILE, (40, max(40, _hard if _hard != resource.RLIM_INFINITY else 4096))),
+        )
+        _f2_elapsed = time.monotonic() - _t0
+        _f2_lines = [ln for ln in _f2_proc.stdout.splitlines() if ln.strip()]
+        _f2_answer = json.loads(_f2_lines[0]) if len(_f2_lines) == 1 else {}
+        report(len(_f2_lines) == 1 and isinstance(_f2_answer.get("status"), int) and not _f2_answer.get("timed_out"),
+               f"F2 ({_label}): an EMFILE inside a nested group answers an int status promptly ({_f2_elapsed:.2f}s), not status:null or a 124 timeout",
+               _f2_answer)
+
+    # -- F3: gate-mode latency must not pay the OLD 0.5s-per-sink (1.0s total) wait for an escaped
+    # descendant that still holds the OutputSink's write end open -- one combined 100ms bound.
+    _f3_marker = f"CMDRUN_F3_{os.getpid()}_{int(time.time() * 1000)}"
+    _f3_cmd = ("python3 -c \"import subprocess,sys; "
+               f"subprocess.Popen(['sleep', '1.5', '{_f3_marker}'], start_new_session=True); sys.exit(0)\"")
+    _t0 = time.monotonic()
+    a_gate = run(_f3_cmd, d, mode="gate", timeout_ms=5000)
+    _f3_gate_elapsed = time.monotonic() - _t0
+    _t0 = time.monotonic()
+    run(_f3_cmd, d, mode="ledger", timeout_ms=5000)
+    _f3_ledger_elapsed = time.monotonic() - _t0
+    report(a_gate.get("status") == 0 and (_f3_gate_elapsed - _f3_ledger_elapsed) < 0.5,
+           f"F3: gate-mode latency over ledger-mode baseline stays under 0.5s (was up to ~1.0s) "
+           f"(gate {_f3_gate_elapsed:.2f}s, ledger {_f3_ledger_elapsed:.2f}s)",
+           {"gate": _f3_gate_elapsed, "ledger": _f3_ledger_elapsed})
+    wait_until(lambda: _f3_marker not in ps_snapshot_text(), timeout_s=3.0, interval=0.1)
+    for _pid in marker_pids(_f3_marker):
+        try:
+            os.kill(_pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    # -- F5: validate_request must never crash on malformed/degenerate JSON, only ever answer one
+    # bad_request line.
+    _deep = run_raw("[" * 200000)
+    report(_deep.get("bad_request") is True,
+           "F5: a 200000x unterminated '[' is one bad_request line, not a crash/hang", _deep)
+    _huge = run_raw('{"command":"true","timeout_ms":' + ("9" * 5001) + "}")
+    report(_huge.get("bad_request") is True,
+           "F5: a 5001-digit timeout_ms integer literal is a bad_request, not a crash", _huge)
+    _deleted_cwd = tempfile.mkdtemp(prefix="cmdrun-deleted-cwd-")
+    _cwd_proc = subprocess.Popen([sys.executable, CMDRUN], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=_deleted_cwd)
+    try:
+        shutil.rmtree(_deleted_cwd, ignore_errors=True)
+        assert _cwd_proc.stdin is not None
+        _cwd_out, _cwd_err = _cwd_proc.communicate(
+            input=json.dumps({"command": "true", "timeout_ms": 3000}).encode(), timeout=10)
+        _cwd_lines = [ln for ln in _cwd_out.decode("utf-8", errors="replace").splitlines() if ln.strip()]
+        _cwd_answer = json.loads(_cwd_lines[0]) if len(_cwd_lines) == 1 else {}
+        report(len(_cwd_lines) == 1 and _cwd_answer.get("bad_request") is True,
+               "F5: a supervisor whose own cwd was deleted (no 'cwd' in the request) still answers "
+               "one bad_request line, not a traceback",
+               {"lines": _cwd_lines, "stderr": _cwd_err.decode("utf-8", errors="replace")[-300:]})
+    finally:
+        if _cwd_proc.poll() is None:
+            _cwd_proc.kill()
+
+    # -- F8: every answer shape carries tree_kill.
+    a = run("echo hi; echo bye", d)
+    report("tree_kill" in a, "F8: a refused answer carries tree_kill", a)
+    a = run_raw("not json")
+    report("tree_kill" in a, "F8: a bad_request answer carries tree_kill", a)
+
+    # -- F9: output_limit is capped at 4 MiB now, not 64 MiB (JSON escaping can grow a byte to 6x;
+    # the old cap let a single answer line reach 805 MB / 3.5 GB peak RSS).
+    a = run("true", d, output_limit=67_108_864)
+    report(a.get("bad_request") is True, "F9: output_limit above the new 4 MiB cap is a bad_request", a)
+    a = run("true", d, output_limit=4_194_304)
+    report(a.get("bad_request") is not True and a.get("status") == 0,
+           "F9: output_limit at the new 4 MiB cap boundary is still accepted", a)
+    # F9, review follow-up: the original bigans.py repro (64 MiB captured, 1500ms timeout_ms) got
+    # a false 124 timed_out because encoding/writing the answer outlasted the deadline -- prove the
+    # NEW 4 MiB cap keeps a fast command comfortably inside a tight timeout even when it fills the
+    # cap on both stdout and stderr.
+    _t0 = time.monotonic()
+    a = run("python3 -c \"import sys; sys.stdout.buffer.write(b'\\x01' * 4194304); "
+            "sys.stderr.buffer.write(b'\\x01' * 4194304)\"",
+            d, mode="gate", timeout_ms=1500, output_limit=4_194_304)
+    _f9_elapsed = time.monotonic() - _t0
+    report(a.get("status") == 0 and a.get("timed_out") is not True and _f9_elapsed < 1.5,
+           f"F9: a fast command filling the 4 MiB cap on both stdout and stderr still answers "
+           f"promptly under a 1500ms timeout, not a false 124 ({_f9_elapsed:.2f}s)",
+           {"status": a.get("status"), "timed_out": a.get("timed_out"),
+            "stdout_len": len(a.get("stdout", "")), "stderr_len": len(a.get("stderr", ""))})
+
+    # -- F10: env target detection handles '--', attached '-uNAME', '-S STRING' (split into
+    # words), and combined short-flag clusters -- all four used to run bash unrefused.
+    for _cmd in ("env -- bash -c true", "env -uX bash -c true",
+                 "env -S 'bash -c true'", "env -iv bash -c true"):
+        a = run(_cmd, d)
+        report(a.get("refused") is True, f"F10: '{_cmd}' is refused via env target detection", a)
+
+    # -- F11: a later redirection failing closes the target(s) already opened by earlier ones in
+    # the same command -- verified with lsof on the worker while a downstream stage keeps it alive.
+    _f11_proc = subprocess.Popen([sys.executable, CMDRUN], stdin=subprocess.PIPE,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+    try:
+        assert _f11_proc.stdin is not None
+        _f11_req = json.dumps({"command": "/bin/cat < /etc/hosts 2> /nonexistent/x | /bin/sleep 1.2",
+                                "cwd": d, "timeout_ms": 5000})
+        _f11_proc.stdin.write(_f11_req.encode() + b"\n")
+        _f11_proc.stdin.close()
+        _worker_pid = None
+        _t0 = time.monotonic()
+        while time.monotonic() - _t0 < 3.0:
+            for line in ps_snapshot_text().splitlines():
+                parts = line.split(None, 3)
+                if len(parts) == 4 and parts[1] == str(_f11_proc.pid) and "--exec" in parts[3]:
+                    _worker_pid = int(parts[0])
+                    break
+            if _worker_pid:
+                break
+            time.sleep(0.05)
+        _leaked_hosts_fd = False
+        if _worker_pid is not None and shutil.which("lsof"):
+            _lsof = subprocess.run(["lsof", "-p", str(_worker_pid)], capture_output=True, text=True)
+            _leaked_hosts_fd = "/etc/hosts" in _lsof.stdout
+        if _worker_pid is None or not shutil.which("lsof"):
+            skip("F11: a failed second redirection closes the first redirection's target (no lsof/worker not found)")
+        else:
+            report(not _leaked_hosts_fd,
+                   "F11: a failed second redirection closes the first redirection's already-opened target",
+                   {"worker_pid": _worker_pid})
+        try:
+            _f11_proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+    finally:
+        if _f11_proc.poll() is None:
+            try:
+                os.killpg(_f11_proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        for _stream in (_f11_proc.stdin, _f11_proc.stdout, _f11_proc.stderr):
+            try:
+                if _stream is not None:
+                    _stream.close()
+            except OSError:
+                pass
+
+    # -- W1: the module must be IMPORTABLE and RUNNABLE on a platform with no signal.SIGHUP
+    # (Windows) -- simulate by deleting it from the `signal` module in a fresh subprocess before
+    # loading cmdrun.py as __main__ (the same technique as scripts_dev/cmdrun-attack2/winsim.py).
+    _winsim_code = (
+        "import runpy, signal, sys\n"
+        "del signal.SIGHUP\n"
+        f"sys.argv = [{CMDRUN!r}]\n"
+        f"runpy.run_path({CMDRUN!r}, run_name='__main__')\n"
+    )
+    _winsim_proc = subprocess.run(
+        [sys.executable, "-c", _winsim_code],
+        input=json.dumps({"command": "/usr/bin/true", "cwd": d, "timeout_ms": 3000}),
+        capture_output=True, text=True, timeout=10)
+    _winsim_lines = [ln for ln in _winsim_proc.stdout.splitlines() if ln.strip()]
+    _winsim_answer = json.loads(_winsim_lines[0]) if len(_winsim_lines) == 1 else {}
+    report(len(_winsim_lines) == 1 and _winsim_answer.get("status") == 0,
+           "W1: the module imports and runs a command even with signal.SIGHUP absent (simulated Windows)",
+           {"lines": _winsim_lines, "stderr": _winsim_proc.stderr[-300:]})
+
+    # -- W2: os.killpg must be guarded by platform in _emit_and_die/_death_watch -- simulate by
+    # deleting os.killpg and forcing sys.platform to 'win32' (so IS_WINDOWS is True) in a fresh
+    # subprocess running the WORKER directly; before the fix this raised AttributeError instead
+    # of writing the answer.
+    _w2_code = (
+        "import os, runpy, sys\n"
+        "del os.killpg\n"
+        "sys.platform = 'win32'\n"
+        f"sys.argv = [{CMDRUN!r}, '--exec']\n"
+        f"runpy.run_path({CMDRUN!r}, run_name='__main__')\n"
+    )
+    # Popen, not subprocess.run(input=...) -- run() would close the worker's stdin (its DEATH
+    # PIPE, in this direct --exec invocation) the instant the request line is written, racing
+    # `_death_watch`'s EOF-triggered os._exit(1) against the worker's own answer -- exactly the
+    # real supervisor's stdin-held-open contract this test must not accidentally violate.
+    _w2_proc = subprocess.Popen([sys.executable, "-c", _w2_code], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        assert _w2_proc.stdin is not None
+        _w2_proc.stdin.write(json.dumps({"command": "true", "cwd": d, "timeout_ms": 3000}).encode() + b"\n")
+        _w2_proc.stdin.flush()
+        assert _w2_proc.stdout is not None
+        _w2_line = _w2_proc.stdout.readline()
+        _w2_answer = {}
+        try:
+            _w2_answer = json.loads(_w2_line.decode("utf-8"))
+        except json.JSONDecodeError:
+            pass
+        try:
+            _w2_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        report(_w2_answer.get("status") == 0,
+               "W2: the worker answers cleanly (no AttributeError) with no os.killpg on a simulated Windows",
+               {"line": _w2_line, "stderr": _w2_proc.stderr.read().decode("utf-8", errors="replace")[-300:] if _w2_proc.stderr else ""})
+    finally:
+        if _w2_proc.poll() is None:
+            _w2_proc.kill()
+        for _stream in (_w2_proc.stdin, _w2_proc.stdout, _w2_proc.stderr):
+            try:
+                if _stream is not None:
+                    _stream.close()
+            except OSError:
+                pass
+
+    # -- W3: _win_kill_job's non-Windows early-return guard stays a safe no-op sentinel (the live
+    # TerminateJobObject/QueryInformationJobObject path needs a real Windows host -- code-read only,
+    # per the audit).
+    ok, reason = cmdrun._win_kill_job(None)
+    report(ok is True and reason is None,
+           "W3: _win_kill_job's non-Windows guard returns (True, None) safely", (ok, reason))
+
+    # -- SIGCHLD: an inherited SIG_IGN must not make every child look like it exited 0 -- reset to
+    # SIG_DFL at the top of main() closes this for BOTH the supervisor and the worker.
+    _sigchld_code = (
+        "import runpy, signal, sys\n"
+        "signal.signal(signal.SIGCHLD, signal.SIG_IGN)\n"
+        f"sys.argv = [{CMDRUN!r}]\n"
+        f"runpy.run_path({CMDRUN!r}, run_name='__main__')\n"
+    )
+    _sigchld_proc = subprocess.run(
+        [sys.executable, "-c", _sigchld_code],
+        input=json.dumps({"command": "/usr/bin/false", "cwd": d, "timeout_ms": 3000}),
+        capture_output=True, text=True, timeout=10)
+    _sigchld_lines = [ln for ln in _sigchld_proc.stdout.splitlines() if ln.strip()]
+    _sigchld_answer = json.loads(_sigchld_lines[0]) if len(_sigchld_lines) == 1 else {}
+    report(_sigchld_answer.get("status") == 1,
+           "SIGCHLD: a supervisor started with SIGCHLD ignored still reports /usr/bin/false as status 1, not 0",
+           {"lines": _sigchld_lines, "stderr": _sigchld_proc.stderr[-300:]})
 
     # -- analyze() is usable standalone (for a future lint use) -------------------------------------
     sys.path.insert(0, LIB_DIR)
