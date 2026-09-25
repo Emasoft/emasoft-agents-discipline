@@ -113,7 +113,14 @@ jobs:
   # verdict is truly independent of every other suite's color. Chosen over reordering
   # py-suite-runner before ledger-tests in the `test` script (masks ledger-tests behind a
   # cmdrun red in the same chain) and over a LAST-position step (aborted with the job -- the
-  # measured failure). Idempotent: mkdtemp-unique inputs, no repo-relative writes.
+  # measured failure). Idempotence scope: verified twice-run-clean on macOS only; the
+  # Windows-specific rows have never executed anywhere, so their idempotence is what this
+  # job's first Windows run measures. The required-checks ruleset
+  # (baseline-pr-and-checks) ENUMERATES its contexts ("Test", the libuv job name, ...), so
+  # this job's checks are informational until someone adds them -- a cmdrun-proof red
+  # cannot block a merge by policy. ASYMMETRY, deliberate: windows-node-22-14 (libuv
+  # variant) carries no separate cmdrun coverage -- its cmdrun verdict rides the in-chain
+  # position only, because libuv variance is what that job isolates.
   cmdrun-proof:
     name: cmdrun unit suite / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -132,6 +139,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
+          # One cell of the `test` matrix runs node 20.x as `matrix.node: 20` -- also a
+          # floating major, so this job intentionally matches THAT cell's drift envelope
+          # rather than pinning a patch the matrix itself does not pin. The node spread
+          # rides in the `test` job; this job's purpose is the OS spread.
           node-version: 20
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
