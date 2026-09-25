@@ -145,9 +145,13 @@ fi
 # /private canonicalization first and symmetrically, for the reason encoding-diff.sh records:
 # mapping both spellings to one token would hide a real lexical-vs-realpath divergence.
 _scrub() {
-  sed -e 's|/private/var/|/var/|g' -e "s|$1|<ROOT>|g" \
-      -e 's/"\(openedAt\|abandonedAt\|startedAt\|sealedAt\|completedAt\|at\)": "[^"]*"/"\1": "<TS>"/g' \
-      -e 's/^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9]\{2\}:[0-9]\{2\}:[0-9]\{2\}\.[0-9]\{3\}Z /<TS> /'
+  # -E (ERE), not BRE: the alternation below was once spelled `\|`, which GNU sed accepts
+  # but BSD sed (/usr/bin/sed, the macOS CI runner) treats as a literal `|` -- the scrub
+  # then silently no-ops its timestamps and three argv rows diverge ONLY on the runner.
+  # Measured both ways on 2026-09-25 (CI run 36189285473, macos cells).
+  sed -E -e 's|/private/var/|/var/|g' -e "s|$1|<ROOT>|g" \
+      -e 's/"(openedAt|abandonedAt|startedAt|sealedAt|completedAt|at)": "[^"]*"/"\1": "<TS>"/g' \
+      -e 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z /<TS> /'
 }
 # THE TIMESTAMP RULE SPELLS _iso_now()'s EXACT SHAPE rather than a loose class. The first version
 # was `^[0-9-]\{10\}T[0-9:.]*Z `, which also matches `1234567890T::Z ` -- and "a scrub that
