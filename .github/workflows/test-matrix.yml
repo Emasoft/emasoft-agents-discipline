@@ -115,12 +115,13 @@ jobs:
   # cmdrun red in the same chain) and over a LAST-position step (aborted with the job -- the
   # measured failure). Idempotence scope: verified twice-run-clean on macOS only; the
   # Windows-specific rows have never executed anywhere, so their idempotence is what this
-  # job's first Windows run measures. The required-checks ruleset
-  # (baseline-pr-and-checks) ENUMERATES its contexts ("Test", the libuv job name, ...), so
-  # this job's checks are informational until someone adds them -- a cmdrun-proof red
-  # cannot block a merge by policy. ASYMMETRY, deliberate: windows-node-22-14 (libuv
-  # variant) carries no separate cmdrun coverage -- its cmdrun verdict rides the in-chain
-  # position only, because libuv variance is what that job isolates.
+  # job's first Windows run measures. The required-checks ruleset (baseline-pr-and-checks,
+  # id 22360682) ENUMERATED its contexts when verified 2026-09-25 ("Test", the libuv job
+  # name, ...) -- a red here is informational UNTIL someone adds these check names to that
+  # enumeration; re-check with `gh api repos/.../rulesets/22360682` whenever the required-
+  # checks list is edited. ASYMMETRY, deliberate: windows-node-22-14 carries no separate
+  # cmdrun coverage -- its cmdrun verdict rides the in-chain position only, because that
+  # job isolates the pinned (node 22.14.0, libuv 1.49.2) pair, which this spread does not.
   cmdrun-proof:
     name: cmdrun unit suite / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
