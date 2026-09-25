@@ -66,8 +66,10 @@ MAX_REQUEST_BYTES = 16 * 1024 * 1024  # spec: read stdin to EOF, cap 16 MiB.
 # F9: `output_limit` cap. JSON string escaping can grow a captured byte to as much as 6 bytes in
 # the answer line, and the old 64 MiB cap let a 64 MiB stdout + 64 MiB stderr capture produce an
 # 805 MB answer line with 3.5 GB peak supervisor RSS (27x the captured bytes) -- and outlast the
-# request's own timeout on nothing but encoding/writing that answer. 4 MiB keeps the worst-case
-# answer well under 32 MB.
+# request's own timeout on nothing but encoding/writing that answer. The worst case under the new
+# cap is 2 streams x 4 MiB x 6 bytes/byte = 48 MB (review round 2 corrected the earlier "under
+# 32 MB" claim -- still ~17x better than 805 MB, and no gate consumer needs more today; step 4
+# ports the consumers, so if one ever does, raise the cap then, not speculatively).
 MAX_OUTPUT_LIMIT = 4 * 1024 * 1024
 # Global cleanup deadline (spec: "deadline + 1.5 s") shared by the killpg-until-ESRCH loop and
 # the reap that follows it -- exhausting it answers `leaked: true`, never silently.
@@ -1056,7 +1058,10 @@ def _run_command_inner(cmd, fds, ctx, close_after_spawn):
     # would inherit the outer worker's own test-fault-injection env vars (e.g. a forced cleanup
     # budget of 0) whenever the request has no explicit `env` of its own, silently arming the
     # nested run's hooks. `--test-hooks` already gates whether they're READ; this additionally
-    # stops them being PASSED ALONG at all.
+    # stops them being PASSED ALONG at all. CMDRUN_* is a RESERVED namespace (review round 2):
+    # a caller's explicit `env: {"CMDRUN_X": ...}` is dropped here too, on purpose -- the exact
+    # hook names are re-added by prefix assignment (`CMDRUN_X=1 cmd`) when a test genuinely needs
+    # them, and both transports stay in agreement instead of diverging by path.
     overlay_env = {k: v for k, v in ctx.env.items() if not k.startswith("CMDRUN_")}
     for aname, avalue in cmd.assigns:
         _env_set(overlay_env, aname, expand_word_no_glob(avalue))
@@ -2007,7 +2012,13 @@ def main():
     # installed through the whole cleanup phase below (closed only in the `finally`) -- the old
     # code installed it only just before the wait loop, leaving ~70ms (startup/validation/spawn)
     # and ~20ms (cleanup) windows where SIGTERM/SIGHUP/SIGINT killed the supervisor via Python's
-    # default disposition (a bare traceback or silent death) instead of answering 143.
+    # default disposition (a bare traceback or silent death) instead of answering 143. Deliberate
+    # trade-off (review round 2): the blocking `sys.stdin.buffer.read()` below is NOT interruptible
+    # by this watch -- a supervisor opened with no request and SIGTERMed hangs until stdin closes
+    # rather than answering 143 immediately. Accepted: the spec already makes the CALLER enforce
+    # the timeout and kill the interpreter's group, so a supervisor with no request is a
+    # misbehaving caller, and installing the watch late (the old shape) left the larger
+    # spawn/cleanup windows unprotected instead.
     signalled = _SignalWatch()
     try:
         try:
