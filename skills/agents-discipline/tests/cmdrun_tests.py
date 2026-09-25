@@ -857,14 +857,27 @@ def _run_tests(d):
             # 50ms assumed the interpreter reaches main()'s signal watch faster than that. On a
             # loaded CI runner (ubuntu node-24, CI run 36192447467) python's startup alone can
             # exceed 50ms, so the SIGTERM landed BEFORE the watch existed -- default
-            # disposition, silent death, answer null, row red. The kill must land INSIDE the
-            # 300ms artificial pre-spawn window, so wait until the process demonstrably exists
-            # and is past interpreter startup (stdin consumed; the supervisor reads the request
-            # before validating/spawning), with the sleep bounded by the window itself.
+            # disposition, silent death, answer null, row red. This loop is a BOUNDED WAIT, not
+            # a readiness observable: it can only see death (poll()), never startup progress,
+            # so it exits at ~250ms of wall-clock for a healthy supervisor and EARLY when the
+            # supervisor died first. The kill therefore lands inside the 300ms artificial
+            # pre-spawn window whenever startup is under 250ms; a runner whose python startup
+            # exceeds that narrows the race again -- the deterministic fix (a test-hooks
+            # "watch installed" line on stderr) is recorded as future work. If the supervisor
+            # died before the signal, killpg raises ProcessLookupError: caught and reported as
+            # the row's own clean failure, never a suite-killing traceback.
             _deadline = time.monotonic() + 0.25  # 50ms headroom inside the 300ms window
             while time.monotonic() < _deadline and _delay_proc.poll() is None:
                 time.sleep(0.01)
-            os.killpg(_delay_proc.pid, signal.SIGTERM)
+            if _delay_proc.poll() is not None:
+                report(False, "F6: a signal landing before the worker even exists still answers status 143 (signal watch installed first thing in main())",
+                       "supervisor died before the SIGTERM (rc=%s); the row's premise never held" % _delay_proc.returncode)
+            else:
+                try:
+                    os.killpg(_delay_proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    report(False, "F6: a signal landing before the worker even exists still answers status 143 (signal watch installed first thing in main())",
+                           "process group vanished between the liveness check and the kill")
             try:
                 _delay_proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
