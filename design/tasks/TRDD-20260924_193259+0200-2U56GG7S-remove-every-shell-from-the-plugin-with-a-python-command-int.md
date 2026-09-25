@@ -4,7 +4,7 @@ title: Remove every shell from the plugin with a Python command interpreter and 
 column: dev
 status: tasked
 created: 2026-09-24T19:32:59+0200
-updated: 2026-09-24T23:03:46+0200
+updated: 2026-09-25T12:38:47+0200
 current-owner: main-agent@agents-discipline
 created-by: user
 task-type: refactor
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: user
 approval-datetime: 2026-09-24T19:32:59+0200
+implementation-commits: 10d15aa 50075fb 6e48a5e daa61ca
 ---
 
 # Remove every shell from the plugin with a Python command interpreter and a JS twin
@@ -25,9 +26,9 @@ Step 1 of the no-bash conversion (docs_dev/no-bash-spec.md "Steps" section) was 
 cmdrun.py, tests/cmdrun_tests.py and tests/cmdrun_stress.py are all v2 now: pyright/ruff clean,
 130 unit-test rows green (one per audit finding H1-H10/M1-M11/L1-L5 and advisor probe
 P1/P2/P6/P7), 3-seed stress run green at --cases 300.
-NEXT ACTION: full tests/cmdrun_stress.py run (all seeds, no --cases cap) by the coordinator
-(not run here -- another agent must not run a full suite concurrently), THEN the Windows
-proof (ask the user to allow pushing a branch) BEFORE step 3, per the spec's own 'Order' section. Steps 2 (JS twin) through 8 are not started. See the spec body below (pasted verbatim).
+DONE: coordinator ran the full stress run after the hardening round landed -- unit suite
+193 PASS / 0 fail, stress 6702 checks all green (3 seeds x 733 cases), commit daa61ca.
+NEXT ACTION: Windows proof (needs user OK to push a branch) BEFORE step 3. Steps 2 (JS twin) through 8 are not started. See the spec body below (pasted verbatim).
 
 
 ---
