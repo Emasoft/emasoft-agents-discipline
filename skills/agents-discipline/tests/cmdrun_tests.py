@@ -1293,7 +1293,13 @@ def _run_tests(d):
     try:
         node_dir = os.path.join(_win_tmp, "node")
         os.makedirs(node_dir)
-        node_exe = os.path.join(node_dir, "node.exe")
+        # Probe-spelling discipline: with IS_WINDOWS forced, _check_candidate reconstructs the
+        # winning candidate as `path + <PATHEXT entry>` -- "node.EXE" here -- and a Linux CI
+        # filesystem is CASE-SENSITIVE, so a file written as "node.exe" is invisible to the
+        # probe (CI run 36189285473, ubuntu cells). Every fixture file below is created with
+        # the EXACT spelling the probe will look for; the comparisons stay case-folded because
+        # that fold is about PATHEXT's own spelling, not about the filesystem.
+        node_exe = os.path.join(node_dir, "node.EXE")
         open(node_exe, "w", encoding="utf-8").close()
         npm_bin = os.path.join(node_dir, "node_modules", "npm", "bin")
         os.makedirs(npm_bin)
@@ -1316,7 +1322,7 @@ def _run_tests(d):
         # missing *-cli.js: node exists, no node_modules at all -- refused, naming the exact path.
         bare_dir = tempfile.mkdtemp(prefix="cmdrun-win-bare-")
         try:
-            open(os.path.join(bare_dir, "node.exe"), "w", encoding="utf-8").close()
+            open(os.path.join(bare_dir, "node.EXE"), "w", encoding="utf-8").close()
             bare_env = {"PATH": bare_dir, "PATHEXT": ".COM;.EXE"}
             r = cmdrun.resolve_executable("npm", bare_dir, bare_env)
             expected_cli = os.path.join(bare_dir, "node_modules", "npm", "bin", "npm-cli.js")
@@ -1341,12 +1347,19 @@ def _run_tests(d):
             report(found2 is not None and found2.upper().endswith(".COM"),
                    "trampoline: PATHEXT absent from the env defaults to .COM;.EXE", found2)
 
+            # Spacey-dot file: written ".EXE" -- the spelling `_check_candidate` probes after
+            # stripping trailing dots/spaces. On a case-sensitive FS a lowercase "spacey.exe"
+            # on disk would NOT be found by the probe (CI run 36189285473, ubuntu).
             with open(os.path.join(ext_dir, "spacey.EXE"), "w", encoding="utf-8") as f:
                 f.write("x")
             found3 = cmdrun._check_candidate(os.path.join(ext_dir, "spacey   "), {"PATHEXT": ".COM;.EXE"})
             report(found3 is not None and found3.upper().endswith("SPACEY.EXE"),
                    "trampoline: a trailing-space name is normalised before the PATHEXT suffix check", found3)
-            found4 = cmdrun._check_candidate(os.path.join(ext_dir, "spacey.exe."), {"PATHEXT": ".COM;.EXE"})
+            # Trailing-DOT case: stripping preserves case, so the input is spelled ".EXE."
+            # (strip -> probe "spacey.EXE", which matches the file above). Probing
+            # "spacey.exe." would have looked for lowercase "spacey.exe" -- invisible on a
+            # case-sensitive FS once the file on disk is "spacey.EXE" (CI run 36189285473).
+            found4 = cmdrun._check_candidate(os.path.join(ext_dir, "spacey.EXE."), {"PATHEXT": ".COM;.EXE"})
             report(found4 is not None and found4.upper().endswith("SPACEY.EXE"),
                    "trampoline: a trailing-dot extension is normalised before the suffix check", found4)
 
