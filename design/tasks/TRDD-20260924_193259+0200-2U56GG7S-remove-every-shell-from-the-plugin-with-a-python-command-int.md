@@ -4,7 +4,7 @@ title: Remove every shell from the plugin with a Python command interpreter and 
 column: dev
 status: tasked
 created: 2026-09-24T19:32:59+0200
-updated: 2026-09-25T12:38:47+0200
+updated: 2026-09-25T12:55:04+0200
 current-owner: main-agent@agents-discipline
 created-by: user
 task-type: refactor
@@ -123,3 +123,7 @@ candidates only; npm/npx trampoline to node + npm-cli.js. Every answer carries t
 Closes H1 H2 H3 H4(partly, residual documented) H5 H6 H7 H8 H9 H10 and all advisor probes
 tested on POSIX (P1 P2 P6 P7); full findings-by-finding table in the step-1 report.
 created-by: user is wrong -- a worker minted this card, not the human; the field is write-once.
+
+## Contract (hardened, step-2 twin MUST implement this)
+
+Round-2 hardening (commit 809f1b4, spec docs_dev/cmdrun-v2-executor-spec.md) changed the contract the JS twin must copy: (1) output_limit cap 0..4_194_304 (4 MiB; worst-case answer 2x4MiBx6B=48MB). (2) CMDRUN_* is a RESERVED namespace: the worker scrubs every CMDRUN_* key from the child env on BOTH transports (request env AND prefix assignment), and the three CMDRUN_TEST_* hooks fire only under --test-hooks argv. (3) Every answer carries tree_kill ('process_group' | 'job'), including bad_request/refused/spawn-failure. (4) The supervisor validates the worker answer against an exact known-key shape before trusting it; keys: status, timed_out, truncated, tree_kill, refused, bad_request, internal_error, leaked, reason, stdout, stderr, pgid -- a new field must be added to BOTH runtimes in the same commit. (5) Windows: TerminateJobObject return checked, then QueryInformationJobObject accounting confirms ActiveProcesses==0; KNOWN RISK of a spurious leaked:true from the settle race -- the Windows-proof step must add a bounded retry window or measure it. (6) SIGCHLD reset to SIG_DFL at the top of main() (POSIX). Verified after fixes: unit suite 193 PASS / 0 fail.
