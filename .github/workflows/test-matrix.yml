@@ -15,7 +15,9 @@ jobs:
   test:
     name: ${{ matrix.os }} / node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # 15, not 10: `npm test` now also runs the cmdrun unit suite (py-suite-runner.mjs), whose
+    # burst/wait rows cost real seconds and spawn far slower on the Windows cells.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -33,15 +35,20 @@ jobs:
       # setup-python pins ONE major.minor (3.12, the one the port was verified under locally) on all
       # three OSes, so a Windows red cannot be major.minor drift; the patch level is the highest 3.12.x
       # the runner can supply and may differ per OS (pin an exact patch from the setup-python
-      # versions-manifest if a red ever looks patch-specific). Placed before `npm test`, it also governs
-      # the interpreter that step's python-lib-checks.py resolves (`python3` on Linux/macOS; on Windows
-      # only if setup-python exposes a `python3` shim -- unverified here) and the `python3` test:diff /
+      # versions-manifest if a red ever looks patch-specific). Placed before `npm test`, it governs
+      # the interpreter py-suite-runner.mjs resolves via PYTHON below, and the `python3` test:diff /
       # test:slow resolve on Linux/macOS. A deliberate determinism gain, not a side effect to undo.
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Run zero-dependency test suite
+        env:
+          # PYTHON names the interpreter for the Python suites inside `npm test`
+          # (py-suite-runner.mjs): `python` on Windows, `python3` elsewhere -- pinned
+          # by the setup-python step above rather than left to the runner image's
+          # preinstalled aliases (the same convention the test:port step below uses).
+          PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
         run: npm test
 
       # EVERY tests/*-diff.sh suite is the PORT'S PRIMARY FIDELITY INSTRUMENT -- each runs the
@@ -98,7 +105,7 @@ jobs:
   windows-node-22-14:
     name: windows-latest / node 22.14.0 (libuv 1.49.2)
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -108,8 +115,17 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22.14.0
+      # Pin the same 3.12 as the matrix job: py-suite-runner.mjs needs `python` (this job has
+      # no matrix env block), and an unpinned runner-image python could drift under the proof.
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
       - name: Verify affected runtime and run zero-dependency test suite
         shell: pwsh
+        env:
+          # windows-latest: only `python` resolves (see the PYTHON comment on the matrix job).
+          PYTHON: python
         run: |
           if ((node -p "process.version") -ne "v22.14.0") { throw "wrong Node version" }
           if ((node -p "process.versions.uv") -ne "1.49.2") { throw "wrong libuv version" }

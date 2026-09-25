@@ -94,6 +94,11 @@ def run_raw_bytes(data: bytes, timeout=8):
     except json.JSONDecodeError:
         return {"__crash__": True, "stderr": lines[0]}
 
+# PY is the interpreter NAME the interpreter-under-test sees on PATH for its STAGES: `python3` on
+# POSIX, `python` on Windows (setup-python exposes no `python3` shim there -- test-matrix.yml comment).
+# Tests must not hardcode it: on Windows every `python3 ...` stage command would exit 127.
+PY = "python" if sys.platform == "win32" else "python3"
+
 
 def ps_snapshot_text():
     """verification-and-evidence / shell-pitfalls: snapshot the process table to a file, then
@@ -313,7 +318,7 @@ def _run_tests(d):
 
     # -- Supported: redirections, dup, and ORDER (2>&1 >f vs >f 2>&1) ----------------------------
     # A program that writes to stderr ONLY, so which fd it ends up aliasing is unambiguous.
-    write_stderr = "python3 -c 'import sys; sys.stderr.write(\"E\")'"
+    write_stderr = f"{PY} -c 'import sys; sys.stderr.write(\"E\")'"
     out1 = os.path.join(d, "out1.txt")
     a = run(f"{write_stderr} 2>&1 >{out1}", d)
     with open(out1, encoding="utf-8") as f:
@@ -445,7 +450,7 @@ def _run_tests(d):
     # it is killed BY PID at the end instead of relying on the worker to reap it (it can't).
     detach_pidfile = os.path.join(d, "detach_pid.txt")
     detach_cmd = (
-        "python3 -c \"import subprocess,sys;"
+        f"{PY} -c \"import subprocess,sys;"
         "p=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],"
         "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,"
         f"start_new_session=True);open({detach_pidfile!r},'w').write(str(p.pid))\""
@@ -487,13 +492,13 @@ def _run_tests(d):
     # unique marker in argv (not in the command NAME, which `ps` shows verbatim) lets us confirm
     # the whole group is actually dead, not just that the answer said 124.
     marker_h2 = f"CMDRUN_H2_MARKER_{os.getpid()}_{int(time.time() * 1000)}"
-    a = run(f"python3 -c \"import time;time.sleep(3)\" {marker_h2}", d, timeout_ms=200)
+    a = run(f"{PY} -c \"import time;time.sleep(3)\" {marker_h2}", d, timeout_ms=200)
     report(a.get("status") == 124 and a.get("timed_out") is True, "H2: short timeout answers 124", a)
     report(not marker_alive(marker_h2), "H2/P1/P2: the timed-out group is actually dead, not just reported so", a)
 
     # -- H3: a well-behaved command's own detached-in-group grandchild used to survive success.
     marker_h3 = f"CMDRUN_H3_MARKER_{os.getpid()}_{int(time.time() * 1000)}"
-    a = run(f"python3 -c \"import subprocess,sys;subprocess.Popen([sys.executable,'-c','import time;time.sleep(3)','{marker_h3}'])\"", d, timeout_ms=5000)
+    a = run(f"{PY} -c \"import subprocess,sys;subprocess.Popen([sys.executable,'-c','import time;time.sleep(3)','{marker_h3}'])\"", d, timeout_ms=5000)
     report(a.get("status") == 0, "H3: the spawning command itself succeeds", a)
     report(not marker_alive(marker_h3), "H3: its in-group grandchild is killed on the success path too", a)
 
@@ -723,7 +728,7 @@ def _run_tests(d):
     _leak_marker = f"CMDRUN_LEAK_MARKER_{os.getpid()}_{int(time.time() * 1000)}"
     _leak_env = dict(os.environ)
     _leak_env["CMDRUN_CLEANUP_BUDGET_S"] = "0"
-    _leak_req = json.dumps({"command": f"python3 -c \"import time;time.sleep(5)\" {_leak_marker}",
+    _leak_req = json.dumps({"command": f"{PY} -c \"import time;time.sleep(5)\" {_leak_marker}",
                              "cwd": d, "timeout_ms": 30})
     _leak_proc = subprocess.run([sys.executable, CMDRUN, "--test-hooks"], input=_leak_req,
                                  capture_output=True, text=True, env=_leak_env, timeout=15)
@@ -856,7 +861,7 @@ def _run_tests(d):
         _nan_env = dict(os.environ)
         _nan_env["CMDRUN_CLEANUP_BUDGET_S"] = _bad_budget
         _nan_marker = f"CMDRUN_NANBUDGET_{os.getpid()}_{_bad_budget}_{int(time.time() * 1000)}"
-        _nan_req = json.dumps({"command": f"python3 -c \"import time;time.sleep(5)\" {_nan_marker}",
+        _nan_req = json.dumps({"command": f"{PY} -c \"import time;time.sleep(5)\" {_nan_marker}",
                                 "cwd": d, "timeout_ms": 30})
         _t0 = time.monotonic()
         _nan_proc = subprocess.run([sys.executable, CMDRUN, "--test-hooks"], input=_nan_req,
@@ -946,7 +951,7 @@ def _run_tests(d):
     # -- F3: gate-mode latency must not pay the OLD 0.5s-per-sink (1.0s total) wait for an escaped
     # descendant that still holds the OutputSink's write end open -- one combined 100ms bound.
     _f3_marker = f"CMDRUN_F3_{os.getpid()}_{int(time.time() * 1000)}"
-    _f3_cmd = ("python3 -c \"import subprocess,sys; "
+    _f3_cmd = (f"{PY} -c \"import subprocess,sys; "
                f"subprocess.Popen(['sleep', '1.5', '{_f3_marker}'], start_new_session=True); sys.exit(0)\"")
     _t0 = time.monotonic()
     a_gate = run(_f3_cmd, d, mode="gate", timeout_ms=5000)
@@ -1009,7 +1014,7 @@ def _run_tests(d):
     # NEW 4 MiB cap keeps a fast command comfortably inside a tight timeout even when it fills the
     # cap on both stdout and stderr.
     _t0 = time.monotonic()
-    a = run("python3 -c \"import sys; sys.stdout.buffer.write(b'\\x01' * 4194304); "
+    a = run(f"{PY} -c \"import sys; sys.stdout.buffer.write(b'\\x01' * 4194304); "
             "sys.stderr.buffer.write(b'\\x01' * 4194304)\"",
             d, mode="gate", timeout_ms=1500, output_limit=4_194_304)
     _f9_elapsed = time.monotonic() - _t0
