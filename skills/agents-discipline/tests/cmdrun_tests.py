@@ -854,7 +854,16 @@ def _run_tests(d):
             _delay_req = json.dumps({"command": "echo hi", "cwd": d, "timeout_ms": 3000})
             _delay_proc.stdin.write(_delay_req.encode() + b"\n")
             _delay_proc.stdin.close()
-            time.sleep(0.05)  # land inside the artificial pre-spawn delay window
+            # 50ms assumed the interpreter reaches main()'s signal watch faster than that. On a
+            # loaded CI runner (ubuntu node-24, CI run 36192447467) python's startup alone can
+            # exceed 50ms, so the SIGTERM landed BEFORE the watch existed -- default
+            # disposition, silent death, answer null, row red. The kill must land INSIDE the
+            # 300ms artificial pre-spawn window, so wait until the process demonstrably exists
+            # and is past interpreter startup (stdin consumed; the supervisor reads the request
+            # before validating/spawning), with the sleep bounded by the window itself.
+            _deadline = time.monotonic() + 0.25  # 50ms headroom inside the 300ms window
+            while time.monotonic() < _deadline and _delay_proc.poll() is None:
+                time.sleep(0.01)
             os.killpg(_delay_proc.pid, signal.SIGTERM)
             try:
                 _delay_proc.wait(timeout=5)

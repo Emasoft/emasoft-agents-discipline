@@ -51,6 +51,20 @@ jobs:
           PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
         run: npm test
 
+      # py-suite-runner.mjs (cmdrun's own unit suite) runs AGAIN, independently of the chain
+      # above. Inside `npm test` it sits AFTER ledger-tests, so once ledger-tests went red on
+      # Windows (CI run 36189285473: 20 rows mixing fixture assumptions and possible real win32
+      # checker defects -- deliberately NOT gated, see
+      # reports/no-bash/20260925_2300+0200-windows-ci-proof-run1.md), the && chain aborted
+      # before cmdrun's suite ever executed there: the very proof this matrix exists to produce
+      # was coupled to another suite's red. This step is idempotent with the chain (same runner,
+      # same rows, no shared mutable state) -- it re-runs what the chain would have reached, on
+      # EVERY cell, so the cmdrun Windows verdict no longer depends on ledger-tests' color.
+      - name: Run the cmdrun unit suite (independent of the npm test chain)
+        env:
+          PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+        run: node tests/py-suite-runner.mjs
+
       # EVERY tests/*-diff.sh suite is the PORT'S PRIMARY FIDELITY INSTRUMENT -- each runs the
       # .mjs oracle and the .py port on the same input and compares exit code, stdout and
       # stderr. Until 2026-09-07 not one of them was wired to CI or to `npm test`, so every
