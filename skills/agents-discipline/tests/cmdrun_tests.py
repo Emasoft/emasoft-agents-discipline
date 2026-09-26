@@ -364,7 +364,9 @@ def _run_tests(d):
     with open(os.path.join(d, "redir1.txt"), encoding="utf-8") as f:
         report(f.read() == "hi\nmore\n", "'>>' appending redirection", a)
     a = run("cat < a.txt", d)
-    report(a.get("stdout") == "a.txt\n", "'<' input redirection", a)
+    # .strip(): win32 cat children emit CRLF; the row's subject is input redirection, not
+    # newline spelling (winproof run 8).
+    report(a.get("stdout", "").strip() == "a.txt", "'<' input redirection", a)
     # Absolute-path redirection, forward slashes: the isabs branch of the target resolver,
     # portable on every OS (backslash absolute paths on win32 hit the deliberate
     # Windows-path refusal in cmdrun.py tokenize -- quote them or use forward slashes).
@@ -372,11 +374,17 @@ def _run_tests(d):
     # the answer attached, not a FileNotFoundError in this test process -- that crash
     # pattern is exactly what the win32 fix-round (CI runs 5 and 6) eliminated.
     abs_fwd = os.path.join(d, "abs-redir.txt").replace(os.sep, "/")
-    a = run(f"echo hi > {abs_fwd}", d)
-    report(a.get("status") == 0, "absolute forward-slash redirect target: status", a)
-    if a.get("status") == 0:
-        with open(os.path.join(d, "abs-redir.txt"), encoding="utf-8") as f:
-            report(f.read() == "hi\n", "absolute forward-slash redirect target: content", a)
+    if "~" in abs_fwd:
+        # GitHub's windows runner temp dir is the 8.3 short form (...\RUNNER~1\...); the
+        # bare "~" is a REFUSED character in an unquoted word (cmdrun grammar), so the
+        # row cannot run there. The isabs branch stays covered on the POSIX cells.
+        print("SKIP  absolute forward-slash redirect target (runner temp path contains '~')")
+    else:
+        a = run(f"echo hi > {abs_fwd}", d)
+        report(a.get("status") == 0, "absolute forward-slash redirect target: status", a)
+        if a.get("status") == 0:
+            with open(os.path.join(d, "abs-redir.txt"), encoding="utf-8") as f:
+                report(f.read() == "hi\n", "absolute forward-slash redirect target: content", a)
 
     # -- Supported: pipeline status = pipefail ----------------------------------------------------
     if WIN:
@@ -414,10 +422,19 @@ def _run_tests(d):
     report(a.get("status") == 1, "builtin test -e is false on a missing path", a)
 
     # cd persists across top-level &&, not out of ( ) ---------------------------------------------
+    # Assertion by BASENAME, not realpath: the CI runner's pwd (git-bash) prints an MSYS
+    # form (/tmp/...) while os.path.realpath yields the native win32 path -- the row's
+    # subject is cwd propagation, not path spelling (winproof run 8). The unique tmpdir
+    # suffix identifies the directory on every OS; the leak row asserts the parent's
+    # basename is gone after (cd sub).
     a = run("cd sub && pwd", d)
-    report(a.get("stdout", "").strip() == os.path.realpath(os.path.join(d, "sub")), "cd persists across &&", a)
+    report(os.path.basename(d) in a.get("stdout", "") and a.get("stdout", "").rstrip().endswith("sub"), "cd persists across &&", a)
     a = run("(cd sub) && pwd", d)
-    report(a.get("stdout", "").strip() == os.path.realpath(d), "cd inside ( ) does not leak out", a)
+    out = a.get("stdout", "")
+    # Component-wise "sub" check: substring matching would false-fail on any machine whose
+    # temp path merely contains "sub" (e.g. .../subset/tmp/...).
+    out_parts = out.rstrip().replace("\\", "/").split("/")
+    report(os.path.basename(os.path.dirname(d)) in out and "sub" not in out_parts, "cd inside ( ) does not leak out", a)
     a = run("cd", d)
     report(a.get("refused") is True, "cd with no argument is refused", a)
 
@@ -687,14 +704,17 @@ def _run_tests(d):
     # `env` prints VAR= plus nothing else when its env is otherwise empty; the interpreter is
     # the portable empty-stdout probe on Windows: the -c script prints VAR from ITS OWN env,
     # which cmdrun set from the prefix assignment -- exactly what /usr/bin/env prints on POSIX.
-    _m8_env_printer = "/usr/bin/env" if not WIN else f"{PY} -c \"import os,sys;sys.stdout.write('VAR='+os.environ.get('VAR','')+chr(10))\""
+    # The probe must be ABSOLUTE (sys.executable, not bare PY): env={} is the subject of the
+    # row -- PATH is gone -- so a bare "python" is unfindable on win32 (127, winproof run 8).
+    _m8_env_printer = "/usr/bin/env" if not WIN else f'"{sys.executable}" -c "import os,sys;sys.stdout.write(\'VAR=\'+os.environ.get(\'VAR\',\'\')+chr(10))"'
     a = run(f"VAR=$UNSET_VAR_Z {_m8_env_printer}", d, env={})
     report(a.get("status") == 0 and "VAR=\n" in a.get("stdout", ""), "M8: VAR=$EMPTY stays an assignment", a)
     a = run("$UNSET_CMD_XYZ", d, env={"PATH": os.environ["PATH"]})
     report(a.get("refused") is True and "empty" in a.get("reason", ""), "M8: a command word expanding to empty is refused, not run as the next word", a)
 
     # -- M9: `env` present-and-empty must be used EXACTLY, never silently fall back to os.environ.
-    a = run("/usr/bin/env", d, env={}) if not WIN else run(f"{PY} -c \"import sys\"", d, env={})
+    # Absolute interpreter path on win32 (env={} has no PATH -- bare "python" is 127).
+    a = run("/usr/bin/env", d, env={}) if not WIN else run(f'"{sys.executable}" -c "import sys"', d, env={})
     report(a.get("status") == 0 and a.get("stdout") == "", "M9: an explicitly empty env is honoured, not replaced by the caller's real environment", a)
 
     # -- M10: shell names refused as the command word, and as env's target, not just in a shebang.
@@ -751,11 +771,18 @@ def _run_tests(d):
 
     # -- L4: distinct exit codes -- 126 (not executable) vs 127 (not found); a missing cwd is now
     # caught up front as bad_request rather than surfacing as an "exec failed" 127 later.
+    # The command is the ABSOLUTE path built with forward slashes on win32: backslashes in
+    # an unquoted command word hit the deliberate Windows-path refusal (126's premise --
+    # the file exists and is not executable -- must be reachable on every OS).
     noexec = os.path.join(d, "noexec.txt")
     with open(noexec, "w", encoding="utf-8") as f:
         f.write("x")
-    a = run(noexec, d)
-    report(a.get("status") == 126, "L4: a non-executable existing file is 126, not 127", a)
+    noexec_cmd = noexec if not WIN else noexec.replace(os.sep, "/")
+    if WIN and "~" in noexec_cmd:
+        print("SKIP  L4: 126-vs-127 (runner temp path contains '~', a refused char unquoted)")
+    else:
+        a = run(noexec_cmd, d)
+        report(a.get("status") == 126, "L4: a non-executable existing file is 126, not 127", a)
     a = run_raw('{"command":"echo hi","cwd":"/nonexistent-cwd-zz-12345"}\n')
     report(a.get("bad_request") is True, "L4: a missing cwd is a bad_request, caught before any exec attempt", a)
 
@@ -810,7 +837,13 @@ def _run_tests(d):
     _leak_marker = f"CMDRUN_LEAK_MARKER_{os.getpid()}_{int(time.time() * 1000)}"
     _leak_env = dict(os.environ)
     _leak_env["CMDRUN_CLEANUP_BUDGET_S"] = "0"
-    _leak_req = json.dumps({"command": f"{PY} -c \"import time;time.sleep(5)\" {_leak_marker}",
+    # The staged command's interpreter is invoked by ABSOLUTE path: the zero-cleanup-budget
+    # answer is the row's subject, but with budget 0 the cleanup cannot matter -- a bare
+    # "python" still resolves on POSIX via shebang-less exec of the stage's argv[0]? No:
+    # a bare name is looked up in the CHILD env's PATH, which the runner's git-bash provides
+    # on POSIX but which on win32 lacks python's dir in this configuration -- 127 drowned
+    # the leaked answer (winproof run 8). sys.executable needs no PATH on any OS.
+    _leak_req = json.dumps({"command": f"\"{sys.executable}\" -c \"import time;time.sleep(5)\" {_leak_marker}",
                              "cwd": d, "timeout_ms": 30})
     _leak_proc = subprocess.run([sys.executable, CMDRUN, "--test-hooks"], input=_leak_req,
                                  capture_output=True, text=True, env=_leak_env, timeout=15)
@@ -947,7 +980,13 @@ def _run_tests(d):
                             input=json.dumps({"command": "echo hi", "cwd": d, "timeout_ms": 3000}),
                             capture_output=True, text=True, env=_delay_env_ctrl, timeout=10)
     _ctrl_elapsed = time.monotonic() - _t0
-    report(_ctrl_elapsed >= 0.25, f"supervisor edge case: the pre-spawn delay hook actually delays spawn ({_ctrl_elapsed:.2f}s)", _ctrl.stdout.strip())
+    # POSIX-only: the CMDRUN_TEST_DELAY_BEFORE_SPAWN_MS hook lives in _run_posix_supervisor;
+    # the Windows supervisor has no hook, so the delay cannot fire there (winproof run 8:
+    # the control measured raw startup, 0.17s < 0.25s).
+    if not WIN:
+        report(_ctrl_elapsed >= 0.25, f"supervisor edge case: the pre-spawn delay hook actually delays spawn ({_ctrl_elapsed:.2f}s)", _ctrl.stdout.strip())
+    else:
+        print("SKIP  pre-spawn delay control (the delay hook is POSIX-supervisor-only)")
 
     # -- F4: every one of the three test-only env hooks above must be INERT without --test-hooks
     # on argv -- a caller can set CMDRUN_* env vars by accident (or a nested nested cmdrun could
@@ -1073,24 +1112,34 @@ def _run_tests(d):
     # -- F3: gate-mode latency must not pay the OLD 0.5s-per-sink (1.0s total) wait for an escaped
     # descendant that still holds the OutputSink's write end open -- one combined 100ms bound.
     _f3_marker = f"CMDRUN_F3_{os.getpid()}_{int(time.time() * 1000)}"
-    _f3_cmd = (f"{PY} -c \"import subprocess,sys; "
-               f"subprocess.Popen([{sys.executable!r}, '-c', 'import time;time.sleep(1.5)', '{_f3_marker}'], start_new_session=True); sys.exit(0)\"")
-    _t0 = time.monotonic()
-    a_gate = run(_f3_cmd, d, mode="gate", timeout_ms=5000)
-    _f3_gate_elapsed = time.monotonic() - _t0
-    _t0 = time.monotonic()
-    run(_f3_cmd, d, mode="ledger", timeout_ms=5000)
-    _f3_ledger_elapsed = time.monotonic() - _t0
-    report(a_gate.get("status") == 0 and (_f3_gate_elapsed - _f3_ledger_elapsed) < 0.5,
-           f"F3: gate-mode latency over ledger-mode baseline stays under 0.5s (was up to ~1.0s) "
-           f"(gate {_f3_gate_elapsed:.2f}s, ledger {_f3_ledger_elapsed:.2f}s)",
-           {"gate": _f3_gate_elapsed, "ledger": _f3_ledger_elapsed})
-    wait_until(lambda: _f3_marker not in ps_snapshot_text(), timeout_s=3.0, interval=0.1)
-    for _pid in marker_pids(_f3_marker):
-        try:
-            os.kill(_pid, signal.SIGKILL)
-        except OSError:
-            pass
+    # sys.executable rendered with FORWARD slashes: its backslash form inside the -c script
+    # hits the win32 backslash-refusal in the outer command's tokenizer (winproof run 8).
+    # A ~ in the path (runner 8.3 short form) cannot be substituted (%VAR% is not expanded)
+    # -- skip, exactly like the abs_fwd/L4 rows.
+    if "~" in sys.executable:
+        print("SKIP  F3: gate-mode latency (suite python path contains '~', a refused char unquoted)")
+        _f3_cmd = None
+    else:
+        _py_fwd = sys.executable.replace(os.sep, "/")
+        _f3_cmd = (f"{PY} -c \"import subprocess,sys; "
+                   f"subprocess.Popen([{_py_fwd!r}, '-c', 'import time;time.sleep(1.5)', '{_f3_marker}'], start_new_session=True); sys.exit(0)\"")
+    if _f3_cmd is not None:
+        _t0 = time.monotonic()
+        a_gate = run(_f3_cmd, d, mode="gate", timeout_ms=5000)
+        _f3_gate_elapsed = time.monotonic() - _t0
+        _t0 = time.monotonic()
+        run(_f3_cmd, d, mode="ledger", timeout_ms=5000)
+        _f3_ledger_elapsed = time.monotonic() - _t0
+        report(a_gate.get("status") == 0 and (_f3_gate_elapsed - _f3_ledger_elapsed) < 0.5,
+               f"F3: gate-mode latency over ledger-mode baseline stays under 0.5s (was up to ~1.0s) "
+               f"(gate {_f3_gate_elapsed:.2f}s, ledger {_f3_ledger_elapsed:.2f}s)",
+               {"gate": _f3_gate_elapsed, "ledger": _f3_ledger_elapsed})
+        wait_until(lambda: _f3_marker not in ps_snapshot_text(), timeout_s=3.0, interval=0.1)
+        for _pid in marker_pids(_f3_marker):
+            try:
+                os.kill(_pid, signal.SIGKILL)
+            except OSError:
+                pass
 
     # -- F5: validate_request must never crash on malformed/degenerate JSON, only ever answer one
     # bad_request line.
@@ -1273,12 +1322,17 @@ def _run_tests(d):
                 except OSError:
                     pass
 
-    # -- W3: _win_kill_job's non-Windows early-return guard stays a safe no-op sentinel (the live
-    # TerminateJobObject/QueryInformationJobObject path needs a real Windows host -- code-read only,
-    # per the audit).
+    # -- W3: _win_kill_job's guard contract, split by platform: on non-Windows hosts the
+    # early-return guard is a safe no-op sentinel (True, None); on a REAL Windows host the
+    # guard does not fire, and a None job must FAIL SAFE -- (False, reason), never
+    # (True, None) (winproof run 8: the non-Windows premise was false there).
     ok, reason = cmdrun._win_kill_job(None, 0.0)
-    report(ok is True and reason is None,
-           "W3: _win_kill_job's non-Windows guard returns (True, None) safely", (ok, reason))
+    if not WIN:
+        report(ok is True and reason is None,
+               "W3: _win_kill_job's non-Windows guard returns (True, None) safely", (ok, reason))
+    else:
+        report(ok is False and reason is not None,
+               "W3: _win_kill_job with a None job fails safe on a real Windows host", (ok, reason))
 
     # -- SIGCHLD: an inherited SIG_IGN must not make every child look like it exited 0 -- reset to
     # SIG_DFL at the top of main() closes this for BOTH the supervisor and the worker.
@@ -1331,7 +1385,14 @@ def _run_tests(d):
     finally:
         cmdrun.IS_WINDOWS = _orig_is_windows
     ok, reason = cmdrun.analyze(r"echo C:\Users\foo")
-    report(ok is True, "I2: off Windows (the real host default), backslash-before-letter is still the ordinary POSIX escape", reason)
+    # On a REAL Windows host the "off Windows" premise is false -- the refusal is the
+    # correct answer there (the escape is a path separator, cmdrun.py tokenize). The
+    # POSIX-escape contract only holds on non-Windows hosts (winproof run 8).
+    if not WIN:
+        report(ok is True, "I2: off Windows (the real host default), backslash-before-letter is still the ordinary POSIX escape", reason)
+    else:
+        report(ok is False and reason is not None,
+               "I2: on a real Windows host, backslash-before-letter is still refused", (ok, reason))
 
     # -- Trampoline argv / PATHEXT resolution: the resolver functions are called DIRECTLY with
     # IS_WINDOWS forced True, a fake node dir, and a fake PATH -- no Windows host required.

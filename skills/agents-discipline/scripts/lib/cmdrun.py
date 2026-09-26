@@ -2113,7 +2113,13 @@ if __name__ == "__main__":
         stdout_fd = 1  # captured before close(): a closed TextIOWrapper's .fileno() raises too.
         try:
             sys.stdout.close()
-        except BrokenPipeError:
+        except (BrokenPipeError, OSError):
+            # win32: a closed/invalid stdout raises OSError(EINVAL) here, not
+            # BrokenPipeError (measured on the windows CI cell, winproof run 8) --
+            # the idiom's purpose (silence the interpreter-shutdown flush) is served
+            # equally by swallowing both. On POSIX the swallow is theoretical: the
+            # normal path writes via os.write (bypassing sys.stdout's buffer), so the
+            # shutdown flush has nothing to flush and close() does not raise at all.
             pass
         finally:
             try:
