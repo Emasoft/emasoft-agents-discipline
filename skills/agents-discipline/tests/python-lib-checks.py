@@ -724,7 +724,7 @@ _js_dig = subprocess.run(
     ["node", "-e",
      'import(process.argv[1]).then(m=>process.stdout.write(String(m.gateDefinitionDigest('
      '{check:"echo \\ud800",expect:"ok",cwd:null}))))',
-     os.path.join(ROOT, "scripts", "lib", "gates.mjs")],
+     pathlib.Path(os.path.join(ROOT, "scripts", "lib", "gates.mjs")).as_uri()],
     capture_output=True, text=True, encoding="utf-8", timeout=60)
 # CAUGHT, because the failure mode being checked is a RAISE, not a wrong value. Letting it
 # propagate ends the run: measured against the pre-fix code, the suite exited 1 with
@@ -747,7 +747,7 @@ _js_na = subprocess.run(
     ["node", "-e",
      'import(process.argv[1]).then(m=>process.stdout.write(String(m.gateDefinitionDigest('
      '{check:"echo na\\u00efve",expect:"ok",cwd:null}))))',
-     os.path.join(ROOT, "scripts", "lib", "gates.mjs")],
+     pathlib.Path(os.path.join(ROOT, "scripts", "lib", "gates.mjs")).as_uri()],
     capture_output=True, text=True, encoding="utf-8", timeout=60)
 report(_js_na.stdout.strip() == _g.gate_definition_digest(
            {"check": "echo na" + chr(0xEF) + "ve", "expect": "ok", "cwd": None}),
@@ -762,7 +762,7 @@ _js_cwd = subprocess.run(
     ["node", "-e",
      'import(process.argv[1]).then(m=>process.stdout.write(String(m.gateDefinitionDigest('
      '{check:"echo ok",expect:"ok",cwd:"/tmp/\\udcff"}))))',
-     os.path.join(ROOT, "scripts", "lib", "gates.mjs")],
+     pathlib.Path(os.path.join(ROOT, "scripts", "lib", "gates.mjs")).as_uri()],
     capture_output=True, text=True, encoding="utf-8", timeout=60)
 try:
     _py_cwd = _g.gate_definition_digest(
@@ -975,6 +975,31 @@ for _fixture in _fixtures:
                 (f"{a} | {b}" for a, b in zip(_js.stdout.splitlines(), _py.stdout.splitlines())
                  if a != b), "output length differs")
     report(_ok, f"parse_gates: {_fixture.name} — whole parse result identical", _detail)
+
+# --- win32 CRLF probe: WHERE does the crlf-duplicates divergence enter? ----------------------
+# Runs 12/13: js answered eol="\r\n", py answered eol="\n" on windows-latest ONLY (macOS both
+# agree). The fixture is committed CRLF (blob verified), text attr unset; both drivers read
+# the same working-tree file and carry identical eol detection ("\r\n" in source). Mechanism
+# unresolvable from macOS — these probe rows capture the raw facts per runtime so the next
+# run discriminates: identical bytes+hash means the divergence is in-process (a code path);
+# different bytes would itself be the finding. Info-only rows: they report what the probe
+# saw, no assertion, so a green suite cannot hide a changed premise.
+_CRLF_FIX = os.path.join(TESTS, "fixtures", "port", "crlf-duplicates.md")
+import hashlib  # noqa: E402
+with open(_CRLF_FIX, "rb") as _crlf_handle:
+    _crlf_bytes = _crlf_handle.read()
+report(True, "probe(py): crlf fixture bytes",
+       hashlib.sha256(_crlf_bytes).hexdigest()[:12] +
+       f" size={len(_crlf_bytes)} head={_crlf_bytes[:40]!r} crlf_pairs={_crlf_bytes.count(chr(13).encode() + chr(10).encode())}")
+_js_crlf = subprocess.run(["node", "-e",
+     'const fs=require("fs");const b=fs.readFileSync(process.argv[1]);'
+     'const c=require("crypto");'
+     'console.log(JSON.stringify({hash:c.createHash("sha256").update(b).digest("hex").slice(0,12),'
+     'size:b.length,head:b.slice(0,40).toString("utf8"),crlf:(b.toString("utf8").match(/\\r\\n/g)||[]).length}));',
+     _CRLF_FIX],
+    capture_output=True, text=True, encoding="utf-8", timeout=30)
+report(_js_crlf.returncode == 0, "probe(js): crlf fixture bytes",
+       (_js_crlf.stdout or _js_crlf.stderr).strip()[-200:])
 completed.append("parse_gates")
 
 # --- short write: gates.write_all -----------------------------------------------------------
