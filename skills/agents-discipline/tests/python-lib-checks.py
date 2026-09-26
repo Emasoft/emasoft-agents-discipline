@@ -520,7 +520,17 @@ try:
         # runtime's two mode rows must agree with EACH OTHER ("mode applies to every
         # created dir" -- the mkdirs docstring's guarantee). The absolute value is artifact
         # on win32; divergence WITHIN one runtime would be a port defect.
-        report(_mode_js[0][1] == _mode_js[1][1] and _mode_py[0][1] == _mode_py[1][1],
+        # ROUND 5 GUARD: index only after the exact-2 check -- a py-driver failure leaves
+        # _mode_py == [], and unconditional indexing would IndexError-truncate the run
+        # (the failure mode the truncation guard exists to prevent) instead of FAILing
+        # this row while the suite's other rows stay visible. len==2 on both sides also
+        # re-covers silent-row-drift (a future "mode X" row must not be silently ignored).
+        # Sensitivity note, honest scope: win32 st_mode is synthetic, so the leaf-only-mode
+        # defect class the POSIX row guards is UNOBSERVABLE here; this row can catch only
+        # within-runtime attribute-backed inconsistency -- a cheap tripwire, the POSIX
+        # branch carries the real coverage.
+        report(len(_mode_js) == 2 and len(_mode_py) == 2
+               and _mode_js[0][1] == _mode_js[1][1] and _mode_py[0][1] == _mode_py[1][1],
                "gates_helpers: each runtime's mode rows agree internally (mode&0o777 artifact excluded)",
                f"js={_mode_js} py={_mode_py}")
     report(all(_by_name.get(k) == [] for k in
