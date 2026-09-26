@@ -514,13 +514,14 @@ try:
                "gates_helpers: 0700 reaches the INTERMEDIATE state dir, not just the leaf",
                f"{_by_name.get('mode .agents-discipline')}/{_by_name.get('mode scope dir')}")
     else:
-        # Same-runtime contract check: on win32 the ABSOLUTE mode is artifact (see the
-        # cross-runtime exclusion above), but each runtime's two mode rows must still agree
-        # with each other — that is the "mode applies to every created dir" contract the
-        # mkdirs docstring exists for. Divergent read-back within one runtime WOULD be a
-        # port defect; identical artifacts are not.
-        report(_mode_js == _mode_py and len(_mode_js) == 2,
-               "gates_helpers: win32 mode rows agree across runtimes (mode&0o777 artifact excluded)",
+        # WITHIN-runtime contract check (review round 4: `_mode_js == _mode_py` here was
+        # itself a cross-runtime comparison -- exactly the artifact the split removes, and
+        # run 11 would have red identically to run 10). The contract is per-runtime: each
+        # runtime's two mode rows must agree with EACH OTHER ("mode applies to every
+        # created dir" -- the mkdirs docstring's guarantee). The absolute value is artifact
+        # on win32; divergence WITHIN one runtime would be a port defect.
+        report(_mode_js[0][1] == _mode_js[1][1] and _mode_py[0][1] == _mode_py[1][1],
+               "gates_helpers: each runtime's mode rows agree internally (mode&0o777 artifact excluded)",
                f"js={_mode_js} py={_mode_py}")
     report(all(_by_name.get(k) == [] for k in
                ("lock dir after release", "lock dir after timeout", "lock dir after throw")),
