@@ -30,13 +30,6 @@ const JS_SRC = resolve(root, "scripts/lib/cmdrun.mjs");
 // elsewhere) -- the same contract the other suites honor.
 const PYBIN = process.env.PYTHON || "python3";
 const WIN = process.platform === "win32";
-// Known, localized JS-twin defects being fixed separately (coordinator notice,
-// 2026-09-26): rows tagged with one of these print DIVERGE and do NOT count as
-// FAIL. Remove a tag once the fix lands and the row turns PASS.
-const KNOWN_BIN = "js-twin real-binary spawn returns 124/time-out instead of the real status (also truncates redirection targets on its timed-out runs)";
-const KNOWN_SEMI = "js-twin tokenizer does not refuse a lone ';' mid-word";
-const KNOWN_127MSG = "js-twin 127 answer carries an empty stderr where python says 'command not found: ...'";
-
 
 let passed = 0;
 let failed = 0;
@@ -71,8 +64,8 @@ function ask(bin, script, req, timeoutMs) {
   }
 }
 
-// Build a request from a row and run it through BOTH transports.
-function runBoth(row, cwd) {
+// Build a request from a row (timeout honored by ask's caller).
+function buildReq(row, cwd) {
   const req = {
     command: row.cmd,
     cwd,
@@ -83,6 +76,12 @@ function runBoth(row, cwd) {
   if (row.env !== undefined) req.env = row.env;
   if (row.omitCmd) delete req.command;
   if (row.override) Object.assign(req, row.override);
+  return req;
+}
+
+// Build a request from a row and run it through BOTH transports.
+function runBoth(row, cwd) {
+  const req = buildReq(row, cwd);
   const spawnTimeoutMs = Math.ceil((req.timeout_ms ?? 8000) / 1000 + 20) * 1000;
   return {
     py: ask(PYBIN, PY_SRC, req, spawnTimeoutMs),
@@ -90,13 +89,29 @@ function runBoth(row, cwd) {
   };
 }
 
-// A seq row runs several commands in the same cwd; both transports walk the
-// same sequence and only the FINAL answers are compared.
+// A seq row replays a command sequence; each transport walks the sequence in ITS OWN
+// directory (same per-step commands) and only the FINAL answers are compared. One shared
+// directory for both transports would cross-contaminate the file state -- py's step N
+// would observe js's step N-1 writes (e.g. ">> appends" saw "more" twice).
 function runRow(row, cwd) {
   if (!row.seq) return runBoth(row, cwd);
+  const pyDir = join(cwd, "py");
+  const jsDir = join(cwd, "js");
+  mkdirSync(pyDir);
+  mkdirSync(jsDir);
+  // The runner already ran setup() in the parent; a seq row's commands run in the
+  // per-transport dirs, so seed files (e.g. `cat < in.txt`) must exist there too.
+  if (row.setup) {
+    row.setup(pyDir);
+    row.setup(jsDir);
+  }
   let out = { py: undefined, js: undefined };
   for (const cmd of row.seq) {
-    out = runBoth({ ...row, cmd }, cwd);
+    const spawnTimeoutMs = Math.ceil((row.timeout_ms ?? 8000) / 1000 + 20) * 1000;
+    out = {
+      py: ask(PYBIN, PY_SRC, buildReq({ ...row, cmd }, pyDir), spawnTimeoutMs),
+      js: ask(process.execPath, JS_SRC, buildReq({ ...row, cmd }, jsDir), spawnTimeoutMs),
+    };
     if (out.py.__crash__ || out.js.__crash__) break;
   }
   return out;
@@ -105,14 +120,14 @@ function runRow(row, cwd) {
 // ---- rows ---------------------------------------------------------------
 
 const rows = [];
-function refusal(name, cmd, known) {
-  rows.push({ name: `refuse: ${name}`, cmd, wantRefused: true, knownDiverge: known });
+function refusal(name, cmd) {
+  rows.push({ name: `refuse: ${name}`, cmd, wantRefused: true });
 }
 
 // 1. Refusal table -- every named construct.
 refusal("||", "echo a || echo b");
-refusal(";", "echo a; echo b", KNOWN_SEMI);
-refusal("; mid-word (redirection target becomes ';'-suffixed)", "true 2>/dev/null; cat x", KNOWN_SEMI);
+refusal(";", "echo a; echo b");
+refusal("; mid-word (redirection target becomes ';'-suffixed)", "true 2>/dev/null; cat x");
 refusal("&", "echo a & echo b");
 refusal("|&", "echo a |& cat");
 refusal("&>", "echo a &> out.txt");
@@ -169,8 +184,8 @@ rows.push(
   { name: "var: undefined var expands to empty", cmd: "echo [$UNDEF_PX]", wantStdout: "[]\n" },
   { name: "var: no word-splitting or globbing of the result", cmd: "echo $SPACED", env: { SPACED: "x y *" }, wantStdout: "x y *\n" },
   { name: "var: no word-splitting or globbing of the result (${})", cmd: "echo ${SPACED}", env: { SPACED: "z w" }, wantStdout: "z w\n" },
-  { name: "var: prefix assignment reaches the child env", cmd: `VAR=hi ${PYBIN} -c "import os;print(os.environ.get('VAR',''))"`, env: withPath(), wantStdout: "hi\n", timeout_ms: 2000, knownDiverge: KNOWN_BIN },
-  { name: "var: prefix assignment does not leak to the next command", cmd: `VAR=first ${PYBIN} -c "import os;print(os.environ.get('VAR',''))" && ${PYBIN} -c "import os;print(os.environ.get('VAR','second'))"`, env: withPath(), wantStdout: "first\nsecond\n", timeout_ms: 3000, knownDiverge: KNOWN_BIN },
+  { name: "var: prefix assignment reaches the child env", cmd: `VAR=hi ${PYBIN} -c "import os;print(os.environ.get('VAR',''))"`, env: withPath(), wantStdout: "hi\n", timeout_ms: 2000 },
+  { name: "var: prefix assignment does not leak to the next command", cmd: `VAR=first ${PYBIN} -c "import os;print(os.environ.get('VAR',''))" && ${PYBIN} -c "import os;print(os.environ.get('VAR','second'))"`, env: withPath(), wantStdout: "first\nsecond\n", timeout_ms: 3000 },
 );
 
 // 4. Pipelines + pipefail. Builtins are refused as pipeline stages, so the
@@ -181,10 +196,10 @@ if (WIN) {
   skip("pipe: pipefail with real binaries", "needs /usr/bin/{true,false} (win32)");
 } else {
   rows.push(
-    { name: "pipe: 3-stage pipeline", cmd: "printf 'x\\ny\\n' | grep y | wc -l", wantStatus: 0, cmp: ["stdout"], timeout_ms: 2000, knownDiverge: KNOWN_BIN },
-    { name: "pipe: pipefail - failing early stage fails the pipeline", cmd: `${F} | ${T}`, wantStatus: 1, knownDiverge: KNOWN_BIN },
-    { name: "pipe: pipefail - last non-zero stage wins", cmd: `${T} | ${F} | ${T}`, wantStatus: 1, knownDiverge: KNOWN_BIN },
-    { name: "pipe: pipefail - all-zero pipeline is zero", cmd: `${T} | ${T} | ${T}`, wantStatus: 0, knownDiverge: KNOWN_BIN },
+    { name: "pipe: 3-stage pipeline", cmd: "printf 'x\\ny\\n' | grep y | wc -l", wantStatus: 0, cmp: ["stdout"], timeout_ms: 2000 },
+    { name: "pipe: pipefail - failing early stage fails the pipeline", cmd: `${F} | ${T}`, wantStatus: 1 },
+    { name: "pipe: pipefail - last non-zero stage wins", cmd: `${T} | ${F} | ${T}`, wantStatus: 1 },
+    { name: "pipe: pipefail - all-zero pipeline is zero", cmd: `${T} | ${T} | ${T}`, wantStatus: 0 },
   );
 }
 
@@ -199,11 +214,11 @@ rows.push(
 // < input, /dev/null. The stderr writer makes the dup direction unambiguous.
 const STDERR_E = PYC("import sys;sys.stderr.write('E')");
 rows.push(
-  { name: "redir: > writes the file", seq: ["echo hi > out.txt", "cat out.txt"], wantStdout: "hi\n", knownDiverge: KNOWN_BIN },
-  { name: "redir: >> appends", seq: ["echo hi > out.txt", "echo more >> out.txt", "cat out.txt"], wantStdout: "hi\nmore\n", knownDiverge: KNOWN_BIN },
-  { name: "redir: < input redirection", setup: (d) => writeFileSync(join(d, "in.txt"), "seed\n"), seq: ["cat < in.txt"], wantStdout: "seed\n", knownDiverge: KNOWN_BIN },
-  { name: "redir: 2>&1 >f - duped write lands in captured stdout", cmd: `${STDERR_E} 2>&1 > o1.txt`, wantStatus: 0, wantStdout: "E", timeout_ms: 2000, knownDiverge: KNOWN_BIN },
-  { name: "redir: >f 2>&1 - the file receives stderr", seq: [`${STDERR_E} > o2.txt 2>&1`, "test -s o2.txt"], wantStatus: 0, timeout_ms: 2000, knownDiverge: KNOWN_BIN },
+  { name: "redir: > writes the file", seq: ["echo hi > out.txt", "cat out.txt"], wantStdout: "hi\n" },
+  { name: "redir: >> appends", seq: ["echo hi > out.txt", "echo more >> out.txt", "cat out.txt"], wantStdout: "hi\nmore\n" },
+  { name: "redir: < input redirection", setup: (d) => writeFileSync(join(d, "in.txt"), "seed\n"), seq: ["cat < in.txt"], wantStdout: "seed\n" },
+  { name: "redir: 2>&1 >f - duped write lands in captured stdout", cmd: `${STDERR_E} 2>&1 > o1.txt`, wantStatus: 0, wantStdout: "E", timeout_ms: 2000 },
+  { name: "redir: >f 2>&1 - the file receives stderr", seq: [`${STDERR_E} > o2.txt 2>&1`, "test -s o2.txt"], wantStatus: 0, timeout_ms: 2000 },
   { name: "redir: /dev/null swallows output", cmd: "echo hi > /dev/null", wantStatus: 0 },
 );
 
@@ -221,7 +236,7 @@ rows.push(
   { name: "builtin: [ -d ] on a directory", setup: subFiles, cmd: "[ -d sub ]", wantStatus: 0 },
   { name: "builtin: test -s true on a non-empty file", setup: subFiles, cmd: "test -s file.txt", wantStatus: 0 },
   { name: "builtin: test -s false on an empty file", setup: subFiles, cmd: "test -s empty.txt", wantStatus: 1 },
-  { name: "builtin: cd persists across &&", setup: subFiles, cmd: "cd sub && pwd", wantStatus: 0, wantStdoutEnds: "/sub", knownDiverge: KNOWN_BIN },
+  { name: "builtin: cd persists across &&", setup: subFiles, cmd: "cd sub && pwd", wantStatus: 0, cmp: ["stdout"] },
   { name: "builtin: cd into a missing directory fails with status 1", cmd: "cd no-such-dir-zz-px", wantStatus: 1, cmp: ["stderr"] },
 );
 
@@ -233,15 +248,15 @@ if (WIN) {
   skip("exit: 128+N signal death", "POSIX signal semantics (win32)");
 } else {
   rows.push(
-    { name: "exit: 127 unknown command", cmd: "bogus-command-zz-px-123", wantStatus: 127, cmp: ["stderr"], knownDiverge: KNOWN_127MSG },
+    { name: "exit: 127 unknown command", cmd: "bogus-command-zz-px-123", wantStatus: 127, cmp: ["stderr"] },
     { name: "exit: 126 non-executable existing file", setup: (d) => { writeFileSync(join(d, "noexec.txt"), "x"); chmodSync(join(d, "noexec.txt"), 0o000); }, cmd: "./noexec.txt", wantStatus: 126 },
-    { name: "exit: 137 = 128+9 on SIGKILL", cmd: PYC("import os,signal;os.kill(os.getpid(),signal.SIGKILL)"), wantStatus: 137, timeout_ms: 2000, knownDiverge: KNOWN_BIN },
+    { name: "exit: 137 = 128+9 on SIGKILL", cmd: PYC("import os,signal;os.kill(os.getpid(),signal.SIGKILL)"), wantStatus: 137, timeout_ms: 2000 },
   );
 }
 
 // 9. output_limit truncation: big stdout, small cap -> truncated, status 0.
 rows.push(
-  { name: "limit: oversized stdout is truncated with status 0", cmd: PYC("print('x'*200000)"), output_limit: 1000, wantStatus: 0, wantTruncated: true, timeout_ms: 2000, knownDiverge: KNOWN_BIN },
+  { name: "limit: oversized stdout is truncated with status 0", cmd: PYC("print('x'*200000)"), output_limit: 1000, wantStatus: 0, wantTruncated: true, timeout_ms: 2000 },
 );
 
 // 10. bad_request: type/range validation, both transports must refuse with
@@ -261,8 +276,8 @@ rows.push(
 // request env; the sanctioned path is a prefix assignment.
 rows.push(
   { name: "scrub: non-reserved request env is visible to expansion", cmd: "echo $OK", env: { CMDRUN_X: "1", OK: "1" }, wantStdout: "1\n" },
-  { name: "scrub: CMDRUN_* is scrubbed from the child env", cmd: ENV_PRINTER, env: withPath({ CMDRUN_X: "1" }), wantStdout: "<missing>\n", timeout_ms: 2000, knownDiverge: KNOWN_BIN },
-  { name: "scrub: prefix assignment passes CMDRUN_* to the child", cmd: `CMDRUN_X=2 ${ENV_PRINTER}`, env: withPath(), wantStdout: "2\n", timeout_ms: 2000, knownDiverge: KNOWN_BIN },
+  { name: "scrub: CMDRUN_* is scrubbed from the child env", cmd: ENV_PRINTER, env: withPath({ CMDRUN_X: "1" }), wantStdout: "<missing>\n", timeout_ms: 2000 },
+  { name: "scrub: prefix assignment passes CMDRUN_* to the child", cmd: `CMDRUN_X=2 ${ENV_PRINTER}`, env: withPath(), wantStdout: "2\n", timeout_ms: 2000 },
 );
 
 // 12. Glob: sorted match, bracket classes (incl. [a-] and [!...]), literal
@@ -287,20 +302,14 @@ rows.push(
 // 13. Short timeout: timed_out on both, and the two runtimes must AGREE on
 // status (equal, and one of the spec-allowed values).
 rows.push(
-  { name: "timeout: short deadline kills the sleep", cmd: PYC("import time;time.sleep(2)"), timeout_ms: 300, statusIn: [null, 124], wantTimedOut: true, knownDiverge: KNOWN_BIN },
+  { name: "timeout: short deadline kills the sleep", cmd: PYC("import time;time.sleep(2)"), timeout_ms: 300, statusIn: [null, 124], wantTimedOut: true },
 );
 
 // ---- runner -------------------------------------------------------------
 
 let skipped = 0;
-let diverged = 0;
 function fail(row, detail) {
-  if (row.knownDiverge) {
-    console.log(`DIVERGE  ${row.name}  [known: ${row.knownDiverge}]  ${detail}`);
-    diverged++;
-  } else {
-    report(false, row.name, detail);
-  }
+  report(false, row.name, detail);
 }
 
 function checkRow(row, py, js) {
@@ -383,11 +392,7 @@ for (const row of rows) {
   }
 }
 
-console.log(`\n${passed} PASS / ${failed} FAIL / ${diverged} DIVERGE (known-defect baseline) / ${skipped} SKIP`);
+console.log(`\n${passed} PASS / ${failed} FAIL / ${skipped} SKIP`);
 console.log(`python oracle: ${PYBIN} ${PY_SRC}`);
 console.log(`js twin:       node ${JS_SRC}`);
-if (diverged > 0) {
-  console.log(`DIVERGE rows are tagged knownDiverge in this file (JS-twin defects being fixed separately);`);
-  console.log(`they turn PASS automatically when the fix lands -- then REMOVE the stale tags.`);
-}
 process.exitCode = failed > 0 ? 1 : 0;

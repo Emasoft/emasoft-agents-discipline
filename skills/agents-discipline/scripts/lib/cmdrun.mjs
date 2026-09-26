@@ -252,7 +252,10 @@ function tokenize(command, env) {
     const started = i;
     while (i < n) {
       const c2 = command[i];
-      if (c2 === " " || c2 === "\t" || OP_CHARS.has(c2) || c2 === "(" || c2 === ")" || c2 === "\n" || c2 === "\r") {
+      // ';' breaks the word like '(' / ')' do (py oracle line-for-line): the outer loop
+      // then refuses it as "lone ';'" -- without this, `echo a; echo b` folds ';' into
+      // the word "a;" and executes.
+      if (c2 === " " || c2 === "\t" || OP_CHARS.has(c2) || c2 === "(" || c2 === ")" || c2 === ";" || c2 === "\n" || c2 === "\r") {
         break;
       }
       if (c2 === "#") {
@@ -1155,6 +1158,14 @@ function writeFdval(v, data) {
   // pipe fdvals are written by their owning stream objects instead.
   v = fdvalResolveDup(v);
   if (v.kind === "worker") {
+    if (v.fd === 2 && _gateStderrSink !== null) {
+      // Gate mode: the supervisor spawned the worker with stderr=ignore, so a write to the
+      // worker's own fd 2 (a pre-spawn failure like exit-127/126, which py's gate mode
+      // captures because its fds[2] IS a capture pipe) would be lost. Route it into the
+      // capture sink instead -- same answer the py oracle produces.
+      _gateStderrSink(data);
+      return;
+    }
     try {
       fs.writeSync(v.fd, data);
     } catch {
@@ -1170,6 +1181,11 @@ function writeFdval(v, data) {
     }
   }
 }
+
+// Non-null only inside the worker's gate-mode execution: captures writes that the py oracle
+// would land in its capture pipe (pre-spawn 127/126 messages), for the final answer's stderr.
+let _gateStderrSink = null;
+let _gateStderrTruncated = false;
 
 function closeQuiet(fds) {
   for (const fd of fds) {
@@ -1583,12 +1599,23 @@ export async function runPipelineGate(pipeline, fds, ctx, sinks) {
       argv = [resolved, ...args.slice(1)];
     }
     const isLast = idx === n - 1;
-    // stdio: stdin = prevStdout read end if piped, else localFds[0]; stdout = a fresh
-    // pipe if another stage follows, else localFds[1]; stderr = capture pipe (gate) or
-    // localFds[2] (ledger).
     const stdinSpec = prevStdout !== null ? prevStdout.readFd : spawnStdioFor(localFds[0], "stdin");
-    const stdoutSpec = !isLast ? "pipe" : spawnStdioFor(localFds[1], "stdout");
-    const stderrSpec = sinks !== null ? "pipe" : spawnStdioFor(localFds[2], "stderr");
+    // Gate-mode capture. A slot is captured only while it still points at the WORKER's own
+    // stdio (a WorkerFd); a slot redirected to a file keeps its fd. A DUP of a captured
+    // slot (`2>&1`) is captured TOO, and py routes it to the SOURCE slot's sink: its
+    // `local[2] = local[1]` makes stderr share the stdout capture pipe's write end, so
+    // `cmd 2>&1` lands in answer.stdout (probed both runtimes). Node cannot share one pipe
+    // across two stdio entries, so the dup gets its own pipe and its OutputSink joins the
+    // SOURCE slot's sink -- same bytes, same answer. NB: the dup source slot is the
+    // WorkerFd's .fd, NOT the slot being spec'd (slot 2 dup of WorkerFd(1): keying on v.fd
+    // === 2 sent the bytes to raw fd 1 -- the answer pipe -- in front of the JSON line).
+    const resolvedOf = (slot) => fdvalResolveDup(localFds[slot]);
+    const isWorkerStdio = (slot) => resolvedOf(slot).kind === "worker";
+    // A dup source that is itself captured-and-redirected-away later (">f 2>&1" order
+    // flips it) resolves to a PathFd, so kind checks alone keep the bash ordering right.
+    const stderrDupSrc = resolvedOf(2).kind === "worker" ? resolvedOf(2).fd : null; // 1 => dup of stdout slot, 2 => own
+    const stdoutSpec = !isLast ? "pipe" : (sinks !== null && isWorkerStdio(1) ? "pipe" : spawnStdioFor(localFds[1], "stdout"));
+    const stderrSpec = sinks !== null && isWorkerStdio(2) ? "pipe" : spawnStdioFor(localFds[2], "stderr");
     let proc;
     try {
       proc = spawn(argv[0], argv.slice(1), {
@@ -1625,10 +1652,11 @@ export async function runPipelineGate(pipeline, fds, ctx, sinks) {
       }
       prevStdout = null;
     }
-    // Wire capture streams.
+    // Wire capture streams. A stderr that is a dup of the STDOUT capture slot routes its
+    // bytes into sinks.out (py: both fds are the same capture pipe's write end).
     if (sinks !== null && proc.stderr) {
       const s = new OutputSink(proc.stderr, ctx.outputLimit);
-      sinks.err.push(s);
+      (stderrDupSrc === 1 ? sinks.out : sinks.err).push(s);
     }
     if (isLast && sinks !== null && proc.stdout) {
       const s = new OutputSink(proc.stdout, ctx.outputLimit);
@@ -1860,8 +1888,16 @@ async function runSingleStageCapture(cmd, fds, ctx, sinks) {
   } else {
     argv = [resolved, ...args.slice(1)];
   }
-  const stdoutSpec = spawnStdioFor(localFds[1], "stdout") === "pipe" ? "pipe" : spawnStdioFor(localFds[1], "capture-stdout");
-  const stderrSpec = spawnStdioFor(localFds[2], "stderr") === "pipe" ? "pipe" : spawnStdioFor(localFds[2], "capture-stderr");
+  // Same slot-based capture rule as runPipelineGate: capture a worker-stdio slot (or a dup
+  // of one); a slot redirected to a file keeps its fd. A stderr dup of the STDOUT capture
+  // slot routes its bytes into sinks.out (py: `2>&1` shares the stdout capture pipe's
+  // write end, so `cmd 2>&1` lands in answer.stdout). Never key on the fdval's fd --
+  // the dup source slot is WorkerFd(1).fd, and v.fd===2 there misroutes to the answer pipe.
+  const resolvedOf = (slot) => fdvalResolveDup(localFds[slot]);
+  const isWorkerStdio = (slot) => resolvedOf(slot).kind === "worker";
+  const stderrDupSrc = isWorkerStdio(2) ? resolvedOf(2).fd : null; // 1 => dup of stdout slot, 2 => own
+  const stdoutSpec = isWorkerStdio(1) ? "pipe" : spawnStdioFor(localFds[1], "stdout");
+  const stderrSpec = isWorkerStdio(2) ? "pipe" : spawnStdioFor(localFds[2], "stderr");
   let proc;
   try {
     proc = spawn(argv[0], argv.slice(1), {
@@ -1888,7 +1924,7 @@ async function runSingleStageCapture(cmd, fds, ctx, sinks) {
   }
   if (proc.stderr) {
     const s = new OutputSink(proc.stderr, ctx.outputLimit);
-    sinks.err.push(s);
+    (stderrDupSrc === 1 ? sinks.out : sinks.err).push(s);
   }
   const status = await waitChildAsync(proc);
   return status;
@@ -2072,6 +2108,14 @@ async function workerMain() {
   }
 
   const sinks = mode === "gate" ? { out: [], err: [] } : null;
+  // Gate mode: pre-spawn failures (127/126) write to WorkerFd(2), the worker's own stderr,
+  // which the supervisor set to "ignore" -- capture those bytes here so the answer's stderr
+  // matches the py oracle (whose fds[2] in gate mode IS a capture pipe).
+  const manualErrChunks = [];
+  _gateStderrSink = mode === "gate" ? (b) => {
+    if (manualErrChunks.length < 2048) manualErrChunks.push(Buffer.from(b));
+    else _gateStderrTruncated = true;
+  } : null;
   const devnullR = fs.openSync(DEVNULL, "r");
   const devnullW = mode !== "gate" ? fs.openSync(DEVNULL, "w") : null;
   const fds = { 0: new PathFd(devnullR), 1: mode === "gate" ? new WorkerFd(1) : new PathFd(devnullW), 2: mode === "gate" ? new WorkerFd(2) : new PathFd(devnullW) };
@@ -2083,6 +2127,7 @@ async function workerMain() {
     // F8: internal_error must be set on every genuinely internal fault -- the flag a
     // caller keys on to tell "the command legitimately exited 1" from "the interpreter
     // itself broke".
+    _gateStderrSink = null;
     closeQuiet([devnullR, devnullW]);
     emitAndDie({
       status: 1, timed_out: false, internal_error: true,
@@ -2092,6 +2137,7 @@ async function workerMain() {
   }
   if (status === null || status === undefined) {
     // F2 safety net: never let a gap silently forge a `status: null` with no reason.
+    _gateStderrSink = null;
     closeQuiet([devnullR, devnullW]);
     emitAndDie({
       status: null, timed_out: false, internal_error: true,
@@ -2100,6 +2146,7 @@ async function workerMain() {
     return;
   }
   closeQuiet([devnullR, devnullW]);
+  _gateStderrSink = null;
   const answer = { status, timed_out: false, tree_kill: treeKill };
   if (mode === "gate") {
     // F3: ONE combined 100ms bound for both readers together -- the writers are already
@@ -2108,10 +2155,11 @@ async function workerMain() {
     // be reading -- write the answer and exit instead.
     drainSinks(sinks, 100).then(() => {
       const outBuf = Buffer.concat(sinks.out.map((s) => s.snapshot()));
-      const errBuf = Buffer.concat(sinks.err.map((s) => s.snapshot()));
+      const pipeErr = Buffer.concat(sinks.err.map((s) => s.snapshot()));
+      const manualErr = Buffer.concat(manualErrChunks);
       answer.stdout = outBuf.toString("utf8");
-      answer.stderr = errBuf.toString("utf8");
-      answer.truncated = sinks.out.some((s) => s.truncated) || sinks.err.some((s) => s.truncated);
+      answer.stderr = (pipeErr.length ? [pipeErr, manualErr] : [manualErr]).map((b) => b.toString("utf8")).join("");
+      answer.truncated = _gateStderrTruncated || sinks.out.some((s) => s.truncated) || sinks.err.some((s) => s.truncated);
       emitAndDie(answer);
     });
     return;
@@ -2425,7 +2473,12 @@ async function runPosixOrWindowsSupervisor(req, signalled) {
   const line = Buffer.from(`${JSON.stringify(req)}\n`, "utf8");
   try {
     proc.stdin.write(line);
-    proc.stdin.end();
+    // NEVER end()/close() the death pipe's write end here: the worker's death watch
+    // treats stdin EOF as "the supervisor died" and SIGKILLs the whole process group.
+    // The Python oracle (cmdrun.py _run_posix_supervisor) also writes+flushes and holds
+    // the write end open for its whole life -- the kernel closes it for us when the
+    // supervisor process exits, which is the death signal itself. end()ing it made every
+    // real-binary spawn die instantly (rc=1) and the supervisor answer 124.
   } catch {
     /* the read loop below will notice the worker died and report it */
   }
