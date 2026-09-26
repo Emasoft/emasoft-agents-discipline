@@ -519,7 +519,16 @@ def read_stable_regular_file(path, max_bytes=None, label="file", root=None):
     try:
         opened = node_call("fstat", os.fstat, fd)
         named = node_call("lstat", os.lstat, target)
+        _assert_regular_single_link(named, target, label, limit)
         _assert_regular_single_link(opened, target, label, limit)
+        # The NAMED entry is asserted for TYPE, not only identity: on a symlinked path,
+        # lstat sees the LINK itself (S_IFLNK) and must refuse exactly as the oracle's
+        # statCurrentNamedFile does — the opened fd cannot see link-ness (the open already
+        # resolved through). Assert-order is observable cross-runtime: asserting only the
+        # fd produced 'changed before it was read' where the oracle refuses with
+        # 'unchanged regular single-link' (winproof runs 12-15, resolved by the
+        # symlink-shape probes: py's lstat DOES report S_IFLNK on win32, so the platforms
+        # agree at the primitive and the divergence was this missing assert).
         # The descriptor and the NAME can already be different files: something may have
         # swapped the path between the open and now. Comparing the fd's identity against the
         # path's is what makes "the file I checked" and "the file at this path" one claim.
