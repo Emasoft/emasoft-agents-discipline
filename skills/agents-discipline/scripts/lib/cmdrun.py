@@ -255,9 +255,14 @@ def tokenize(command, env):
         # prefix candidate; refuse anything but a single digit 0-2 instead of silently letting
         # "3" become a stray argument and fd 3 misparse as fd 1 (the old bug).
         fd = None
-        if c.isdigit():
+        # ASCII digits ONLY, never str.isdigit(): isdigit() also matches every Unicode
+        # decimal (Arabic-Indic ٠-٩, superscripts...), so py accepted a non-ASCII fd
+        # prefix and REFUSED with "out of range 0-2" where the JS twin (c >= "0" &&
+        # c <= "9") folded the run into the word -- same bytes, opposite verdicts
+        # (measured: '٢1>out.txt echo hi' refused here, executed there).
+        if c in "0123456789":
             j = i
-            while j < n and command[j].isdigit():
+            while j < n and command[j] in "0123456789":
                 j += 1
             if j < n and command[j] in "<>":
                 numstr = command[i:j]
@@ -274,9 +279,9 @@ def tokenize(command, env):
             i = j
             tok = _classify_op(opstr, fd)
             if tok.kind == "REDIR_DUP":
-                if i < n and command[i].isdigit():
+                if i < n and command[i] in "0123456789":
                     j = i
-                    while j < n and command[j].isdigit():
+                    while j < n and command[j] in "0123456789":
                         j += 1
                     numstr = command[i:j]
                     if len(numstr) != 1 or numstr not in "012":
@@ -362,7 +367,11 @@ def tokenize(command, env):
                 # (`C:\Users\foo`), not an escape -- silently treating `\U` as "literal U" (the
                 # POSIX behaviour above) would mangle the path into "C:Usersfoo". Refuse instead
                 # of guessing, and tell the caller the fix: quote the whole path.
-                if IS_WINDOWS and (nxt.isalpha() or nxt.isdigit()):
+                # ASCII-only letter/digit set, matching the JS twin's /[A-Za-z0-9]/:
+                # isalpha()/isdigit() are Unicode-wide, so py would refuse `\Ä` on
+                # Windows where the JS twin treats it as a plain escape.
+                if IS_WINDOWS and (nxt in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                                   or nxt in "0123456789"):
                     raise Refused("unquoted backslash before a letter/digit -- quote Windows paths")
                 word.add(nxt, True)
                 i += 2
@@ -912,7 +921,11 @@ def _dev_fd_alias(path):
         return _DEV_FD_ALIASES[path]
     if path.startswith("/dev/fd/"):
         rest = path[len("/dev/fd/") :]
-        if rest.isdigit() and int(rest) in (0, 1, 2):
+        # ASCII digits only: isdigit() would accept a non-ASCII decimal here (e.g.
+        # '/dev/fd/٣'), then int() it to 3 -- silently refusing what both runtimes
+        # must refuse in the same words. JS twin: /^\d+$/ + a 0-2 membership check
+        # on ASCII strings.
+        if rest != "" and all(c in "0123456789" for c in rest) and int(rest) in (0, 1, 2):
             return int(rest)
         raise OSError(f"refusing to open '{path}': only /dev/fd/0-2 are supported")
     return None
@@ -1136,7 +1149,18 @@ def _run_builtin(cmd, name, fds, ctx):
     args = []
     for w in cmd.args:
         args.extend(expand_word_glob(w, ctx.cwd_box.value))
-    local_fds, opened = _apply_redirs(cmd, fds, ctx)
+    # L5: a builtin's redirection failure gets the same shell-like message and status 1
+    # as an external command's. This catch used to live only in `_run_command_inner`
+    # (which builtins bypass), so the OSError escaped to run_command's generic handler
+    # and printed the raw `cmdrun: [Errno 1] ...` str(OSError) shape -- a message the
+    # JS twin cannot reproduce (its error text is node's, not Python's) and an
+    # inconsistency with the L5 shape one function over.
+    try:
+        local_fds, opened = _apply_redirs(cmd, fds, ctx)
+    except OSError as exc:
+        target = expand_word_no_glob(cmd.redirs[0].target) if cmd.redirs else "?"
+        _write_fd(fds[2], f"cmdrun: {target}: {exc.strerror or exc}\n".encode())
+        return 1
     try:
         if name == "cd":
             target = args[0]

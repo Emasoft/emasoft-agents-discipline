@@ -1727,7 +1727,20 @@ function runBuiltinCapture(cmd, name, fds, ctx, sinks) {
   // sinks.err, honoring its own redirections (a redirected slot bypasses capture).
   const args = [];
   for (const w of cmd.args) args.push(...expandWordGlob(w, ctx.cwdBox.value));
-  const [localFds, opened] = applyRedirs(cmd, fds, ctx);
+  // L5 parity: a failing redirection is a shell-like status 1 with a `cmdrun:` message,
+  // NOT an internal_error. The py oracle's run_command wraps _run_builtin in a generic
+  // handler that converts the throw; this gate path previously had no equivalent, so the
+  // Refused-free exception escaped to workerMain and set internal_error:true -- the flag
+  // callers key on to distinguish an interpreter bug from a legitimate failure.
+  let localFds;
+  let opened;
+  try {
+    [localFds, opened] = applyRedirs(cmd, fds, ctx);
+  } catch (exc) {
+    const target = cmd.redirs.length ? expandWordNoGlob(cmd.redirs[0].target) : "?";
+    writeFdval(fds[2], Buffer.from(`cmdrun: ${target}: ${osErrorStr(exc)}\n`));
+    return 1;
+  }
   try {
     const outRedirected = cmd.redirs.some((r) => r.fd === 1);
     const errRedirected = cmd.redirs.some((r) => r.fd === 2);
@@ -1780,29 +1793,48 @@ function runBuiltinCapture(cmd, name, fds, ctx, sinks) {
       if (name === "[") {
         if (!a.length || a[a.length - 1] !== "]") {
           captureWrite(2, Buffer.from("test: missing ']'\n"));
-          closeQuiet(opened);
-          return 2;
+          status = 2;
+        } else {
+          a = a.slice(0, -1);
+          if (a.length !== 2 || !["-e", "-f", "-d", "-s"].includes(a[0])) {
+            captureWrite(2, Buffer.from("test: usage: test -e|-f|-d|-s PATH\n"));
+            status = 2;
+          } else {
+            const [flag, target] = a;
+            const p = path.isAbsolute(target) ? target : path.join(ctx.cwdBox.value, target);
+            let ok = false;
+            try {
+              const st = fs.statSync(p);
+              if (flag === "-e") ok = true;
+              else if (flag === "-f") ok = st.isFile();
+              else if (flag === "-d") ok = st.isDirectory();
+              else ok = st.isFile() && st.size > 0;
+            } catch {
+              ok = false;
+            }
+            status = ok ? 0 : 1;
+          }
         }
-        a = a.slice(0, -1);
+      } else {
+        if (a.length !== 2 || !["-e", "-f", "-d", "-s"].includes(a[0])) {
+          captureWrite(2, Buffer.from("test: usage: test -e|-f|-d|-s PATH\n"));
+          status = 2;
+        } else {
+          const [flag, target] = a;
+          const p = path.isAbsolute(target) ? target : path.join(ctx.cwdBox.value, target);
+          let ok = false;
+          try {
+            const st = fs.statSync(p);
+            if (flag === "-e") ok = true;
+            else if (flag === "-f") ok = st.isFile();
+            else if (flag === "-d") ok = st.isDirectory();
+            else ok = st.isFile() && st.size > 0;
+          } catch {
+            ok = false;
+          }
+          status = ok ? 0 : 1;
+        }
       }
-      if (a.length !== 2 || !["-e", "-f", "-d", "-s"].includes(a[0])) {
-        captureWrite(2, Buffer.from("test: usage: test -e|-f|-d|-s PATH\n"));
-        closeQuiet(opened);
-        return 2;
-      }
-      const [flag, target] = a;
-      const p = path.isAbsolute(target) ? target : path.join(ctx.cwdBox.value, target);
-      let ok = false;
-      try {
-        const st = fs.statSync(p);
-        if (flag === "-e") ok = true;
-        else if (flag === "-f") ok = st.isFile();
-        else if (flag === "-d") ok = st.isDirectory();
-        else ok = st.isFile() && st.size > 0;
-      } catch {
-        ok = false;
-      }
-      status = ok ? 0 : 1;
     } else {
       throw new Error(`unreachable builtin ${name}`);
     }
@@ -1990,18 +2022,35 @@ function workerStderrFdval() {
 // Worker (`cmdrun.mjs --exec`): one process group, no deadline, no fork.
 // ---------------------------------------------------------------------------
 
+function writeFully(fd, payload) {
+  // fs.writeSync on a pipe can throw EAGAIN when the pipe is full -- libuv sets the fd
+  // nonblocking, and a large answer (captured stdout up to the output_limit) far exceeds
+  // the pipe buffer. Swallowing EAGAIN here silently DROPPED the unwritten tail, so the
+  // supervisor read a truncated line and answered internal_error on a fully successful
+  // command (measured: 200KB answer). Block and retry; EOF/EPIPE still throws to the
+  // caller's catch.
+  let written = 0;
+  while (written < payload.length) {
+    try {
+      written += fs.writeSync(fd, payload, written, payload.length - written);
+    } catch (exc) {
+      if (exc && (exc.code === "EAGAIN" || exc.code === "EWOULDBLOCK")) {
+        sleepSyncMs(2);
+        continue;
+      }
+      throw exc;
+    }
+  }
+}
+
 function emitAndDie(answer) {
   // The worker's one and only exit path, on every branch: write the answer (one JSON line,
   // flushed to the OS), then kill our OWN process group (we are its leader) before
-  // exiting. fs.writeSync so every byte is CONFIRMED delivered before the SIGKILL hits
+  // exiting. writeFully so every byte is CONFIRMED delivered before the SIGKILL hits
   // this very process -- any byte sitting in a userland buffer would never reach the
   // reader (a partial JSON line the supervisor could mistake for "no valid answer").
   try {
-    const payload = Buffer.from(`${JSON.stringify(answer)}\n`, "utf8");
-    let written = 0;
-    while (written < payload.length) {
-      written += fs.writeSync(1, payload, written, payload.length - written);
-    }
+    writeFully(1, Buffer.from(`${JSON.stringify(answer)}\n`, "utf8"));
   } catch {
     /* EPIPE etc: swallow */
   }
@@ -2210,8 +2259,11 @@ function readlineSyncOneLine() {
       n = fs.readSync(0, tmp, 0, tmp.length);
     } catch (exc) {
       if (exc && (exc.code === "EAGAIN" || exc.code === "EWOULDBLOCK")) {
-        // The supervisor's pipe is blocking; EAGAIN is unexpected -- treat as EOF.
-        break;
+        // EAGAIN is NOT EOF: with libuv's nonblocking stdin, a supervisor writing a
+        // large request races our read and EAGAIN fires mid-stream. Same fix as
+        // readAllStdin above -- block briefly and retry; true EOF is n === 0.
+        sleepSyncMs(2);
+        continue;
       }
       throw exc;
     }
@@ -2399,17 +2451,31 @@ function waitForWorkerAnswer(proc, deadline, signalled) {
   // coexist with polling, so read via a nonblocking tap: spawn gave us proc.stdout as a
   // socket -- buffer its data.
   return new Promise((resolve) => {
+    let chunks = [];
     let line = null;
     let readErr = false;
+    // Accumulate EVERY chunk: a pipe delivers data in kernel-buffer-sized pieces (16KB
+    // observed on macOS), and a captured stdout between ~16KB and the output_limit makes
+    // the one-line JSON answer span several chunks. Taking only the first chunk made the
+    // supervisor answer `invalid JSON` (internal_error-adjacent) on a worker that fully
+    // succeeded -- the py oracle's readline() never has this bug. Join on end/close.
     const onData = (chunk) => {
-      if (line === null) line = chunk;
+      chunks.push(chunk);
+    };
+    const onEnd = () => {
+      if (chunks !== null) line = Buffer.concat(chunks);
+      chunks = null;
     };
     proc.stdout.on("data", onData);
+    proc.stdout.on("end", onEnd);
+    proc.stdout.on("close", onEnd);
     proc.stdout.on("error", () => {
       readErr = true;
     });
     const finish = (answer, timedOut, sig) => {
       proc.stdout.removeListener("data", onData);
+      proc.stdout.removeListener("end", onEnd);
+      proc.stdout.removeListener("close", onEnd);
       resolve([answer, timedOut, sig]);
     };
     const tick = () => {
@@ -2422,8 +2488,11 @@ function waitForWorkerAnswer(proc, deadline, signalled) {
         return;
       }
       if (line !== null) {
+        // The answer is ONE line possibly followed by nothing; split off the first line.
+        const nl = line.indexOf(0x0a);
+        const first = nl === -1 ? line : line.subarray(0, nl);
         try {
-          const answer = JSON.parse(line.toString("utf8"));
+          const answer = JSON.parse(first.toString("utf8"));
           if (validateWorkerAnswer(answer)) {
             finish(answer, false, null);
             return;
@@ -2437,7 +2506,18 @@ function waitForWorkerAnswer(proc, deadline, signalled) {
           return;
         }
       }
-      if (readErr || (proc.exitCode !== null && proc.stdout.readableEnded)) {
+      // The stream ended (or errored) without a line: if all chunks arrived, judge what
+      // we have; otherwise the worker died mid-answer.
+      if (chunks === null || readErr || (proc.exitCode !== null && proc.stdout.readableEnded)) {
+        if (chunks === null && line !== null) {
+          try {
+            const answer = JSON.parse(line.toString("utf8"));
+            if (validateWorkerAnswer(answer)) {
+              finish(answer, false, null);
+              return;
+            }
+          } catch { /* fall through to no-answer */ }
+        }
         finish(null, false, null);
         return;
       }
@@ -2532,11 +2612,10 @@ function fileURLToSelf() {
 
 function printAnswer(answer) {
   try {
-    const payload = Buffer.from(`${JSON.stringify(answer)}\n`, "utf8");
-    let written = 0;
-    while (written < payload.length) {
-      written += fs.writeSync(1, payload, written, payload.length - written);
-    }
+    // writeFully, not a bare writeSync loop: a large answer overflows the stdout pipe's
+    // buffer and writeSync throws EAGAIN on the nonblocking fd -- swallowing it (the old
+    // catch) silently dropped the tail of the answer. Same fix as emitAndDie.
+    writeFully(1, Buffer.from(`${JSON.stringify(answer)}\n`, "utf8"));
   } catch {
     /* L2: the caller closed our stdout before we answered -- exit quietly. */
   }
@@ -2549,7 +2628,6 @@ function installSignalWatch() {
   // it installed through the whole cleanup phase -- a signal landing in the startup/
   // validation/spawn window must answer 143 exactly like one landing during the wait.
   for (const name of ["SIGTERM", "SIGHUP", "SIGINT"]) {
-    if (typeof process !== "undefined" && name in process.listeners ? false : false) continue;
     try {
       const h = () => {
         if (SIGNAL_WATCH.got === null) SIGNAL_WATCH.got = name;
@@ -2574,6 +2652,19 @@ function closeSignalWatch() {
   SIGNAL_WATCH.handlers = [];
 }
 
+const SLEEP_SAB = new Int32Array(new SharedArrayBuffer(4));
+// Block the thread for `ms` without burning CPU. Atomics.wait works on the main thread
+// here only when the host does not forbid it; SharedArrayBuffer + Atomics are always
+// available in Node. (Atomics.wait on the main thread IS allowed in Node, unlike browsers.)
+function sleepSyncMs(ms) {
+  try {
+    Atomics.wait(SLEEP_SAB, 0, 0, ms);
+  } catch {
+    /* fall back to a busy yield -- correctness of the EAGAIN retry does not depend on
+       the wait being efficient, only on it yielding the CPU */
+  }
+}
+
 function readAllStdin() {
   // Read stdin to EOF (cap MAX_REQUEST_BYTES + 1), synchronously.
   const chunks = [];
@@ -2585,9 +2676,15 @@ function readAllStdin() {
       n = fs.readSync(0, tmp, 0, tmp.length);
     } catch (exc) {
       if (exc && (exc.code === "EAGAIN" || exc.code === "EWOULDBLOCK")) {
-        // Node may have set stdin nonblocking before handing control to us (only when
-        // stdin was a TTY we did not ask for) -- treat as EOF rather than spin.
-        break;
+        // EAGAIN is NOT EOF: it means the nonblocking fd has nothing RIGHT NOW. Once
+        // libuv initializes stdin (any stdio setup that ran before us), the fd is
+        // nonblocking even for a pipe, so a large request written by a caller racing
+        // our reads hits EAGAIN mid-stream. Treating it as EOF truncated the request
+        // to the first 80KB of a 200KB write -- measured -- and answered bad_request
+        // "invalid JSON" on a well-formed request (the py oracle blocks and reads it
+        // all). Retry after a bounded block; true EOF is n === 0, never an error.
+        sleepSyncMs(2);
+        continue;
       }
       throw exc;
     }

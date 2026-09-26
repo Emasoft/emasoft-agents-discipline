@@ -238,6 +238,19 @@ rows.push(
   { name: "builtin: test -s false on an empty file", setup: subFiles, cmd: "test -s empty.txt", wantStatus: 1 },
   { name: "builtin: cd persists across &&", setup: subFiles, cmd: "cd sub && pwd", wantStatus: 0, wantStdoutEnds: "sub\n" },
   { name: "builtin: cd into a missing directory fails with status 1", cmd: "cd no-such-dir-zz-px", wantStatus: 1, cmp: ["stderr"] },
+  // F-capture: the test/[ usage rows once lost their stderr entirely in the JS twin --
+  // runBuiltinCapture's early `return 2` skipped the BufferSink push that flushes
+  // errChunks into the answer. These rows pin the messages.
+  { name: "builtin: test usage error reaches stderr", cmd: "test x", wantStatus: 2, wantStderr: "test: usage: test -e|-f|-d|-s PATH\n" },
+  { name: "builtin: [ missing bracket reaches stderr", cmd: "[ x", wantStatus: 2, wantStderr: "test: missing ']'\n" },
+  // F-redirfail: a builtin redirection failure is status 1 + `cmdrun:` message on BOTH
+  // twins (the JS gate path once answered internal_error, the py builtin path printed
+  // the raw [Errno N] shape).
+  { name: "builtin: redirection failure is status 1 with cmdrun: message", cmd: "echo hi > /dev/full", wantStatus: 1, wantStderrStarts: "cmdrun: " },
+  // F-digit: a Unicode decimal (Arabic-Indic 2) before '>' is NOT an fd prefix on either
+  // twin -- it folds into the word and the command is not found (127 on both). py once
+  // refused it as "fd out of range" because str.isdigit() matches Unicode decimals.
+  { name: "token: Unicode digit before > folds into the word", cmd: "٢1>o-fd.txt echo hi", wantStatus: 127, cmp: ["stderr"] },
 );
 
 // 8. Exit codes: 127 missing command, 126 non-executable file, 128+N signal.
@@ -257,6 +270,15 @@ if (WIN) {
 // 9. output_limit truncation: big stdout, small cap -> truncated, status 0.
 rows.push(
   { name: "limit: oversized stdout is truncated with status 0", cmd: PYC("print('x'*200000)"), output_limit: 1000, wantStatus: 0, wantTruncated: true, timeout_ms: 2000 },
+  // F-large: a captured stdout LARGER than one pipe chunk (16KB observed) once broke
+  // the JS supervisor twice -- its answer reader took only the first 'data' chunk, and
+  // emitAndDie's write loop swallowed EAGAIN and dropped the answer tail. Both fixed;
+  // these rows hold the fixes (the old limit row's 1000-byte cap never left one chunk).
+  { name: "limit: 20KB answer crosses one pipe chunk", cmd: PYC("print('x'*20000)"), output_limit: 4_000_000, wantStatus: 0, wantStdoutEnds: "x\n", timeout_ms: 8000 },
+  { name: "limit: 300KB answer spans many chunks", cmd: PYC("import sys; sys.stdout.write('x'*300000 + chr(10))"), output_limit: 4_000_000, wantStatus: 0, wantStdoutEnds: "x\n", timeout_ms: 8000 },
+  // F-eagain: a request larger than one pipe chunk (env value bloats it past 16KB)
+  // used to be truncated by the JS transports' EAGAIN-as-EOF stdin reads.
+  { name: "limit: 200KB request (bloated env) survives", cmd: "echo $OK", env: withPath({ OK: "x".repeat(200_000), BIGPAD: "y".repeat(100_000) }), wantStdoutEnds: "x\n", timeout_ms: 8000 },
 );
 
 // 10. bad_request: type/range validation, both transports must refuse with
@@ -371,6 +393,14 @@ function checkRow(row, py, js) {
   }
   if (row.wantStdoutEnds !== undefined && !(py.stdout || "").endsWith(row.wantStdoutEnds)) {
     fail(row, `stdout=${fmt(py.stdout)} expected to end with ${fmt(row.wantStdoutEnds)}`);
+    return;
+  }
+  if (row.wantStderr !== undefined && py.stderr !== row.wantStderr) {
+    fail(row, `stderr=${fmt(py.stderr)} expected ${fmt(row.wantStderr)}`);
+    return;
+  }
+  if (row.wantStderrStarts !== undefined && !(py.stderr || "").startsWith(row.wantStderrStarts)) {
+    fail(row, `stderr=${fmt(py.stderr)} expected to start with ${fmt(row.wantStderrStarts)}`);
     return;
   }
   report(true, row.name);
