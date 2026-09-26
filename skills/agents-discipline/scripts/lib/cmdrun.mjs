@@ -1184,6 +1184,9 @@ function writeFdval(v, data) {
 
 // Non-null only inside the worker's gate-mode execution: captures writes that the py oracle
 // would land in its capture pipe (pre-spawn 127/126 messages), for the final answer's stderr.
+// One process = one role, so this is safe ONLY if workerMain runs at most once per process and
+// every exit path resets it to null — a stale hook would silently corrupt a second answer's
+// stderr and truncated accounting instead of crashing.
 let _gateStderrSink = null;
 let _gateStderrTruncated = false;
 

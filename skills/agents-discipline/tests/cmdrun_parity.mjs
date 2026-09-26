@@ -236,7 +236,7 @@ rows.push(
   { name: "builtin: [ -d ] on a directory", setup: subFiles, cmd: "[ -d sub ]", wantStatus: 0 },
   { name: "builtin: test -s true on a non-empty file", setup: subFiles, cmd: "test -s file.txt", wantStatus: 0 },
   { name: "builtin: test -s false on an empty file", setup: subFiles, cmd: "test -s empty.txt", wantStatus: 1 },
-  { name: "builtin: cd persists across &&", setup: subFiles, cmd: "cd sub && pwd", wantStatus: 0, cmp: ["stdout"] },
+  { name: "builtin: cd persists across &&", setup: subFiles, cmd: "cd sub && pwd", wantStatus: 0, wantStdoutEnds: "sub\n" },
   { name: "builtin: cd into a missing directory fails with status 1", cmd: "cd no-such-dir-zz-px", wantStatus: 1, cmp: ["stderr"] },
 );
 
