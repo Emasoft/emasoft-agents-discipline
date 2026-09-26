@@ -59,6 +59,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB = os.path.join(ROOT, "scripts", "lib")
 WIN32 = sys.platform == "win32"
 
+# The py drivers print ensure_ascii=False JSON (emoji, Cyrillic); a child's stdout pipe is
+# opened with ITS interpreter's locale codec (cp1252 on win32 runners), so the child can fail
+# to ENCODE before the parent ever decodes. Parent-side encoding="utf-8" fixes only the
+# decode direction; this env var fixes the encode direction at the spawn. (winproof run 10.)
+_child_env = dict(os.environ, PYTHONIOENCODING="utf-8")
+
 failed = 0
 
 # A crash anywhere below (a subprocess timeout, a KeyError, a failed assert inside a driver)
@@ -108,7 +114,9 @@ def both(js_argv, py_argv, stdin=None, js_dir=LIB):
     out = []
     for argv in (["node", os.path.join(js_dir, js_argv[0])] + js_argv[1:],
                  [sys.executable, os.path.join(LIB, py_argv[0])] + py_argv[1:]):
-        p = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=30)
+        env = None if argv[0] == "node" else _child_env
+        p = subprocess.run(argv, input=stdin, capture_output=True, text=True, encoding="utf-8",
+                           timeout=30, env=env)
         out.append((p.returncode, p.stdout.strip(), p.stderr.strip()))
     return out
 
@@ -267,7 +275,8 @@ else:
     for argv in (["node", os.path.join(LIB, "check-supervisor.mjs"), "/bin/bash", "echo hi; sleep 30"],
                  [sys.executable, os.path.join(LIB, "check_supervisor.py"), "/bin/bash", "echo hi; sleep 30"]):
         proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                stdin=subprocess.DEVNULL, start_new_session=True)
+                                stdin=subprocess.DEVNULL, start_new_session=True,
+                                env=None if argv[0] == "node" else _child_env)
         try:
             time.sleep(2.0)   # generous: echo + one read1/write/flush is sub-100ms even loaded
             try:
@@ -365,7 +374,7 @@ js_out = subprocess.run(
      f'import {{ windowsTaskkillPath }} from '
      f'{json.dumps(pathlib.Path(os.path.join(LIB, "process-tree.mjs")).as_uri())};'
      f'console.log(JSON.stringify({json.dumps(ENVS)}.map((e) => windowsTaskkillPath(e) ?? null)));'],
-    capture_output=True, text=True, timeout=30,
+    capture_output=True, text=True, encoding="utf-8", timeout=30,
 )
 sys.path.insert(0, LIB)
 import process_tree  # noqa: E402  # type: ignore[import-not-found]
@@ -396,7 +405,7 @@ if WIN32:
 else:
     py_kill = process_tree._self_check()
     js_kill_out = subprocess.run(["node", os.path.join(TESTS, "process-tree-drive.mjs")],
-                                 capture_output=True, text=True, timeout=60)
+                                 capture_output=True, text=True, encoding="utf-8", timeout=60)
     if js_kill_out.returncode != 0:
         report(False, "process_tree: oracle could not be driven", js_kill_out.stderr.strip()[:160])
     else:
@@ -418,7 +427,7 @@ else:
     py_fb = process_tree._self_check(fail_group_kill=True)
     js_fb_out = subprocess.run(
         ["node", os.path.join(TESTS, "process-tree-drive.mjs"), "--fail-group-kill"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", timeout=60)
     if js_fb_out.returncode != 0:
         report(False, "process_tree: oracle fallback could not be driven",
                js_fb_out.stderr.strip()[:160])
@@ -456,17 +465,33 @@ _js_root = tempfile.mkdtemp()
 _py_root = tempfile.mkdtemp()
 try:
     _js = subprocess.run(["node", os.path.join(TESTS, "gates-helpers-drive.mjs"), _js_root],
-                         capture_output=True, text=True, timeout=60)
+                         capture_output=True, text=True, encoding="utf-8", timeout=60)
     _py = subprocess.run([sys.executable, os.path.join(TESTS, "gates_helpers_drive.py"), _py_root],
-                         capture_output=True, text=True, timeout=60)
+                         capture_output=True, text=True, encoding="utf-8", timeout=60,
+                         env=_child_env)
     report(_js.returncode == 0, "gates_helpers: oracle driver ran", _js.stderr.strip()[-300:])
     report(_py.returncode == 0, "gates_helpers: port driver ran", _py.stderr.strip()[-300:])
     _js_rows = json.loads(_js.stdout) if _js.returncode == 0 else []
     _py_rows = json.loads(_py.stdout) if _py.returncode == 0 else []
-    _first = next((f"{a} != {b}" for a, b in zip(_js_rows, _py_rows) if a != b), "")
-    report(_js_rows == _py_rows and bool(_js_rows),
+    # The mode rows are PLATFORM-DIVERGENT BY NATURE, not by defect: `mode & 0o777` read-back
+    # does not honour POSIX permission bits on win32 (st_mode there reflects attributes, not
+    # the 0o700 the oracle and port both ASK mkdir to apply), so a cross-runtime comparison
+    # would pin an unexplained artifact (run 10: 666 vs 777). On POSIX the rows must agree
+    # AND be 700 (the cross-runtime guarantee the row exists for); on win32 the assertion is
+    # same-runtime only — each runtime's two mode rows agree with each other, proving the
+    # every-created-directory contract without misreading win32 st_mode.
+    _mode_js = [_by for _by in _js_rows if _by[0].startswith("mode ")]
+    _mode_py = [_by for _by in _py_rows if _by[0].startswith("mode ")]
+    if not WIN32:
+        _rows_js = _js_rows
+        _rows_py = _py_rows
+    else:
+        _rows_js = [_by for _by in _js_rows if not _by[0].startswith("mode ")]
+        _rows_py = [_by for _by in _py_rows if not _by[0].startswith("mode ")]
+    _first = next((f"{a} != {b}" for a, b in zip(_rows_js, _rows_py) if a != b), "")
+    report(_rows_js == _rows_py and bool(_rows_js) and len(_rows_js) == len(_rows_py),
            "gates_helpers: port matches the oracle on every effect",
-           _first[:400] or f"lengths {len(_js_rows)}/{len(_py_rows)}")
+           _first[:400] or f"lengths {len(_rows_js)}/{len(_rows_py)}")
 
     # VACUITY CONTROLS. "The two agree" is trivially true of a comparison that cannot see
     # anything, and this suite has already shipped three harnesses that agreed about nothing
@@ -483,10 +508,20 @@ try:
     report("ok" in (_by_name.get("read contained with root") or {}),
            "gates_helpers: a contained file still reads with a root (positive control)",
            str(_by_name.get("read contained with root"))[:200])
-    report(_by_name.get("mode .agents-discipline") == "700"
-           and _by_name.get("mode scope dir") == "700",
-           "gates_helpers: 0700 reaches the INTERMEDIATE state dir, not just the leaf",
-           f"{_by_name.get('mode .agents-discipline')}/{_by_name.get('mode scope dir')}")
+    if not WIN32:
+        report(_by_name.get("mode .agents-discipline") == "700"
+               and _by_name.get("mode scope dir") == "700",
+               "gates_helpers: 0700 reaches the INTERMEDIATE state dir, not just the leaf",
+               f"{_by_name.get('mode .agents-discipline')}/{_by_name.get('mode scope dir')}")
+    else:
+        # Same-runtime contract check: on win32 the ABSOLUTE mode is artifact (see the
+        # cross-runtime exclusion above), but each runtime's two mode rows must still agree
+        # with each other — that is the "mode applies to every created dir" contract the
+        # mkdirs docstring exists for. Divergent read-back within one runtime WOULD be a
+        # port defect; identical artifacts are not.
+        report(_mode_js == _mode_py and len(_mode_js) == 2,
+               "gates_helpers: win32 mode rows agree across runtimes (mode&0o777 artifact excluded)",
+               f"js={_mode_js} py={_mode_py}")
     report(all(_by_name.get(k) == [] for k in
                ("lock dir after release", "lock dir after timeout", "lock dir after throw")),
            "gates_helpers: the lock is released on success, timeout AND throw")
@@ -499,9 +534,10 @@ completed.append("gates_helpers")
 # Object key enumeration order, localeCompare collation, and Date.parse. The oracle here is the
 # JS ENGINE, not a gates.mjs function, so the driver calls the built-ins raw.
 _js = subprocess.run(["node", os.path.join(TESTS, "jsapi-drive.mjs")],
-                     capture_output=True, text=True, timeout=60)
+                     capture_output=True, text=True, encoding="utf-8", timeout=60)
 _py = subprocess.run([sys.executable, os.path.join(TESTS, "jsapi_drive.py")],
-                     capture_output=True, text=True, timeout=60)
+                     capture_output=True, text=True, encoding="utf-8", timeout=60,
+                     env=_child_env)
 report(_js.returncode == 0 and _py.returncode == 0, "jsapi: both drivers ran",
        (_js.stderr + _py.stderr).strip()[-300:])
 _jr = json.loads(_js.stdout) if _js.returncode == 0 else []
@@ -678,7 +714,7 @@ _js_dig = subprocess.run(
      'import(process.argv[1]).then(m=>process.stdout.write(String(m.gateDefinitionDigest('
      '{check:"echo \\ud800",expect:"ok",cwd:null}))))',
      os.path.join(ROOT, "scripts", "lib", "gates.mjs")],
-    capture_output=True, text=True, timeout=60)
+    capture_output=True, text=True, encoding="utf-8", timeout=60)
 # CAUGHT, because the failure mode being checked is a RAISE, not a wrong value. Letting it
 # propagate ends the run: measured against the pre-fix code, the suite exited 1 with
 # "TRUNCATED -- these sections never completed: parse_gates, short_write, enoent_probe,
@@ -701,7 +737,7 @@ _js_na = subprocess.run(
      'import(process.argv[1]).then(m=>process.stdout.write(String(m.gateDefinitionDigest('
      '{check:"echo na\\u00efve",expect:"ok",cwd:null}))))',
      os.path.join(ROOT, "scripts", "lib", "gates.mjs")],
-    capture_output=True, text=True, timeout=60)
+    capture_output=True, text=True, encoding="utf-8", timeout=60)
 report(_js_na.stdout.strip() == _g.gate_definition_digest(
            {"check": "echo na" + chr(0xEF) + "ve", "expect": "ok", "cwd": None}),
        "digest: ordinary non-ASCII still agrees (the escape did not over-fire)",
@@ -716,7 +752,7 @@ _js_cwd = subprocess.run(
      'import(process.argv[1]).then(m=>process.stdout.write(String(m.gateDefinitionDigest('
      '{check:"echo ok",expect:"ok",cwd:"/tmp/\\udcff"}))))',
      os.path.join(ROOT, "scripts", "lib", "gates.mjs")],
-    capture_output=True, text=True, timeout=60)
+    capture_output=True, text=True, encoding="utf-8", timeout=60)
 try:
     _py_cwd = _g.gate_definition_digest(
         {"check": "echo ok", "expect": "ok", "cwd": "/tmp/" + chr(0xDCFF)})
@@ -735,7 +771,7 @@ _lock_payload = {"token": "t", "pid": 1, "target": "/tmp/" + chr(0xDCFF), "at": 
 _js_lock = subprocess.run(
     ["node", "-e",
      'process.stdout.write(JSON.stringify({token:"t",pid:1,target:"/tmp/\\udcff",at:1}))'],
-    capture_output=True, text=True, timeout=60)
+    capture_output=True, text=True, encoding="utf-8", timeout=60)
 try:
     _py_lock = _g._js_json_text(_lock_payload)
     _py_lock_bytes = len(_py_lock.encode("utf-8"))
@@ -766,7 +802,7 @@ report(len(_fixtures) == 9, "parse_gates: the fixture corpus is present", f"{len
 _oracle_docs = {}
 for _fixture in _fixtures:
     _probe = subprocess.run(["node", os.path.join(TESTS, "parse-gates-drive.mjs"), str(_fixture)],
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, encoding="utf-8", timeout=30)
     if _probe.returncode == 0:
         _oracle_docs[_fixture.name] = json.loads(_probe.stdout)
 _all = list(_oracle_docs.values())
@@ -910,9 +946,10 @@ for _name, _present in sorted(_classes.items()):
     report(_present, f"parse_gates: the corpus still contains {_name}")
 for _fixture in _fixtures:
     _js = subprocess.run(["node", os.path.join(TESTS, "parse-gates-drive.mjs"), str(_fixture)],
-                         capture_output=True, text=True, timeout=30)
+                         capture_output=True, text=True, encoding="utf-8", timeout=30)
     _py = subprocess.run([sys.executable, os.path.join(TESTS, "parse_gates_drive.py"),
-                          str(_fixture)], capture_output=True, text=True, timeout=30)
+                          str(_fixture)], capture_output=True, text=True, encoding="utf-8",
+                         timeout=30, env=_child_env)
     _ok = _js.returncode == 0 and _py.returncode == 0 and _js.stdout == _py.stdout
     _detail = ""
     if not _ok:
@@ -939,7 +976,8 @@ completed.append("parse_gates")
 # exists to prevent would also destroy the report that names it.
 try:
     _sw = subprocess.run([sys.executable, os.path.join(TESTS, "short_write_probe.py")],
-                         capture_output=True, text=True, timeout=30)
+                         capture_output=True, text=True, encoding="utf-8", timeout=30,
+                         env=_child_env)
     _sw_stdout, _sw_rc, _sw_stderr = _sw.stdout, _sw.returncode, _sw.stderr
 except subprocess.TimeoutExpired:
     _sw_stdout, _sw_rc, _sw_stderr = "", 1, "probe HUNG (an unbounded write loop?)"
@@ -1129,14 +1167,16 @@ try:
     with open(_present, "w", encoding="utf-8") as _h:
         _h.write('{"schema":1}\n')
     _ep = subprocess.run([sys.executable, "-c", _probe_src, _present],
-                         capture_output=True, text=True, timeout=30)
+                         capture_output=True, text=True, encoding="utf-8", timeout=30,
+                         env=_child_env)
     _out = _ep.stdout.strip()
     report("appeared after its open" in _out and _out.startswith("NONE|"),
            "enoent_probe: a name that reappears is an ERROR, not an absence", _out[:160])
     # DISCRIMINATING CONTROL: a genuinely missing file must still raise a real ENOENT, or the
     # arm above would just be swallowing every ENOENT and dispatch could never see an absence.
     _ep2 = subprocess.run([sys.executable, "-c", _probe_src, os.path.join(_ep_dir, "gone.json")],
-                          capture_output=True, text=True, timeout=30)
+                          capture_output=True, text=True, encoding="utf-8", timeout=30,
+                          env=_child_env)
     _out2 = _ep2.stdout.strip()
     report(_out2.startswith("ENOENT|"),
            "enoent_probe: a genuinely missing file still raises ENOENT (control)", _out2[:160])
@@ -1150,9 +1190,10 @@ completed.append("enoent_probe")
 _dj, _dp = tempfile.mkdtemp(), tempfile.mkdtemp()
 try:
     _o = subprocess.run(["node", os.path.join(TESTS, "dispatch-drive.mjs"), _dj],
-                        capture_output=True, text=True, timeout=60)
+                        capture_output=True, text=True, encoding="utf-8", timeout=60)
     _p = subprocess.run([sys.executable, os.path.join(TESTS, "dispatch_drive.py"), _dp],
-                        capture_output=True, text=True, timeout=60)
+                        capture_output=True, text=True, encoding="utf-8", timeout=60,
+                        env=_child_env)
     report(_o.returncode == 0 and _p.returncode == 0, "dispatch: both drivers ran",
            (_o.stderr + _p.stderr).strip()[-250:])
     _or = json.loads(_o.stdout) if _o.returncode == 0 else []
@@ -1202,7 +1243,7 @@ dispatch.datetime.datetime = datetime.datetime
 print(f"{len(calls)}|{stamp}|{calls}")
 """ % (LIB,)
     _cp = subprocess.run([sys.executable, "-c", _clock_probe], capture_output=True, text=True,
-                         timeout=30)
+                         encoding="utf-8", timeout=30, env=_child_env)
     _count = _cp.stdout.split("|")[0] if _cp.stdout else ""
     report(_count == "1", "dispatch: _iso_now reads the clock EXACTLY once (not shape — count)",
            (_cp.stdout.strip() or _cp.stderr.strip())[:200])

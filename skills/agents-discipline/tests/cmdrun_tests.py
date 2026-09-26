@@ -56,6 +56,12 @@ def run(command, cwd, mode="gate", timeout_ms=5000, output_limit=1_000_000, env=
         input=json.dumps(req),
         capture_output=True,
         text=True,
+        # Same contract as python-lib-checks: decode the child explicitly instead of
+        # inheriting the runner's locale codec (cp1252 on win32), which cannot read UTF-8
+        # answers; and pin the child's own stdout/stdin codec so the CHILD can always
+        # encode (winproof run 10's two failure directions, latent here).
+        encoding="utf-8",
+        env=dict(os.environ, PYTHONIOENCODING="utf-8"),
         timeout=(timeout_ms / 1000.0) + 5,
     )
     if p.returncode != 0 and not p.stdout.strip():
@@ -71,7 +77,8 @@ def run_raw(raw_text, timeout=8):
     well-typed dict, which cannot express "timeout_ms is the bool True" or "top-level JSON is
     `123`", exactly the shapes those findings are about."""
     p = subprocess.run(
-        [sys.executable, CMDRUN], input=raw_text, capture_output=True, text=True, timeout=timeout
+        [sys.executable, CMDRUN], input=raw_text, capture_output=True, text=True,
+        encoding="utf-8", env=dict(os.environ, PYTHONIOENCODING="utf-8"), timeout=timeout
     )
     lines = [line for line in p.stdout.splitlines() if line.strip()]
     if len(lines) != 1:
@@ -877,6 +884,14 @@ def _run_tests(d):
         # owed at that file's next touch.
         report(_leak_answer.get("status") == 124 and _leak_answer.get("timed_out") is True,
                "forced cleanup exhaustion on win32: zero budget answers 124 (job teardown can confirm empty at the first query)", _leak_answer)
+        # Shape-absence control (run-10 fields confirmed: {"status":124,"timed_out":true,
+        # "tree_kill":"job"}): without it a supervisor regression that answers BARE 124 at
+        # deadline without querying the job would produce the identical fields and this row
+        # would false-PASS while the confirmed-empty guarantee silently vanished. 124 alone
+        # does NOT prove the job was verified empty -- the absence of the leaked-shape is
+        # the only caller-visible distinction.
+        report("leaked" not in _leak_answer and "pgid" not in _leak_answer,
+               "win32 zero-budget answer carries NO leaked-shape (124 must mean confirmed-empty, not unknown)", _leak_answer)
     report("tree_kill" in _leak_answer, "F8: the zero-budget answer carries tree_kill", _leak_answer)
     # The kill WAS sent even though confirmation timed out -- sweep any straggler by pid.
     # (The `ps` sweep is a no-op on Windows -- ps_snapshot_text returns "" -- and os.kill of a
