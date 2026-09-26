@@ -336,9 +336,15 @@ def _run_tests(d):
 
     # -- Supported: redirections, dup, and ORDER (2>&1 >f vs >f 2>&1) ----------------------------
     # A program that writes to stderr ONLY, so which fd it ends up aliasing is unambiguous.
+    # Redirection targets use RELATIVE names (cwd is d): an os.path.join(d, ...) absolute path
+    # carries backslashes on win32, and the interpreter's deliberate Windows-path rule
+    # ("unquoted backslash before a letter/digit -- quote Windows paths", cmdrun.py tokenize)
+    # then REFUSES the command -- out1.txt was never created and this test's own open()
+    # crashed with FileNotFoundError on the windows CI cell (runs 5 and 6). Relative names
+    # avoid the rule entirely and exercise the same fd-ordering semantics on every OS.
     write_stderr = f"{PY} -c 'import sys; sys.stderr.write(\"E\")'"
     out1 = os.path.join(d, "out1.txt")
-    a = run(f"{write_stderr} 2>&1 >{out1}", d)
+    a = run(f"{write_stderr} 2>&1 >out1.txt", d)
     with open(out1, encoding="utf-8") as f:
         # '2>&1' dups fd2 to fd1's CURRENT target (the gate capture pipe) BEFORE '>out1.txt'
         # repoints fd1 -- so the write lands in the captured "stdout" field, and the file (only
@@ -346,19 +352,31 @@ def _run_tests(d):
         report(f.read() == "", "'2>&1 >f': stderr already duped to the OLD stdout before >f", a)
     report(a.get("stdout") == "E", "'2>&1 >f': ...and that duped write shows up as captured stdout", a)
     out2 = os.path.join(d, "out2.txt")
-    a = run(f"{write_stderr} >{out2} 2>&1", d)
+    a = run(f"{write_stderr} >out2.txt 2>&1", d)
     with open(out2, encoding="utf-8") as f:
         # '>out2.txt' repoints fd1 first, THEN '2>&1' dups fd2 to that same file -- so the
         # stderr write lands in the file this time.
         report(f.read() == "E", "'>f 2>&1': stderr duped AFTER stdout points at f", a)
-    a = run(f"echo hi > {os.path.join(d, 'redir1.txt')}", d)
+    a = run("echo hi > redir1.txt", d)
     with open(os.path.join(d, "redir1.txt"), encoding="utf-8") as f:
         report(f.read() == "hi\n", "'>' truncating redirection", a)
-    a = run(f"echo more >> {os.path.join(d, 'redir1.txt')}", d)
+    a = run("echo more >> redir1.txt", d)
     with open(os.path.join(d, "redir1.txt"), encoding="utf-8") as f:
         report(f.read() == "hi\nmore\n", "'>>' appending redirection", a)
-    a = run(f"cat < {os.path.join(d, 'a.txt')}", d)
+    a = run("cat < a.txt", d)
     report(a.get("stdout") == "a.txt\n", "'<' input redirection", a)
+    # Absolute-path redirection, forward slashes: the isabs branch of the target resolver,
+    # portable on every OS (backslash absolute paths on win32 hit the deliberate
+    # Windows-path refusal in cmdrun.py tokenize -- quote them or use forward slashes).
+    # Status is asserted BEFORE the file read: a refusal here must produce a FAIL row with
+    # the answer attached, not a FileNotFoundError in this test process -- that crash
+    # pattern is exactly what the win32 fix-round (CI runs 5 and 6) eliminated.
+    abs_fwd = os.path.join(d, "abs-redir.txt").replace(os.sep, "/")
+    a = run(f"echo hi > {abs_fwd}", d)
+    report(a.get("status") == 0, "absolute forward-slash redirect target: status", a)
+    if a.get("status") == 0:
+        with open(os.path.join(d, "abs-redir.txt"), encoding="utf-8") as f:
+            report(f.read() == "hi\n", "absolute forward-slash redirect target: content", a)
 
     # -- Supported: pipeline status = pipefail ----------------------------------------------------
     if WIN:
@@ -641,9 +659,11 @@ def _run_tests(d):
     report(a.get("refused") is True and "too large" in a.get("reason", ""), "M5: the expanded-argv cap refuses an amplification attempt", a)
 
     # -- M6: fd prefixes above 2, and multi-digit dup targets, must be refused, not misparsed.
-    a = run(f"echo hi 3>{os.path.join(d, 'f3.txt')}", d)
+    # Relative redirection targets (cwd is d) -- the same win32 backslash-refusal hazard as
+    # the redirection-order rows above.
+    a = run("echo hi 3>nofd3.txt", d)
     report(a.get("refused") is True and "0-2" in a.get("reason", ""), "M6: fd prefix '3>' is refused, not misparsed into an argument", a)
-    a = run(f"echo hi 9<{os.path.join(d, 'a.txt')}", d)
+    a = run("echo hi 9<a.txt", d)
     report(a.get("refused") is True, "M6: fd prefix '9<' is refused", a)
     a = run("echo hi 2>&12", d)
     report(a.get("refused") is True, "M6: multi-digit dup target '2>&12' is refused", a)
