@@ -5,7 +5,7 @@
   "description": "Regression tests for the agents-discipline skill's zero-dependency enforcement tools",
   "type": "module",
   "scripts": {
-    "test": "node tests/run-tests.mjs && node tests/dispatch-tests.mjs && node tests/hardening-tests.mjs && node tests/stress-tests.mjs && node tests/lint-tests.mjs && node tests/contract-tests.mjs && node tests/self-check.mjs && node tests/ledger-tests.mjs && node tests/py-suite-runner.mjs",
+    "test": "node tests/run-tests.mjs && node tests/dispatch-tests.mjs && node tests/hardening-tests.mjs && node tests/stress-tests.mjs && node tests/lint-tests.mjs && node tests/contract-tests.mjs && node tests/self-check.mjs && node tests/ledger-tests.mjs && node tests/py-suite-runner.mjs && node tests/cmdrun_parity.mjs",
     "test:parity": "node tests/cmdrun_parity.mjs",
     "test:diff": "for f in tests/*-diff.sh; do echo \"== $f\"; bash \"$f\" || exit 1; done",
     "test:port": "node -e \"if(process.env.AD_RUNTIME!=='python')throw new Error('test:port requires AD_RUNTIME=python')\" && node tests/run-tests.mjs && node tests/dispatch-tests.mjs && node tests/lint-tests.mjs && node tests/ledger-tests.mjs",

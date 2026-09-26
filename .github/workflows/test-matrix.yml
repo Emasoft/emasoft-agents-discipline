@@ -154,6 +154,17 @@ jobs:
         env:
           PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
         run: node tests/py-suite-runner.mjs
+      - name: Run the cmdrun Node-vs-Python parity suite
+        working-directory: skills/agents-discipline
+        env:
+          # The parity suite spawns the py oracle as a subprocess with the same
+          # interpreter convention the py-suite step pins above. This step's
+          # WINDOWS execution is itself part of the evidence this job exists to
+          # produce: the suite's win32-gated rows print SKIP there, and any red
+          # on an OS-semantic row is a measurement of the twin on win32 (read it
+          # as evidence, not as a wiring regression).
+          PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+        run: node tests/cmdrun_parity.mjs
 
   windows-node-22-14:
     name: windows-latest / node 22.14.0 (libuv 1.49.2)
