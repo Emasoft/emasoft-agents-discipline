@@ -247,6 +247,11 @@ rows.push(
   // twins (the JS gate path once answered internal_error, the py builtin path printed
   // the raw [Errno N] shape).
   { name: "builtin: redirection failure is status 1 with cmdrun: message", cmd: "echo hi > /dev/full", wantStatus: 1, wantStderrStarts: "cmdrun: " },
+  // F-devfd-builtin: a builtin's redirect to /dev/fd/N (N>2) is a REFUSAL routed as status 1
+  // + the refusal text, not internal_error, on both twins (py raises OSError with a single
+  // string -> strerror None -> full message; js throws an UNMAPPED-coded error ->
+  // osErrorStr's fallback returns the same message). This row byte-pins py's stderr.
+  { name: "builtin: redirect to /dev/fd/5 is refused with status 1 + cmdrun: message", cmd: "echo hi > /dev/fd/5", wantStatus: 1, cmp: ["stderr"] },
   // F-digit: a Unicode decimal (Arabic-Indic 2) before '>' is NOT an fd prefix on either
   // twin -- it folds into the word and the command is not found (127 on both). py once
   // refused it as "fd out of range" because str.isdigit() matches Unicode decimals.

@@ -979,12 +979,22 @@ function devFdAlias(p) {
   // the redirection chain, never a path to open by itself (opening /dev/stdout as a PATH
   // would resolve to the worker's ANSWER pipe on macOS/Linux, letting a stage forge or
   // erase the JSON answer). Returns the local fd number to dup, or null if `p` names
-  // neither -- /dev/fd/N for any other N is refused by throwing.
+  // neither -- /dev/fd/N for any other N is refused by throwing. The refusal is thrown as
+  // a coded OS-shaped error: py's twin raises OSError (its _apply_redirs catches OSError
+  // alone), so the JS refusal must be OS-shaped too or the builtin redirection path
+  // answers internal_error here where py answers status 1 + `cmdrun:` message.
   if (Object.prototype.hasOwnProperty.call(DEV_FD_ALIASES, p)) return DEV_FD_ALIASES[p];
   if (p.startsWith("/dev/fd/")) {
     const rest = p.slice("/dev/fd/".length);
     if (/^\d+$/.test(rest) && ["0", "1", "2"].includes(rest)) return parseInt(rest, 10);
-    throw new Error(`refusing to open '${p}': only /dev/fd/0-2 are supported`);
+    const err = new Error(`refusing to open '${p}': only /dev/fd/0-2 are supported`);
+    // An UNMAPPED string code, not a real errno: the scoped catch in runBuiltinCapture
+    // needs typeof code === "string" to route this to status 1 like py's OSError twin,
+    // but a MAPPED code (EACCES etc.) would make osErrorStr print a false strerror
+    // ("Permission denied") instead of the refusal text py's `exc.strerror or exc`
+    // falls back to. Unmapped -> osErrorStr's fallback returns exc.message, byte-identical.
+    err.code = "EDEVFDREFUSED";
+    throw err;
   }
   return null;
 }
@@ -1732,11 +1742,15 @@ function runBuiltinCapture(cmd, name, fds, ctx, sinks) {
   // handler that converts the throw; this gate path previously had no equivalent, so the
   // Refused-free exception escaped to workerMain and set internal_error:true -- the flag
   // callers key on to distinguish an interpreter bug from a legitimate failure.
+  // Scope: OS errors ONLY (node fs errors carry a .code; py's twin catches OSError
+  // alone) -- a non-OS throw here is an interpreter bug and must still reach
+  // workerMain as internal_error, not masquerade as a shell failure.
   let localFds;
   let opened;
   try {
     [localFds, opened] = applyRedirs(cmd, fds, ctx);
   } catch (exc) {
+    if (!exc || typeof exc.code !== "string") throw exc;
     const target = cmd.redirs.length ? expandWordNoGlob(cmd.redirs[0].target) : "?";
     writeFdval(fds[2], Buffer.from(`cmdrun: ${target}: ${osErrorStr(exc)}\n`));
     return 1;
@@ -2252,6 +2266,7 @@ async function drainSinks(sinks, ms) {
 function readlineSyncOneLine() {
   const chunks = [];
   let total = 0;
+  let stallStart = Date.now();
   const tmp = Buffer.alloc(65536);
   for (;;) {
     let n;
@@ -2261,13 +2276,19 @@ function readlineSyncOneLine() {
       if (exc && (exc.code === "EAGAIN" || exc.code === "EWOULDBLOCK")) {
         // EAGAIN is NOT EOF: with libuv's nonblocking stdin, a supervisor writing a
         // large request races our read and EAGAIN fires mid-stream. Same fix as
-        // readAllStdin above -- block briefly and retry; true EOF is n === 0.
+        // readAllStdin above -- block briefly and retry; true EOF is n === 0. Any
+        // progress resets the stall clock (same 10s ceiling: a dead-still fd means
+        // no writer is coming).
+        if (eagainStalled(stallStart)) {
+          throw new Error(`stdin EAGAIN stall exceeded ${EAGAIN_STALL_LIMIT_MS}ms with no data -- no writer?`);
+        }
         sleepSyncMs(2);
         continue;
       }
       throw exc;
     }
     if (n === 0) break; // EOF
+    stallStart = Date.now();
     const nl = tmp.subarray(0, n).indexOf(0x0a);
     if (nl !== -1) {
       chunks.push(Buffer.from(tmp.subarray(0, nl)));
@@ -2506,12 +2527,20 @@ function waitForWorkerAnswer(proc, deadline, signalled) {
           return;
         }
       }
-      // The stream ended (or errored) without a line: if all chunks arrived, judge what
-      // we have; otherwise the worker died mid-answer.
+      // The stream ended (or errored) without a line. Judge what we have even when
+      // close/end has NOT landed: a readErr can fire while chunks still hold the whole
+      // answer, and finishing on readErr alone would discard it. Concatenate whatever
+      // arrived and try the parse before giving up.
       if (chunks === null || readErr || (proc.exitCode !== null && proc.stdout.readableEnded)) {
-        if (chunks === null && line !== null) {
+        const held = line !== null ? line : (chunks !== null && chunks.length ? Buffer.concat(chunks) : null);
+        if (held !== null) {
+          // Mirror the main path's first-line split: stray bytes can follow the answer
+          // line on the tapped stdout, and parsing the whole blob would turn an
+          // answerable stream into finish(null).
+          const nl = held.indexOf(0x0a);
+          const first = nl === -1 ? held : held.subarray(0, nl);
           try {
-            const answer = JSON.parse(line.toString("utf8"));
+            const answer = JSON.parse(first.toString("utf8"));
             if (validateWorkerAnswer(answer)) {
               finish(answer, false, null);
               return;
@@ -2665,10 +2694,21 @@ function sleepSyncMs(ms) {
   }
 }
 
+// EAGAIN retries must terminate: on a pipe the writer always arrives or closes, but on
+// a nonblocking fd that never delivers (the stdin-is-a-TTY-we-did-not-ask-for case the
+// old EOF-treatment papered over) an unbounded retry spins forever at ~500 wakeups/sec
+// -- the exec worker has no deadline, so nothing else stops it. 10s of contiguous EAGAIN
+// with zero forward progress means no writer is coming; fail loudly.
+const EAGAIN_STALL_LIMIT_MS = 10_000;
+function eagainStalled(stallStart) {
+  return Date.now() - stallStart > EAGAIN_STALL_LIMIT_MS;
+}
+
 function readAllStdin() {
   // Read stdin to EOF (cap MAX_REQUEST_BYTES + 1), synchronously.
   const chunks = [];
   let total = 0;
+  let stallStart = Date.now();
   const tmp = Buffer.alloc(65536);
   for (;;) {
     let n;
@@ -2683,12 +2723,18 @@ function readAllStdin() {
         // to the first 80KB of a 200KB write -- measured -- and answered bad_request
         // "invalid JSON" on a well-formed request (the py oracle blocks and reads it
         // all). Retry after a bounded block; true EOF is n === 0, never an error.
+        // Any progress resets the stall clock; a dead-still fd for 10s means no
+        // writer is coming (stdin-as-unasked-TTY) -- give up loudly, not spin.
+        if (eagainStalled(stallStart)) {
+          throw new Error(`stdin EAGAIN stall exceeded ${EAGAIN_STALL_LIMIT_MS}ms with no data -- no writer?`);
+        }
         sleepSyncMs(2);
         continue;
       }
       throw exc;
     }
     if (n === 0) break;
+    stallStart = Date.now();
     chunks.push(Buffer.from(tmp.subarray(0, n)));
     total += n;
     if (total > MAX_REQUEST_BYTES) {
