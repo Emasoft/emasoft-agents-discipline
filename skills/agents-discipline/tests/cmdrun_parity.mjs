@@ -245,8 +245,11 @@ rows.push(
   { name: "builtin: [ missing bracket reaches stderr", cmd: "[ x", wantStatus: 2, wantStderr: "test: missing ']'\n" },
   // F-redirfail: a builtin redirection failure is status 1 + `cmdrun:` message on BOTH
   // twins (the JS gate path once answered internal_error, the py builtin path printed
-  // the raw [Errno N] shape).
-  { name: "builtin: redirection failure is status 1 with cmdrun: message", cmd: "echo hi > /dev/full", wantStatus: 1, wantStderrStarts: "cmdrun: " },
+  // the raw [Errno N] shape). The target is a path in a MISSING DIRECTORY: /dev/full
+  // exists only on Linux, where open() succeeds and the ENOSPC fires at WRITE time --
+  // inside _write_fd, which swallows OSError by design -- so both twins answer status 0
+  // there. A missing parent dir fails at OPEN on every OS, exercising the same catch.
+  { name: "builtin: redirection failure is status 1 with cmdrun: message", cmd: "echo hi > no-such-dir-zz/out.txt", wantStatus: 1, wantStderrStarts: "cmdrun: " },
   // F-devfd-builtin: a builtin's redirect to /dev/fd/N (N>2) is a REFUSAL routed as status 1
   // + the refusal text, not internal_error, on both twins (py raises OSError with a single
   // string -> strerror None -> full message; js throws an UNMAPPED-coded error ->

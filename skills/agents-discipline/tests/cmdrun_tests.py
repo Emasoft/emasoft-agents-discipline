@@ -592,8 +592,10 @@ def _run_tests(d):
     # -- H7: nested ( ) pipeline stages used to lose data when a sibling thread's os.pipe() reused
     # an fd number a finished stage's cleanup pass then closed a second time.
     # `sleep`/`cat` stage names are incidental; the interpreter is the portable non-builtin stage.
+    # .strip(): on win32 the echo child emits CRLF -- the row's subject is fd lifetime, not
+    # line-ending normalization, so the platform's newline is not the defect under test.
     a = run(f"({PY} -c \"import time;time.sleep(0.2)\" | {PY} -c \"import time;time.sleep(0.2)\") | ({PY} -c \"import time;time.sleep(0.1)\" && ({PY} -c \"import time;time.sleep(0.2)\" && echo hi) | {PY} -c \"import sys;sys.stdout.write(sys.stdin.read())\")", d, timeout_ms=6000)
-    report(a.get("stdout") == "hi\n", "H7: nested group pipeline fds are each closed exactly once", a)
+    report(a.get("stdout", "").strip() == "hi", "H7: nested group pipeline fds are each closed exactly once", a)
 
     # -- H8: `os.chdir` for globbing raced across concurrently running pipeline-stage threads.
     race_dir = tempfile.mkdtemp(prefix="cmdrun-race-")
@@ -620,6 +622,10 @@ def _run_tests(d):
     if sys.platform == "win32":
         job_dll_ok = hasattr(__import__("ctypes"), "windll")
         report(job_dll_ok, "H9: ctypes.windll is available for Job Object creation on this host")
+        # LIB_DIR is not yet on sys.path at this point in _run_tests (the F1 block inserts
+        # it later, at its own import site) -- without this insert the import crashes the
+        # whole windows CI cell with ModuleNotFoundError (winproof run 7, 36248708833).
+        sys.path.insert(0, LIB_DIR)
         import cmdrun as _cmdrun_win  # noqa: E402
         report(_cmdrun_win._check_candidate.__name__ == "_check_candidate",
                "H10: _check_candidate is reachable for a PATHEXT/.COM/.EXE check on this host")
