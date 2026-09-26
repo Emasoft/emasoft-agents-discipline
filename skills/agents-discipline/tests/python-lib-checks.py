@@ -1038,6 +1038,46 @@ _js_sym = subprocess.run(["node", "-e",
 report(_js_sym.returncode == 0, "probe(js): symlink shapes",
        (_js_sym.stdout or _js_sym.stderr).strip()[-300:])
 shutil.rmtree(_probe_dir, ignore_errors=True)
+
+# --- win32 CRLF in-process probe: the two DRIVERS' own source strings ------------------------
+# Run 16: both runtimes read IDENTICAL fixture bytes on win32 (hash 79e1427873d3) yet js
+# answers eol=\r\n and py answers eol=\n — the divergence is INSIDE one of the two read
+# chains. macOS control (verified first-hand): py read_stable_regular_file -> 17 \r\n in
+# the string, parse eol=\r\n; js readFileSync utf8 -> 17 \r\n, parse eol=\r\n. These rows
+# replicate each driver's read+parse on the fixture in a tiny standalone child — capturing
+# the STRING each parse function receives, not just the file bytes. A win32 run where the
+# py child reports crlf=0 (or a js child reporting != 17) localizes the translation to that
+# runtime's read chain; identical strings re-falsify the read and point at parse_gates
+# itself (which would then contradict the identical macOS behavior — so this probe should
+# be decisive either way).
+_py_crlf_src = subprocess.run(
+    [sys.executable, "-c", '''
+import sys, os
+sys.path.insert(0, sys.argv[2])
+os.environ["PYTHONIOENCODING"] = "utf-8"
+import gates
+src = gates.read_stable_regular_file(sys.argv[1], label="probe")
+print("PYSTR", len(src), src.count(chr(13) + chr(10)), repr(src[:40]))
+doc = gates.parse_gates(src)
+print("PYEOL", repr(doc["eol"]))
+''', os.path.join(TESTS, "fixtures", "port", "crlf-duplicates.md"), LIB],
+    capture_output=True, text=True, encoding="utf-8", timeout=60, env=_child_env,
+    cwd=os.path.dirname(os.path.abspath(__file__)))
+report(_py_crlf_src.returncode == 0, "probe(py): driver source string",
+       ((_py_crlf_src.stdout or "") + (_py_crlf_src.stderr or "")).strip()[-250:])
+_js_crlf_src = subprocess.run(
+    ["node", "--input-type=module", "-e", '''
+import { parseGates } from "./scripts/lib/gates.mjs";
+import fs from "node:fs";
+const src = fs.readFileSync(process.argv[1], "utf8");
+const crlf = (src.match(/\\r\\n/g) || []).length;
+console.log("JSSTR", src.length, crlf, JSON.stringify(src.slice(0, 40)));
+console.log("JSEOL", JSON.stringify(parseGates(src).eol));
+''', os.path.join(TESTS, "fixtures", "port", "crlf-duplicates.md")],
+    capture_output=True, text=True, encoding="utf-8", timeout=60,
+    cwd=os.path.join(ROOT, "skills", "agents-discipline") if os.path.isdir(os.path.join(ROOT, "skills", "agents-discipline")) else ROOT)
+report(_js_crlf_src.returncode == 0, "probe(js): driver source string",
+       ((_js_crlf_src.stdout or "") + (_js_crlf_src.stderr or "")).strip()[-250:])
 completed.append("parse_gates")
 
 # --- short write: gates.write_all -----------------------------------------------------------
