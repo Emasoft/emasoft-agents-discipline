@@ -983,7 +983,9 @@ for _fixture in _fixtures:
 # unresolvable from macOS — these probe rows capture the raw facts per runtime so the next
 # run discriminates: identical bytes+hash means the divergence is in-process (a code path);
 # different bytes would itself be the finding. Info-only rows: they report what the probe
-# saw, no assertion, so a green suite cannot hide a changed premise.
+# saw. These are DISCRIMINATORS, not guards: the suite cannot fail on them — the CI log
+# is the only place their facts surface, so a changed premise shows up only to a reader
+# of the log. At investigation end they convert into real assertions or are removed.
 _CRLF_FIX = os.path.join(TESTS, "fixtures", "port", "crlf-duplicates.md")
 import hashlib  # noqa: E402
 with open(_CRLF_FIX, "rb") as _crlf_handle:
@@ -1000,6 +1002,42 @@ _js_crlf = subprocess.run(["node", "-e",
     capture_output=True, text=True, encoding="utf-8", timeout=30)
 report(_js_crlf.returncode == 0, "probe(js): crlf fixture bytes",
        (_js_crlf.stdout or _js_crlf.stderr).strip()[-200:])
+
+# --- win32 symlink-shape probes: the dispatch logWarning HIGH question -----------------------
+# Runs 12/13: py's append through a dangling linked status log SUCCEEDED on win32 where the
+# oracle refuses — yet gates.py append_status DOES carry lstat -> S_ISLNK -> refuse. These
+# standalone rows measure the primitive the guard depends on, per shape, per runtime: a
+# REAL-target link and a DANGLING link, each reporting py's os.lstat view (S_IFMT bits,
+# S_ISLNK, nlink) next to node's lstatSync view (isSymbolicLink, mode, nlink). If py's
+# S_ISLNK is False on win32 where node's isSymbolicLink is true, the guard never fires and
+# the behavioral divergence is explained; if both report link-ness, the bug is elsewhere
+# (assert order, path resolution). ~15 lines now or a whole run later.
+import stat as _statmod_probe  # noqa: E402  # the same module gates.py imports as statmod
+import tempfile as _tempfile_probe
+_probe_dir = _tempfile_probe.mkdtemp()
+_probe_real = os.path.join(_probe_dir, "target.txt")
+with open(_probe_real, "w") as _ph:
+    _ph.write("x")
+_probe_dangling = os.path.join(_probe_dir, "dangling.txt")
+os.symlink("/nonexistent-target-probe", _probe_dangling)
+_probe_linked = os.path.join(_probe_dir, "linked.txt")
+os.symlink(_probe_real, _probe_linked)
+for _shape, _path in (("real", _probe_linked), ("dangling", _probe_dangling)):
+    _st = os.lstat(_path)
+    report(True, f"probe(py): symlink {_shape}",
+           f"S_IFMT={oct(_statmod_probe.S_IFMT(_st.st_mode))} S_ISLNK={_statmod_probe.S_ISLNK(_st.st_mode)} nlink={_st.st_nlink}")
+_js_sym = subprocess.run(["node", "-e",
+     'const fs=require("fs");'
+     'for (const shape of ["real","dangling"]) {'
+     '  const p = process.argv[1] + (shape === "real" ? "/linked.txt" : "/dangling.txt");'
+     '  try { const st = fs.lstatSync(p);'
+     '    console.log(JSON.stringify({shape, isLink: st.isSymbolicLink(), mode: st.mode.toString(8), nlink: st.nlink})); }'
+     '  catch (e) { console.log(JSON.stringify({shape, error: e.code})); } }',
+     _probe_dir],
+    capture_output=True, text=True, encoding="utf-8", timeout=30)
+report(_js_sym.returncode == 0, "probe(js): symlink shapes",
+       (_js_sym.stdout or _js_sym.stderr).strip()[-300:])
+shutil.rmtree(_probe_dir, ignore_errors=True)
 completed.append("parse_gates")
 
 # --- short write: gates.write_all -----------------------------------------------------------
